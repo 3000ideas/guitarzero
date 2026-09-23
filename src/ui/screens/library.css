@@ -1,0 +1,103 @@
+/* Biblioteca (#/) — screen-specific styles. Base tokens and classes live in src/styles.css. */
+
+.library .lib-toolbar {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.library .lib-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.library .lib-section-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.library .lib-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+}
+
+.library .song-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.library .song-card.is-new {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.18);
+}
+
+.library .song-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.library .song-title {
+  font-size: 18px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.library .song-artist {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.library .song-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  color: var(--muted);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.library .song-meta b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.library .song-chords {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.library .chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.library .song-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: auto;
+}
+
+.library .song-actions .btn {
+  padding: 0 8px;
+  min-width: 0;
+}
+
+@media (max-width: 380px) {
+  .library .song-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

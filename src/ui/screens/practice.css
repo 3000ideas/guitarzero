@@ -1,0 +1,727 @@
+/*
+ * Practice screen (SPEC.md section 8 "Practicar" + "Resumen").
+ * Uses the :root variables of styles.css (--bg, --panel, --text, --muted, --accent, --ok, --bad,
+ * --warn, --border) with inline fallbacks. Portrait / desktop: header, diagrams, highway (~40 %
+ * of the height), lyrics, footer. Landscape phones: compact header/footer rows, diagrams in a
+ * left column (~30 %) and the highway filling the rest.
+ */
+
+.practice {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg, #0f1116);
+  color: var(--text, #e5e7eb);
+  overflow: hidden;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+.practice [hidden] {
+  display: none !important;
+}
+
+/* Buttons: touch-friendly (>= 44 px); colours follow the shared theme variables. */
+.practice .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--border, #262b36);
+  border-radius: 10px;
+  background: var(--panel, #161a22);
+  color: var(--text, #e5e7eb);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.practice .btn:hover {
+  border-color: var(--accent, #22d3ee);
+}
+
+.practice .btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  border-color: var(--border, #262b36);
+}
+
+.practice .btn-primary {
+  background: var(--accent, #22d3ee);
+  border-color: var(--accent, #22d3ee);
+  color: #0b1220;
+}
+
+.practice-btn-small {
+  min-height: 36px !important;
+  padding: 0 10px !important;
+  font-size: 13px !important;
+}
+
+/* ------------------------------------------------------------------ play view */
+
+.practice-play {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.practice-header {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 12px;
+  padding: 6px 12px;
+  background: var(--panel, #161a22);
+  border-bottom: 1px solid var(--border, #262b36);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.practice-title {
+  font-weight: 700;
+  font-size: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 48vw;
+}
+
+.practice-title small {
+  margin-left: 6px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted, #94a3b8);
+}
+
+.practice-tempo {
+  font-size: 13px;
+  color: var(--muted, #94a3b8);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.practice-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  font-size: 13px;
+  color: var(--muted, #94a3b8);
+}
+
+.practice-select {
+  min-height: 40px;
+  padding: 0 8px;
+  border: 1px solid var(--border, #262b36);
+  border-radius: 8px;
+  background: var(--bg, #0f1116);
+  color: var(--text, #e5e7eb);
+  font: inherit;
+  font-size: 14px;
+}
+
+.practice-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.practice-toggle input {
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  accent-color: var(--accent, #22d3ee);
+  cursor: pointer;
+}
+
+.practice-mic {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-height: 44px;
+}
+
+.practice-mic-label,
+.practice-mic-status {
+  font-size: 13px;
+  color: var(--muted, #94a3b8);
+}
+
+.practice-mic-status.is-error {
+  color: var(--warn, #f59e0b);
+}
+
+.practice-level {
+  position: relative;
+  width: 120px;
+  height: 12px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.practice-level-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-radius: 6px;
+  background: var(--accent, #22d3ee);
+  transition: width 50ms linear;
+}
+
+.practice-level-fill.below {
+  background: var(--muted, #94a3b8);
+}
+
+.practice-level-gate {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  left: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--warn, #f59e0b);
+}
+
+.practice-chord-live {
+  min-width: 3ch;
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+  color: var(--accent, #22d3ee);
+}
+
+.practice-badge {
+  display: inline-block;
+  padding: 3px 8px;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--warn, #f59e0b);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.practice-hint {
+  flex-basis: 100%;
+  font-size: 12px;
+  color: var(--muted, #94a3b8);
+}
+
+.practice-agc {
+  flex-basis: 100%;
+  font-size: 12px;
+  color: var(--warn, #f59e0b);
+}
+
+.practice-banner {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: rgba(34, 211, 238, 0.1);
+  border-bottom: 1px solid var(--border, #262b36);
+  font-size: 13px;
+}
+
+.practice-banner span {
+  flex: 1 1 auto;
+}
+
+/* ------------------------------------------------------------------ main */
+
+.practice-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.practice-diagrams {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: center;
+  align-items: stretch;
+  gap: 20px;
+  height: clamp(120px, 22vh, 210px);
+  padding: 6px 12px;
+}
+
+.practice-diagram {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+}
+
+.practice-diagram canvas {
+  display: block;
+}
+
+.practice-diagram.current canvas {
+  width: 150px;
+  height: 100%;
+}
+
+.practice-diagram.next {
+  justify-content: flex-end;
+}
+
+.practice-diagram.next canvas {
+  width: 96px;
+  height: calc(70% - 16px);
+}
+
+.practice-diagram-label {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--muted, #94a3b8);
+}
+
+.practice-right {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.practice-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 160px;
+  background: #0f1116;
+}
+
+.practice-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: manipulation;
+  cursor: pointer;
+}
+
+.practice-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(15, 17, 22, 0.72);
+}
+
+.practice-start {
+  min-height: 64px !important;
+  padding: 0 44px !important;
+  border-radius: 999px !important;
+  font-size: 22px !important;
+  font-weight: 700 !important;
+}
+
+.practice-overlay-hint {
+  font-size: 12px;
+  color: var(--muted, #94a3b8);
+}
+
+.practice-overlay-msg {
+  max-width: 90%;
+  font-size: 13px;
+  text-align: center;
+  color: var(--warn, #f59e0b);
+}
+
+.practice-paused-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: rgba(15, 17, 22, 0.35);
+  color: #fff;
+  font-size: 30px;
+  font-weight: 700;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
+}
+
+.practice-paused-label small {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--muted, #cbd5e1);
+}
+
+.practice-lyrics {
+  flex: 0 0 auto;
+  min-height: 48px;
+  padding: 6px 12px;
+  text-align: center;
+}
+
+.practice-lyrics-current {
+  min-height: 22px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.practice-lyrics-next {
+  min-height: 18px;
+  font-size: 13px;
+  color: var(--muted, #94a3b8);
+}
+
+/* ------------------------------------------------------------------ footer */
+
+.practice-footer {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  padding: 8px 12px;
+  background: var(--panel, #161a22);
+  border-top: 1px solid var(--border, #262b36);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.practice-stat {
+  font-size: 13px;
+  color: var(--muted, #94a3b8);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.practice-stat b {
+  margin-left: 4px;
+  font-size: 18px;
+  color: var(--text, #e5e7eb);
+}
+
+.practice-progress {
+  flex: 1 1 100px;
+  min-width: 80px;
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.practice-progress-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent, #22d3ee);
+}
+
+.practice-footer-buttons {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* ------------------------------------------------------------------ summary */
+
+.practice-summary {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 20px 16px 32px;
+  box-sizing: border-box;
+  overflow-y: auto;
+}
+
+.practice-summary h2 {
+  margin: 0 0 4px;
+  font-size: 24px;
+}
+
+.practice-summary-sub {
+  margin-bottom: 16px;
+  font-size: 14px;
+  color: var(--muted, #94a3b8);
+}
+
+.practice-summary-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.practice-summary-stat {
+  padding: 12px 14px;
+  border: 1px solid var(--border, #262b36);
+  border-radius: 12px;
+  background: var(--panel, #161a22);
+}
+
+.practice-summary-stat.accuracy {
+  grid-column: 1 / -1;
+}
+
+.practice-summary-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted, #94a3b8);
+}
+
+.practice-summary-value {
+  font-size: 30px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.practice-summary-value.small {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--warn, #f59e0b);
+}
+
+.practice-summary-detail {
+  font-size: 13px;
+  color: var(--muted, #94a3b8);
+}
+
+.practice-table {
+  width: 100%;
+  margin-bottom: 16px;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.practice-table th,
+.practice-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border, #262b36);
+  text-align: right;
+}
+
+.practice-table th:first-child,
+.practice-table td:first-child {
+  text-align: left;
+  font-weight: 700;
+}
+
+.practice-table th {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted, #94a3b8);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.practice-hintbox {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  border-radius: 12px;
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.practice-hintbox p {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
+.practice-hintbox-actions,
+.practice-summary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.practice-summary-actions {
+  margin-top: 8px;
+}
+
+/* ------------------------------------------------------------------ landscape phones */
+
+@media (orientation: landscape) and (max-height: 500px) {
+  .practice-header {
+    flex-wrap: nowrap;
+    gap: 8px;
+    padding: 2px 8px;
+    overflow-x: auto;
+  }
+
+  .practice-header > * {
+    flex-shrink: 0;
+  }
+
+  .practice-hint,
+  .practice-agc {
+    display: none;
+  }
+
+  .practice-title {
+    max-width: 22vw;
+    font-size: 14px;
+  }
+
+  .practice-title small {
+    display: none;
+  }
+
+  .practice-field,
+  .practice-toggle,
+  .practice-mic {
+    min-height: 36px;
+    font-size: 13px;
+  }
+
+  .practice-select {
+    min-height: 32px;
+    font-size: 13px;
+  }
+
+  .practice-chord-live {
+    font-size: 24px;
+  }
+
+  .practice-level {
+    width: 90px;
+  }
+
+  .practice-banner {
+    padding: 2px 8px;
+    font-size: 12px;
+  }
+
+  .practice-main {
+    flex-direction: row;
+  }
+
+  .practice-diagrams {
+    flex: 0 0 30%;
+    flex-direction: column;
+    align-items: stretch;
+    height: auto;
+    min-height: 0;
+    gap: 4px;
+    padding: 4px 8px;
+  }
+
+  /* Absolutely positioned canvases: their size is always definite inside the flexed items. */
+  .practice-diagram {
+    position: relative;
+    height: auto;
+    min-height: 0;
+  }
+
+  .practice-diagram.current {
+    flex: 1 1 0;
+  }
+
+  .practice-diagram.current canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  .practice-diagram.next {
+    flex: 0 0 38%;
+    justify-content: flex-start;
+  }
+
+  .practice-diagram.next canvas {
+    position: absolute;
+    top: 16px;
+    bottom: 0;
+    left: 15%;
+    width: 70%;
+    height: calc(100% - 16px);
+  }
+
+  .practice-right {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .practice-stage {
+    min-height: 0;
+  }
+
+  .practice-lyrics {
+    min-height: 0;
+    padding: 2px 8px;
+  }
+
+  .practice-lyrics-current {
+    min-height: 0;
+    font-size: 14px;
+  }
+
+  .practice-lyrics-next {
+    min-height: 0;
+    font-size: 12px;
+  }
+
+  .practice-footer {
+    flex-wrap: nowrap;
+    gap: 8px;
+    padding: 2px 8px;
+    overflow-x: auto;
+  }
+
+  .practice-footer > * {
+    flex-shrink: 0;
+  }
+
+  .practice-progress {
+    flex: 1 1 60px;
+    min-width: 40px;
+  }
+
+  .practice-footer .btn {
+    min-height: 36px;
+    padding: 0 12px;
+    font-size: 13px;
+  }
+
+  .practice-paused-label {
+    font-size: 22px;
+  }
+}
+
+/* Narrow portrait phones: keep the header controls readable. */
+@media (max-width: 480px) and (orientation: portrait) {
+  .practice-title {
+    max-width: 100%;
+    flex-basis: 100%;
+  }
+
+  .practice-diagrams {
+    height: clamp(110px, 20vh, 170px);
+  }
+
+  .practice-diagram.current canvas {
+    width: 120px;
+  }
+
+  .practice-diagram.next canvas {
+    width: 80px;
+  }
+}

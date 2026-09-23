@@ -107,8 +107,9 @@ describe('parseSong: examples of SPEC section 2', () => {
       ['G', 2],
     ]);
     expect(song.bars[8].chords[0].chord).toEqual({ name: '-', root: -1, quality: 'nc', bass: null });
-    // chords[].startBeat is absolute
+    // chords[].startBeat is absolute, also inside copies
     expect(song.bars[3].chords.map((c) => c.startBeat)).toEqual([12, 14]);
+    expect(song.bars[13].chords.map((c) => c.startBeat)).toEqual([52, 54]);
     // copies keep the same chords
     expect(chordsOf(r, 13)).toEqual(chordsOf(r, 3));
     expect(chordsOf(r, 18)).toEqual(chordsOf(r, 8));
@@ -193,7 +194,10 @@ describe('parseSong: examples of SPEC section 2', () => {
     expect(beatsInBar(v, 0)).toEqual([0, 1, 1.5, 2, 2.5]);
     expect(beatsInBar(v, 2)).toEqual([0, 1, 1.5, 2, 2.5]);
     expect(eventsOfBar(v, 2).map((e) => e.chord.name)).toEqual(['G', 'G', 'G', 'C', 'C']);
-    expect(eventsOfBar(v, 2).map((e) => e.chordChange)).toEqual([true, false, false, true, false]);
+    // bar 2 starts with the same G as bar 1: not a chord change (only root/quality/bass count)
+    expect(eventsOfBar(v, 2).map((e) => e.chordChange)).toEqual([false, false, false, true, false]);
+    expect(eventsOfBar(v, 0)[0].chordChange).toBe(true); // first event of the song
+    expect(eventsOfBar(v, 1)[0].chordChange).toBe(true); // G after C
     expect(eventsOfBar(v, 0).map((e) => e.direction)).toEqual(['down', 'down', 'up', 'down', 'up']);
     expect(v.song.events.length).toBe(15);
   });
@@ -346,14 +350,32 @@ describe('parseSong: durations', () => {
     expect(eventsOfBar(eighth, 0).map((e) => e.chord.name)).toEqual(['C', 'C', 'G', 'G', 'G']);
     const sixteenth = parseSong(src('tempo: 100', 'strum: D-DUD-DUD-DUD-DU', 'C G Am |'));
     expect(errorsOf(sixteenth).length).toBe(1); // 16 grid units / 3 chords
-    const ok16 = parseSong(src('tempo: 100', 'strum: D-DUD-DUD-DUD-DU', 'C G Am F . |'));
+    // "F ." is 2 explicit beats -> 2 beats (8 sixteenths) left for 3 bare chords: not splittable
+    const bad16 = parseSong(src('tempo: 100', 'strum: D-DUD-DUD-DUD-DU', 'C G Am F . |'));
+    expect(errorsOf(bad16).map((e) => e.message)).toEqual(['no se pueden repartir 2 beats entre 3 acordes; usa "." o "*n"']);
+    // "Dm . ." is 3 explicit beats -> 1 beat (4 sixteenths) for 4 bare chords: a quarter beat each
+    const ok16 = parseSong(src('tempo: 100', 'strum: D-DUD-DUD-DUD-DU', 'C G Am F Dm . . |'));
     expect(ok16.errors).toEqual([]);
     expect(chordsOf(ok16, 0)).toEqual([
-      ['C', 0.5],
-      ['G', 0.5],
-      ['Am', 0.5],
-      ['F', 2.5],
+      ['C', 0.25],
+      ['G', 0.25],
+      ['Am', 0.25],
+      ['F', 0.25],
+      ['Dm', 3],
     ]);
+    // G starts on a '-' (k = 1) -> extra down event; the rest follow the D/U characters
+    expect(beatsInBar(ok16, 0)).toEqual([0, 0.25, 0.5, 0.75, 1, 1.5, 1.75, 2, 2.5, 2.75, 3, 3.5, 3.75]);
+    expect(eventsOfBar(ok16, 0).slice(0, 6).map((e) => [e.chord.name, e.direction, e.chordChange])).toEqual([
+      ['C', 'down', true],
+      ['G', 'down', true],
+      ['Am', 'down', true],
+      ['F', 'up', true],
+      ['Dm', 'down', true],
+      ['Dm', 'down', false],
+    ]);
+    // the same bar on an eighth grid cannot be split (2 eighths / 4 chords)
+    const bad8 = parseSong(src('tempo: 100', 'strum: D-DU-UDU', 'C G Am F Dm . . |'));
+    expect(errorsOf(bad8).map((e) => e.message)).toEqual(['no se pueden repartir 1 beats entre 4 acordes; usa "." o "*n"']);
   });
 
   it('supports X*n and dots after it', () => {
@@ -509,6 +531,21 @@ describe('parseSong: errors', () => {
     expect(r.errors[1].message).toContain('tempo fuera de rango');
   });
 
+  it('an error and a warning can share a line; the error comes first', () => {
+    const r = parseSong('hola |');
+    expect(r.errors).toEqual([
+      { line: 1, message: 'símbolo de acorde inválido: "hola"', severity: 'error' },
+      { line: 1, message: 'tempo no indicado, se usa 80', severity: 'warning' },
+    ]);
+  });
+
+  it('chords unknown to the library are not errors (only the syntax is validated)', () => {
+    const r = parseSong(src('tempo: 100', 'C#m7b5 . . . | Abaug . . . | Dbsus2 . . . | E9 . . . | Gb7sus4/Db . . . |'));
+    expect(r.errors).toEqual([]);
+    expect(r.song.chordNames).toEqual(['C#m7b5', 'Abaug', 'Dbsus2', 'E9', 'Gb7sus4/Db']);
+    expect(r.song.bars[4].chords[0].chord).toMatchObject({ root: 6, quality: '7sus4', bass: 1 });
+  });
+
   it('never throws on garbage', () => {
     const r = parseSong('[[[\n]]]\n***\n|||\n:\n> \n#\n[]\n[x] x\nC*\n*\n. .\nx\n×3\n  x3');
     expect(r.song).toBeDefined();
@@ -571,6 +608,17 @@ describe('parseSong: tempo', () => {
       { fromBeat: 0, bpm: 100 },
       { fromBeat: 4, bpm: 140 },
       { fromBeat: 12, bpm: 100 },
+    ]);
+  });
+
+  it('coalesces the bars of a repeated line into one segment', () => {
+    const r = parseSong(src('tempo: 100', 'C . . . |', 'tempo: 120', 'G . . . | Am . . . | x3', 'tempo: 100', 'F . . . | x2'));
+    expect(r.errors).toEqual([]);
+    expect(r.song.bars.length).toBe(9);
+    expect(r.song.tempoSegments).toEqual([
+      { fromBeat: 0, bpm: 100 },
+      { fromBeat: 4, bpm: 120 },
+      { fromBeat: 28, bpm: 100 },
     ]);
   });
 
@@ -668,6 +716,21 @@ describe('parseSong: time signature', () => {
     expect(beatsInBar(r, 2)).toEqual([0, 1, 2, 3]);
   });
 
+  it('the default pattern always follows a time change, even when the old default would fit', () => {
+    // 4/4 default "D-D-D-D-" (8 chars) would fit 2/4 as sixteenths; 3/4 default (6) would fit 6/8 as quarters
+    const r = parseSong(src('tempo: 100', 'C . . . |', 'time: 2/4', 'G . |', 'time: 3/4', 'Am . . |', 'time: 6/8', 'F*6 |'));
+    expect(r.errors).toEqual([]);
+    expect(beatsInBar(r, 0)).toEqual([0, 1, 2, 3]);
+    expect(beatsInBar(r, 1)).toEqual([0, 1]);
+    expect(beatsInBar(r, 2)).toEqual([0, 1, 2]);
+    expect(beatsInBar(r, 3)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(r.song.events.every((e) => e.direction === 'down' && !e.muted)).toBe(true);
+    // after reverting an explicit pattern, the pattern is a default again and keeps following time
+    const reverted = parseSong(src('tempo: 100', 'strum: D-DU-UDU', 'C . . . |', 'time: 3/4', 'G . . |', 'time: 6/8', 'Am*6 |'));
+    expect(warningsOf(reverted).map((e) => e.line)).toEqual([4]);
+    expect(beatsInBar(reverted, 2)).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
   it('keeps an explicit pattern that still fits the new signature', () => {
     const r = parseSong(src('tempo: 100', 'strum: D-DU-UDU', 'C . . . |', 'time: 2/4', 'G . |'));
     expect(r.errors).toEqual([]);
@@ -709,6 +772,24 @@ describe('parseSong: strum patterns', () => {
       ['down', true],
     ]);
     expect(eventsOfBar(r, 0).every((e) => e.chord.name === 'C')).toBe(true);
+  });
+
+  it('a muted event can be the chord change and carries the chord in effect', () => {
+    const r = parseSong(src('tempo: 100', 'strum: xUDU', 'C G |'));
+    expect(r.errors).toEqual([]);
+    expect(eventsOfBar(r, 0).map((e) => [e.beatInBar, e.chord.name, e.muted, e.chordChange])).toEqual([
+      [0, 'C', true, true],
+      [1, 'C', false, false],
+      [2, 'G', false, true],
+      [3, 'G', false, false],
+    ]);
+  });
+
+  it('a 12-character pattern in 6/8 is a sixteenth grid (2 characters per beat)', () => {
+    const r = parseSong(src('tempo: 120', 'time: 6/8', 'strum: DUDUDUDUDUDU', 'C*6 |', 'strum: D-D-D-D-D-D-D-D-D-D-D-D-', 'G*6 |'));
+    expect(r.errors).toEqual([]);
+    expect(beatsInBar(r, 0)).toEqual([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5]);
+    expect(beatsInBar(r, 1)).toEqual([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5]);
   });
 
   it('rejects wrong lengths with the expected message and keeps the current pattern', () => {
@@ -1018,6 +1099,15 @@ describe('parseSong: sections', () => {
     ]);
   });
 
+  it('events are generated over the expanded bar list (chordChange looks across copy boundaries)', () => {
+    const r = parseSong(src('tempo: 100', '[A]', 'C . . . |', '[A]', '[B]', 'G . . . |', '[A] x2'));
+    expect(r.errors).toEqual([]);
+    expect(r.song.bars.map((b) => b.chords[0].chord.name)).toEqual(['C', 'C', 'G', 'C', 'C']);
+    expect(r.song.bars.map((_, i) => eventsOfBar(r, i)[0].chordChange)).toEqual([true, false, true, true, false]);
+    expect(r.song.events.map((e) => e.barIndex)).toEqual([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4]);
+    expect(r.song.events.map((e) => e.time)).toEqual(r.song.events.map((_, i) => i));
+  });
+
   it('a leading . after a section copy prolongs the last copied bar', () => {
     const r = parseSong(src('tempo: 100', '[A]', 'C . G . |', '[A]', '[B]', '. . Am . |'));
     expect(r.errors).toEqual([]);
@@ -1041,6 +1131,18 @@ describe('parseSong: lyrics', () => {
       { barIndex: 2, text: 'segunda' },
       { barIndex: 2, text: 'tercera | con | barras' },
       { barIndex: 2, text: 'con espacios' },
+    ]);
+  });
+
+  it('accepts indentation before > and an empty lyric, and never parses its content as chords', () => {
+    const r = parseSong(src('tempo: 100', 'C . . . |', '   > hola x2 [Intro] tempo: 999', '>', '> C*9 | ??'));
+    expect(r.errors).toEqual([]);
+    expect(r.song.bars.length).toBe(1);
+    expect(r.song.tempo).toBe(100);
+    expect(r.song.lyricLines).toEqual([
+      { barIndex: 0, text: 'hola x2 [Intro] tempo: 999' },
+      { barIndex: 0, text: '' },
+      { barIndex: 0, text: 'C*9 | ??' },
     ]);
   });
 

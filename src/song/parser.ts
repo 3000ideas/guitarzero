@@ -242,14 +242,18 @@ class SongParser {
     }
     this.beatsPerBar = sig[0];
     this.beatUnit = sig[1];
+    if (!this.strumExplicit) {
+      // The default pattern is defined by the time signature (one down-strum per beat), so it
+      // always follows a `time:` change, silently — even when the old default happened to fit.
+      this.strum = defaultStrum(this.beatsPerBar);
+      return;
+    }
     if (!isValidStrumLength(this.strum.length, this.beatsPerBar)) {
       const def = defaultStrum(this.beatsPerBar);
-      if (this.strumExplicit) {
-        this.warn(
-          line,
-          `el patrón de rasgueo "${this.strum}" no encaja en ${sig[0]}/${sig[1]}; se usa el patrón por defecto "${def}"`,
-        );
-      }
+      this.warn(
+        line,
+        `el patrón de rasgueo "${this.strum}" no encaja en ${sig[0]}/${sig[1]}; se usa el patrón por defecto "${def}"`,
+      );
       this.strum = def;
       this.strumExplicit = false;
     }
