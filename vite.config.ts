@@ -1,4 +1,5 @@
-import { defineConfig } from 'vite';
+// 'vitest/config' (not 'vite') so that `tsc --noEmit` accepts the `test` key.
+import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   base: './',

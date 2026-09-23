@@ -1,270 +1,639 @@
-# GuitarZero — Especificación técnica
+# GuitarZero — Especificación técnica (v2)
 
-App web (PWA-friendly) para practicar guitarra al estilo Yousician: el usuario introduce
-una canción con acordes, la app muestra una "autopista" animada con los acordes que se
-acercan a una línea de golpeo, una pelota que bota marcando cada rasgueo, el diagrama de
-dedos del acorde actual, y escucha por el micrófono para juzgar si cada rasgueo se tocó
-bien (acorde correcto y a tiempo), mal (acorde incorrecto) o se perdió (no sonó nada).
+App web para practicar guitarra al estilo Yousician: el usuario introduce una canción con
+acordes, la app muestra una "autopista" animada con los acordes que se acercan a una línea de
+golpeo, una pelota que bota marcando cada rasgueo, el diagrama de dedos del acorde actual, y
+escucha por el micrófono para juzgar cada rasgueo: bien (acorde correcto y a tiempo), mal
+(acorde incorrecto) o perdido (no sonó nada).
 
 UI en **español**. Código, identificadores y comentarios en **inglés**.
 
-## 1. Stack
+**`src/types.ts` es la fuente de verdad del contrato entre módulos.** Donde este documento
+difiera, mandan los nombres y campos de `types.ts`. No cambiar `types.ts` sin avisar.
 
-- Vite 6 + TypeScript 5 (vanilla, sin framework). Canvas 2D para la animación. Web Audio
-  API para micrófono y metrónomo. Vitest para tests unitarios (entorno `node`).
-- Sin dependencias de runtime (todo el DSP en TS puro, para que sea testeable en Node).
-- Estructura:
+## 1. Stack y estructura
+
+- Vite 6 + TypeScript 5 (vanilla, sin framework). Canvas 2D para la animación. Web Audio API
+  para micrófono y metrónomo. Vitest para tests unitarios (entorno `node`).
+- Sin dependencias de runtime (todo el DSP en TS puro, testeable en Node).
+- `vite.config.ts` importa `defineConfig` de `'vitest/config'` (no de `'vite'`) para que
+  `tsc --noEmit` acepte la clave `test`. No usar `/// <reference types="vitest/config" />`
+  ni mover `test` a otro archivo.
+- `npm run dev` en localhost es contexto seguro (necesario para `getUserMedia`). Para probar
+  en un móvil por LAN haría falta HTTPS (`@vitejs/plugin-basic-ssl`), fuera del MVP.
 
 ```
 index.html
-src/main.ts              bootstrap, router de pantallas
+src/main.ts               bootstrap, router por hash, registro de pantallas
 src/styles.css
-src/types.ts             tipos compartidos (contrato entre módulos) — YA ESCRITO, no cambiar sin avisar
-src/music/notes.ts       nombres de notas, pitch classes, midi<->Hz, parseo de símbolos de acorde
-src/music/chords.ts      biblioteca de digitaciones + generador de cejillas
-src/song/parser.ts       texto de canción -> Song (eventos de rasgueo con tiempos en beats)
-src/song/examples.ts     canciones de ejemplo incluidas
-src/song/storage.ts      CRUD en localStorage
-src/dsp/fft.ts           FFT real radix-2
-src/dsp/chroma.ts        espectro -> chroma; plantillas de acordes; matching
-src/dsp/onset.ts         detector de ataques (spectral flux)
-src/dsp/detector.ts      ChordDetector: frames de audio -> onsets + chroma + acorde
-src/audio/mic.ts         MicInput: getUserMedia + AnalyserNode + bucle de captura
-src/audio/metronome.ts   clics de metrónomo/cuenta atrás con planificador look-ahead
-src/game/judge.ts        lógica pura de veredicto por evento
-src/game/engine.ts       PracticeSession: reloj, planificación, veredictos, resumen
-src/ui/highway.ts        render canvas de la autopista + pelota
-src/ui/chordDiagram.ts   render del diagrama de acorde (canvas)
-src/ui/screens/library.ts, editor.ts, practice.ts, settings.ts, summary.ts
-src/ui/dom.ts            helpers mínimos (h(), qs())
-tests/**                 vitest
+src/types.ts              contrato compartido (YA ESCRITO)
+src/music/notes.ts        nombres de notas, pitch classes, midi<->Hz, parseo de símbolos
+src/music/chords.ts       biblioteca de digitaciones + generador de cejillas
+src/song/parser.ts        texto -> Song (compases, repeticiones, letra, eventos de rasgueo)
+src/song/tempo.ts         beatToSec / secToBeat / songDurationSec (puro)
+src/song/examples.ts      canciones de ejemplo (StoredSong[], builtin)
+src/song/storage.ts       CRUD en localStorage + ajustes
+src/dsp/fft.ts            FFT real radix-2
+src/dsp/chroma.ts         espectro -> chroma (peak picking); compresión; plantillas; matching
+src/dsp/onset.ts          detector de ataques (spectral flux, banda limitada)
+src/dsp/detector.ts       ChordDetector: frame de audio -> DetectorFrame
+src/audio/context.ts      AudioContext singleton (YA ESCRITO): getAudioContext(), ensureAudioContext()
+src/audio/mic.ts          MicInput: getUserMedia + AnalyserNode + bucle de captura; MicError
+src/audio/micDetector.ts  MicDetectorSource: compone MicInput + ChordDetector -> DetectorSource
+src/audio/metronome.ts    Metronome implements ClickScheduler
+src/audio/calibrate.ts    runCalibration(): mide la latencia con clics
+src/game/judge.ts         judgeEvent (puro)
+src/game/engine.ts        PracticeSession: reloj, cuenta atrás, bucle, asignación de onsets, veredictos
+src/ui/dom.ts             helpers DOM (YA ESCRITO): h(), append(), clear(), qs(), fmtSeconds()
+src/ui/highway.ts         HighwayRenderer (canvas): autopista + pelota
+src/ui/chordDiagram.ts    drawChordDiagram (canvas)
+src/ui/screens/library.ts, editor.ts, practice.ts (incluye la vista Resumen), settings.ts
+tests/**                  vitest (tests/helpers/synth.ts: síntesis de audio para tests)
 ```
 
 ## 2. Formato de canción (texto)
 
-Cabeceras `clave: valor` (una por línea, al principio o en cualquier punto; `tempo`,
-`strum` y `time` pueden cambiar a mitad de canción y aplican desde ese punto):
-
 ```
 title: Cielito Lindo
 artist: Tradicional
-tempo: 120          # BPM (negras). Obligatorio (por defecto 80 si falta)
-time: 3/4           # compás. Soportado: 4/4 (defecto), 3/4, 2/4, 6/8
-strum: D-DU-UDU     # patrón de rasgueo por compás: 2 caracteres por beat
-                    # D = abajo, U = arriba, - = nada, x = apagado (se trata como D)
-                    # Si falta: un D por beat ("D-D-D-D-" en 4/4)
-capo: 2             # opcional, solo informativo (se muestra)
+tempo: 120          # pulsos por minuto de la figura del denominador del compás
+time: 4/4           # compás: 4/4 (defecto), 3/4, 2/4, 6/8 (en x/8 el pulso es la corchea)
+strum: D-DU-UDU     # patrón de rasgueo por compás (ver abajo)
+capo: 2             # cejilla: se muestra y la detección se desplaza +2 semitonos
 
-[Intro]             # sección (solo etiqueta visual)
+[Intro]             # sección (etiqueta)
 C . . . | G . . . | C . G . |
 # comentario
 [Estrofa]
-C G | Am F |        # menos tokens que beats: el compás se reparte a partes iguales
-Am*3 F |            # Am durante 3 beats, F el resto (1 beat en 4/4)
-N.C. | G . . . |    # N.C. = sin acorde (no se juzga, no se rasguea)
+C G | Am F |        # acordes "desnudos": el compás se reparte a partes iguales (2+2)
+Am*3 F |            # Am durante 3 beats, F el beat restante
+N.C. | G . . . |    # N.C. = sin acorde (la pelota bota, no se juzga)
+- - G . |           # - = silencio de 1 beat (sin rasgueo)
+> Ay, ay, ay, ay, canta y no llores    # letra asociada a la línea de compases anterior
+[Estribillo]
+C . . . | G . . . | x2                  # repite los compases de esta línea 2 veces
+[Estrofa]                                # sección vacía = vuelve a insertar la última definición
+[Estribillo] x2                          # inserta la sección 2 veces
 ```
 
-Reglas del parser:
+Ejemplo en 3/4:
 
-- Un compás = tokens entre `|`. Tokens: símbolo de acorde (`C`, `Am7`, `F#m`, `Bb`, `G/B`,
-  `Dsus4`, `Cadd9`, `N.C.`), `.` (continúa el acorde anterior 1 beat), `-` (silencio de 1
-  beat), `X*n` (acorde X durante n beats).
-- Si la suma de duraciones explícitas de un compás no cubre `beatsPerBar`, los tokens sin
-  duración explícita reparten equitativamente los beats restantes (permitiendo medios
-  beats). Si sobrepasa, error con línea.
-- Cada compás genera `StrumEvent`s según el patrón de rasgueo: por cada carácter `D`/`U`/`x`
-  del patrón en la posición `k` (corchea k del compás) se crea un evento en
-  `barStart + k/2` beats con el acorde vigente en ese instante. Si el acorde cambia en un
-  instante donde el patrón tiene `-`, se crea igualmente un evento `D` en ese instante
-  (siempre hay un rasgueo al cambiar de acorde).
-- `time` de un evento se expresa en **beats absolutos** desde el inicio (float). El motor
-  convierte a segundos con el tempo vigente (los cambios de tempo se aplican por tramos).
-- Errores: `ParseError { line: number; message: string }` (lista, no excepción); el
-  resultado siempre trae una `Song` parcial usable si no hay errores fatales.
-- Acordes desconocidos por la biblioteca NO son error de parseo; el parser solo valida la
-  sintaxis del símbolo. La UI del editor los marca en amarillo con "sin digitación".
+```
+title: Vals
+tempo: 90
+time: 3/4
+strum: D-DUDU
+C . . | G . . | G . C |
+```
 
-## 3. Tipos compartidos (`src/types.ts`)
+### Reglas del parser (`parseSong(source: string, opts?: { id?: string }): ParseResult`)
 
-Ver el archivo. Resumen: `ChordSymbol`, `ChordShape`, `Song`, `StrumEvent`, `Verdict`,
-`DetectorFrame`, `SessionState`, `Settings`.
+- `song.id = opts?.id ?? ''` (storage asigna el id real). `song` siempre existe; no hay
+  errores fatales. Los compases con `error` se descartan (también sus eventos); las líneas con
+  `warning` se conservan. `errors` ordenado por línea. **Como máximo un error por línea** (el
+  primer token inválido); si la línea no contiene `|` el mensaje añade "si es letra, empieza la
+  línea con `>`".
+- Orden de reconocimiento por línea: (1) línea vacía; (2) letra `>` (primer carácter no blanco);
+  (3) comentario `#` — `#` inicia comentario **solo al inicio de línea o precedido por espacio**
+  (`/(^|\s)#.*$/`), para no romper `F#m`, `C#7`, `D/F#`; (4) cabecera
+  `/^\s*(title|artist|tempo|time|strum|capo)\s*:\s*(.*)$/i`; (5) sección `[texto]` con `x<n>`
+  opcional; (6) cualquier otra línea no vacía es una **línea de compases**.
+- `tempo` opcional: 80 por defecto con `warning` "tempo no indicado, se usa 80".
+  `tempoSegments[0] = { fromBeat: 0, bpm: tempo }` siempre. Un `tempo:` entre compases crea un
+  segmento con `fromBeat = startBeat del siguiente compás` (si ya existe uno con ese
+  `fromBeat`, lo sustituye). Un `tempo:` antes del primer compás solo fija el inicial.
+  `tempo` fuera de 20..400 → `error` (se ignora la cabecera).
+- `time:` a mitad aplica a los compases siguientes (`SongBar.beats`); `Song.timeSignature` es
+  el inicial. Soportados: `4/4`, `3/4`, `2/4`, `6/8`. Un beat = 1/beatUnit; el tempo se expresa
+  en esas unidades; `beatToSec` nunca consulta el compás.
+- `strum`: caracteres `[DUx-]`. `D` abajo, `U` arriba, `x` apagado (`muted: true`,
+  `direction: 'down'`), `-` nada. Longitud permitida: `beatsPerBar`, `2·beatsPerBar` o
+  `4·beatsPerBar` (negras, corcheas o semicorcheas) → `charsPerBeat = length / beatsPerBar`.
+  Otra longitud → `error` ("patrón de N caracteres; se esperaban M, 2M o 4M para X/Y") y se
+  mantiene el patrón vigente. Patrón por defecto `'D-'.repeat(beatsPerBar)`. Al cambiar `time`,
+  si el patrón vigente ya no encaja se vuelve al patrón por defecto (`warning`).
+- `capo`: entero 0..12, si no `error`. Por defecto 0.
+- Compases: la línea se divide por `|`, se recorta cada segmento y los vacíos se ignoran (barra
+  final opcional; una línea sin `|` es un compás). Antes de dividir, se extrae un sufijo
+  `x<n>`/`×<n>` final de línea (`/\s+[x×](\d+)\s*$/i`): repite los compases de esa línea n veces
+  (1 ≤ n ≤ 32, si no `error`). Un `x2` dentro de un compás es error de símbolo.
+- Tokens de un compás: símbolo de acorde (`C`, `Am7`, `F#m`, `Bb`, `G/B`, `Dsus4`, `Cadd9`,
+  `N.C.`/`NC`), `.`, `-`, `X*n` (n entero ≥ 1). Un **grupo** = token de acorde, `-` o `N.C.`
+  seguido de sus `.`. Duraciones: `X*n` → n beats (explícito); grupo con m puntos → 1+m beats
+  (explícito); acorde desnudo → implícito. `restantes = beatsPerBar − Σ explícitos`; `< 0` →
+  `error` ("compás sobrepasado"); `== 0` con acordes desnudos pendientes → `error` ("compás
+  lleno, X no cabe"). Los grupos implícitos se reparten `restantes` a partes iguales; la parte
+  debe ser > 0 y múltiplo de `1/charsPerBeat`, si no `error` ("no se pueden repartir N beats
+  entre M acordes; usa `.` o `*n`"). Con esto `C . G |` en 4/4 → C=2, G=2; `C G Am |` → error.
+  Un `.` al inicio de compás prolonga el último grupo del compás anterior (`error` si no hay).
+  Un compás cuyos grupos suman menos de `beatsPerBar` sin acordes desnudos → `error`
+  ("compás incompleto: N de M beats").
+- `-` (silencio): no genera eventos; en `SongBar.chords` se guarda
+  `{ name: '-', root: -1, quality: 'nc', bass: null }`. `N.C.` sí genera eventos con acorde
+  `nc` (veredicto `skipped`, la pelota bota). `chordNames` excluye `nc` y `-`.
+- Eventos: por cada compás y cada carácter `D`/`U`/`x` del patrón en la posición `k` se crea un
+  `StrumEvent` en `barStart + k/charsPerBeat` con el acorde vigente en ese instante. Si el
+  acorde cambia (o empieza tras un silencio) en un instante donde el patrón tiene `-`, se crea
+  igualmente un evento `D` en ese instante. Durante un silencio `-` no se crean eventos.
+  `chordChange = true` en el primer evento de la canción y en el primero tras un silencio, un
+  `N.C.` o un acorde distinto (comparar `root`, `quality` y `bass`, no el texto).
+- Secciones y repeticiones: `[Nombre]` etiqueta los compases siguientes hasta la siguiente
+  etiqueta (`section: null` antes de la primera). `[Nombre] x<n>` inserta la sección completa n
+  veces. `[Nombre]` **sin ningún compás** antes de la siguiente cabecera de sección o el fin del
+  texto vuelve a insertar la última definición con ese nombre (comparación ignorando
+  mayúsculas y espacios sobrantes), n veces si lleva `x<n>`; si no existe → `error` con línea
+  ("sección vacía y no definida antes"). Un `[Nombre]` con compases debajo define o redefine.
+  El parser guarda por compás el `strum`, `time` y `tempo` vigentes al definirlo; las copias
+  conservan exactamente esos valores (mismos acordes, patrón y tempo), recalculando `index` y
+  `startBeat`; `tempoSegments` se reconstruye coalesciendo compases consecutivos con el mismo
+  bpm. Los `StrumEvent` se generan DESPUÉS de expandir, sobre la lista final de compases. Las
+  cabeceras `tempo:/strum:/time:` solo afectan a compases definidos después, nunca a copias.
+  `Song.source` conserva el texto sin expandir.
+- Letra: una línea `>` se guarda en `song.lyricLines` con `barIndex` = índice del primer compás
+  de la última línea de compases parseada (0 si aún no hay). Nunca genera errores ni compases.
+  Las letras de una sección se copian con ella al repetirla/recuperarla (ajustando `barIndex`).
+- Acordes desconocidos por la biblioteca NO son error: el parser solo valida la sintaxis.
 
-## 4. Música
+## 3. Música
 
 ### notes.ts
-- `NOTE_NAMES_SHARP`, `NOTE_NAMES_FLAT`, `pitchClassOf('F#') === 6`, `midiToFreq`,
-  `freqToMidi`, `noteName(midi)`.
-- `parseChordSymbol(text): ChordSymbol | null`. Cualidades reconocidas y sus intervalos
-  (semitonos desde la fundamental):
-  - `maj` [0,4,7] (`C`, `Cmaj`, `CM`), `min` [0,3,7] (`Cm`, `Cmin`, `C-`),
-  - `7` [0,4,7,10], `maj7` [0,4,7,11] (`Cmaj7`, `CM7`), `m7` [0,3,7,10], `dim` [0,3,6],
-    `dim7` [0,3,6,9], `m7b5` [0,3,6,10], `aug` [0,4,8], `sus2` [0,2,7], `sus4` [0,5,7],
-    `7sus4` [0,5,7,10], `add9` [0,4,7,14→2], `6` [0,4,7,9], `m6` [0,3,7,9], `9` [0,4,7,10,2],
-    `5` [0,7] (power chord).
-  - Bajo alternativo `G/B` → `bass: 11`.
-  - `N.C.`/`NC` → `{ root: -1, quality: 'nc' }` (sin acorde).
-- `chordPitchClasses(sym): number[]` (incluye el bajo si lo hay).
+- `NOTE_NAMES_SHARP`, `NOTE_NAMES_FLAT`, `pitchClassOf('F#') === 6` (acepta `#`, `b`, `♯`, `♭`),
+  `midiToFreq(midi, a4 = 440)`, `freqToMidi(freq, a4 = 440)`, `noteName(midi, flats = false)`.
+- `parseChordSymbol(text): ChordSymbol | null` (null si la sintaxis es inválida). Cualidades e
+  intervalos (semitonos desde la fundamental):
+  `maj` [0,4,7] (`C`, `Cmaj`, `CM`); `min` [0,3,7] (`Cm`, `Cmin`, `C-`); `7` [0,4,7,10];
+  `maj7` [0,4,7,11] (`Cmaj7`, `CM7`, `CΔ7`); `m7` [0,3,7,10] (`Cm7`, `Cmin7`, `C-7`); `dim` [0,3,6]
+  (`Cdim`, `C°`); `dim7` [0,3,6,9]; `m7b5` [0,3,6,10] (`Cm7b5`, `Cø`); `aug` [0,4,8] (`Caug`, `C+`);
+  `sus2` [0,2,7]; `sus4` [0,5,7] (`Csus4`, `Csus`); `7sus4` [0,5,7,10]; `add9` [0,4,7,2]; `6`
+  [0,4,7,9]; `m6` [0,3,7,9]; `9` [0,4,7,10,2]; `5` [0,7]. Bajo alternativo `G/B` → `bass: 11`.
+  `N.C.`/`NC`/`-` → `{ root: -1, quality: 'nc', bass: null }`. `name` conserva el texto original.
+- `chordPitchClasses(sym): number[]` (únicos, ascendentes; incluye el bajo; `[]` para `nc`).
+- `qualityThird(q): 3 | 4 | null` — tercera de la cualidad (maj/7/maj7/add9/6/9 → 4; min/m7/m6/
+  dim/dim7/m7b5 → 3; sus/5/aug/nc → null). `swapThirdName(sym)`: nombre del acorde de la misma
+  raíz con la otra tercera (`A` ↔ `Am`, `C7` → `Cm7`, `Am7` → `A7`; para cualidades sin
+  pareja natural devuelve `<raíz>m` o `<raíz>`).
 
 ### chords.ts
-- `CHORD_LIBRARY: ChordShape[]` con digitaciones abiertas comunes (mínimo): C, D, E, F, G, A,
-  B; Am, Bm, Cm, Dm, Em, Fm, Gm; A7, B7, C7, D7, E7, G7; Am7, Dm7, Em7; Cmaj7, Fmaj7, Amaj7,
-  Dmaj7; Asus2, Asus4, Dsus2, Dsus4, Esus4; Cadd9, Gadd9; G/B, D/F#, C/G, Am/G; Bb, Eb, F#m,
-  C#m, G#m, Bm7, F#m7; A5, E5, D5, G5. Sistema de cuerdas: índice 0 = 6ª (E grave), 5 = 1ª
-  (e aguda). `frets[i]`: -1 = no sonar, 0 = al aire, n = traste. `fingers[i]`: 0 = ninguno,
-  1-4 índice..meñique. `barre?: { fret, fromString, toString }`. `baseFret`: traste donde
-  empieza el diagrama (1 salvo acordes altos).
+- `CHORD_LIBRARY: ChordShape[]` con digitaciones abiertas comunes (mínimo): C, D, E, F, G, A, B;
+  Am, Bm, Cm, Dm, Em, Fm, Gm; A7, B7, C7, D7, E7, G7; Am7, Dm7, Em7; Cmaj7, Fmaj7, Amaj7, Dmaj7;
+  Asus2, Asus4, Dsus2, Dsus4, Esus4; Cadd9, Gadd9; G/B, D/F#, C/G, Am/G; Bb, Eb, F#m, C#m, G#m,
+  Bm7, F#m7; A5, E5, D5, G5. Convención de `types.ts` (índice 0 = 6ª cuerda). `baseFret` = 1
+  salvo acordes altos; `frets` son trastes absolutos.
 - `getChordShape(symbol: string | ChordSymbol): ChordShape | null`: busca por nombre
-  normalizado (enarmónicos: `Bb` ≡ `A#`); si no existe, **genera una cejilla** a partir de la
-  forma de E (raíz en 6ª) o de A (raíz en 5ª) para `maj`, `min`, `7`, `m7`, `maj7`, `sus4`,
-  `5`, eligiendo la forma con el traste base más bajo (≥1). Devuelve `null` solo para
-  cualidades no generables o `nc`.
-- `shapePitchClasses(shape): number[]` a partir de la afinación estándar
-  E2 A2 D3 G3 B3 E4 (midi 40 45 50 55 59 64) y los trastes. `shapeMidiNotes(shape)`.
+  normalizado (enarmónicos `Bb` ≡ `A#`, `CM7` ≡ `Cmaj7`; comparar por `root`+`quality`+`bass`);
+  si no existe, **genera una cejilla** a partir de la forma de E (raíz en 6ª: E, Em, E7, Em7,
+  Emaj7, Esus4, E5) o de A (raíz en 5ª), para `maj`, `min`, `7`, `m7`, `maj7`, `sus4`, `5`,
+  eligiendo la forma con el traste base más bajo (≥ 1), `generated: true`, `barre` correcto.
+  Devuelve `null` para cualidades no generables, `nc`, o sintaxis inválida.
+- `shapePitchClasses(shape): number[]` (únicos, ascendentes) y `shapeMidiNotes(shape): number[]`
+  a partir de la afinación estándar E2 A2 D3 G3 B3 E4 (midi 40 45 50 55 59 64).
 
-## 5. DSP (todo con `Float32Array`, sin Web Audio, testeable en Node)
+## 4. DSP (todo con `Float32Array`, sin Web Audio, testeable en Node)
 
 ### fft.ts
-- `class RealFFT { constructor(size: number /* potencia de 2 */); forward(input: Float32Array, outRe: Float32Array, outIm: Float32Array): void; magnitudes(input, outMag /* size/2+1 */): void }`.
-  Ventana Hann aplicada dentro de `magnitudes` (parámetro `windowed = true`). Test contra
-  DFT ingenua en tamaños 16/64 y con senos puros.
+- `class RealFFT { constructor(size /* potencia de 2 */); forward(input, outRe, outIm); magnitudes(input, outMag /* size/2+1 */, windowed = true) }`.
+  Ventana Hann dentro de `magnitudes`. Magnitudes **sin normalizar** (sin 1/N). Test contra DFT
+  ingenua (16 y 64) y seno puro → pico en el bin correcto.
 
 ### chroma.ts
-- `computeChroma(mag: Float32Array, sampleRate, fftSize, opts?): Float32Array(12)`:
-  para cada nota MIDI de 40 (E2) a 88 (E6) suma la energía (`mag²`) de los bins cuya
-  frecuencia cae dentro de ±50 cents de la nota (con `a4 = 440` configurable); acumula por
-  pitch class con peso por octava (1.0 en octavas graves, 0.6 en la más aguda, lineal);
-  aplica compresión `log(1 + 100·x)`; normaliza a norma L2 = 1 (o ceros si silencio).
-- `buildTemplates(): ChordTemplate[]` para 12 raíces × { maj, min, 7, m7, maj7, sus2, sus4 }
-  usando **plantillas armónicas**: por cada nota del acorde se añaden sus armónicos 1..4 con
-  pesos 1, 0.5, 0.33, 0.25 (h-ésimo armónico → pitch class `(pc + round(12·log2(h))) % 12`),
-  se normaliza L2. `templateForPitchClasses(pcs: number[])` igual para un voicing concreto.
-- `matchChord(chroma, templates): { best: ChordTemplate, score: number, ranked: Array<{t, score}> }`
-  con similitud coseno. `scoreAgainst(chroma, template): number`.
+- `computeEnergyChroma(mag, sampleRate, fftSize, opts: { a4 = 440 }, out?: Float32Array(12)): Float32Array`
+  — chroma de energía por **peak picking** (sin sumar bins por banda, que mezcla E2/F2):
+  1. `df = sampleRate / fftSize`; banda `kLo = max(1, floor(midiToFreq(40)·2^(-50/1200)/df))`,
+     `kHi = min(fftSize/2 − 1, ceil(midiToFreq(88)·2^(50/1200)/df))`.
+  2. `peakFloor = 8 · median(mag[kLo..kHi])` (mediana sobre una copia del tramo).
+  3. Para cada `k` con `mag[k] > mag[k−1] && mag[k] >= mag[k+1] && mag[k] > peakFloor`:
+     interpolación parabólica en log: `a = ln(mag[k−1]+1e-12)`, `b = ln(mag[k]+1e-12)`,
+     `g = ln(mag[k+1]+1e-12)`, `den = a − 2b + g`, `d = den === 0 ? 0 : clamp(0.5·(a−g)/den, −0.5, 0.5)`,
+     `f = (k+d)·df`, `energy = exp(2·(b − 0.25·(a−g)·d))`, `midi = round(69 + 12·log2(f/a4))`;
+     descartar si `midi < 40 || midi > 88 || |1200·log2(f/midiToFreq(midi))| > 50`;
+     `out[midi % 12] += octaveWeight(midi) · energy`, con `octaveWeight` lineal 1.0 (midi 40) →
+     0.6 (midi 88).
+  4. Limitación documentada: dos parciales a menos de ~2 bins (~12 Hz a 48 kHz) se funden.
+- `compressChroma(energy, gamma = 10, out?): Float32Array` — `e' = e / max(e)` (si `max == 0`
+  → ceros), `c = log(1 + γ·e') / log(1 + γ)`, luego L2 = 1. Invariante de escala:
+  `compress(x) == compress(0.01·x)`.
+- `rollChroma(v, shift, out?)`: `out[pc] = v[(pc + shift) % 12]` (sonante = escrito + shift;
+  el bin escrito lee el bin sonante `shift` semitonos más arriba). `shift` ya normalizado 0..11.
+- `templateForPitchClasses(pcs, name, root, quality, gamma = 10): ChordTemplate` — en el
+  **dominio de energía**: por cada nota `p` armónicos `h = 1..6` con energía `(0.6^(h−1))²` en
+  el pitch class `(p + [0,12,19,24,28,31][h−1]) % 12`; luego **el mismo camino** que el chroma:
+  `compressChroma(energy, gamma)`. `pcs` guarda las notas del acorde (únicas, ascendentes).
+- `buildTemplates(gamma = 10): ChordTemplate[]` — 12 raíces × { maj, min, 7, m7, maj7, sus2,
+  sus4 } (84) con `chordPitchClasses` de `notes.ts`; nombre con sostenidos (`F#m`).
+- `cosine(a, b): number` (0 si alguno es nulo, nunca NaN).
+- `matchChord(chroma, templates): { best: ChordTemplate | null, score, ranked }` — coseno; con
+  chroma nulo devuelve `best: null, score: 0, ranked: []`.
+- `mergeExpectedTemplate(templates, expected): ChordTemplate[]` — devuelve el vocabulario con
+  la plantilla esperada **sustituyendo** a la entrada con el mismo conjunto `pcs` (o añadida si
+  no hay), para que top-1 nunca tenga dos veces el mismo acorde.
 
 ### onset.ts
-- `class OnsetDetector { constructor(opts: { hopSeconds; minIntervalSec = 0.1; threshold = 1.5; historyFrames = 20 }); process(mag: Float32Array, timeSec: number): boolean }`.
-  Spectral flux con rectificación de media onda sobre `log(1 + mag)`, umbral adaptativo =
-  `median(últimos N flux) · threshold + eps`, y refractario `minIntervalSec`. Solo los bins
-  entre 70 Hz y 5 kHz. Test: señal sintética con 4 golpes → 4 onsets ± 1 hop; ruido
-  blanco estacionario → 0 onsets.
+- `class OnsetDetector { constructor(sampleRate, fftSize, opts: { hopSeconds = 0.04; minIntervalSec = 0.1; threshold = 1.5; historyFrames = 24; loHz = 70; hiHz = 3500 }); process(mag: Float32Array, timeSec: number): boolean; setThreshold(t) }`.
+  Spectral flux con rectificación de media onda sobre `log(1 + mag)`, **solo los bins entre
+  `loHz` y `hiHz`** (el clic del metrónomo vive por encima). Umbral adaptativo
+  `median(últimos N flux) · threshold + eps`, con `eps` un suelo absoluto pequeño (fijado por el
+  test "ruido/silencio → 0 onsets"). Refractario `minIntervalSec` usando el delta real entre
+  `timeSec` consecutivos. El primer frame nunca es onset.
+- Tests: 4 golpes sintéticos → 4 onsets (±1 hop); ruido blanco estacionario → 0; silencio → 0;
+  ráfagas de clic a 4500 y 5500 Hz (25 ms, ataque 3 ms, τ = 8 ms, −20 dBFS) sobre silencio → 0
+  onsets; clic + rasgueo 60 ms después → exactamente 1 onset.
 
 ### detector.ts
-- `class ChordDetector { constructor(opts: { sampleRate; fftSize = 8192; a4 = 440 }); process(frame: Float32Array /* fftSize muestras, la más reciente al final */, timeSec: number): DetectorFrame }`.
-  Cada `process` calcula magnitudes, RMS (dBFS), chroma, onset. `DetectorFrame` (ver
-  types) incluye `onset: boolean`, `chroma`, `rmsDb`, `bestChord` (nombre y score) o null
-  si `rmsDb < gateDb (-50)`.
-- Latencia objetivo: `process` de un frame de 8192 en < 3 ms en Node.
-- Test de integración DSP: `synthChord(pcs, sr, seconds)` (suma de armónicos con decaimiento
-  exponencial + ruido leve) para acordes reales de guitarra por voicing (E, A, D, G, C, Em,
-  Am, Dm) → `matchChord` debe devolver el acorde correcto en top-1 en al menos 7 de 8, y el
-  correcto siempre en top-2.
+- `class ChordDetector { constructor(sampleRate: number, opts?: DetectorOpts); process(frame: Float32Array /* fftSize muestras, la más reciente al final */, timeSec: number): DetectorFrame; setOptions(patch: Partial<Pick<DetectorOpts, 'a4'|'gateDb'|'onsetThreshold'>>); setTranspose(semitones: number); getNoiseFloorDb(): number; getGateDb(): number }`.
+  Cada `process`: magnitudes (Hann, sin normalizar) → `rmsDb` (RMS del frame en dBFS) →
+  seguimiento del suelo de ruido → puerta → chroma → onset. Devuelve un `DetectorFrame` nuevo
+  (no reutilizar arrays entre frames: el motor los guarda en un ring buffer).
+- **Suelo de ruido y puerta**: ring buffer de los últimos 75 `rmsDb`. `noiseFloor` = percentil 10
+  del buffer, actualizado solo cuando no se ha aceptado ningún onset en el último 1 s (así la
+  cuenta atrás, silencios y pausas lo fijan); se inicializa con los primeros 0.5 s de frames
+  (hasta entonces `noiseFloor = −100`). `gate = max(opts.gateDb, noiseFloor + 10)`. Si
+  `rmsDb < gate`: `energyChroma` y `chroma` a ceros, `bestChord = null`, `onset = false`.
+- **Onset**: `OnsetDetector.process(mag, timeSec)`; si dispara y `rmsDb >= gate` → `onset =
+  true` y **refinamiento del instante**: RMS en bloques de 128 muestras (dB) sobre las últimas
+  ~200 ms del frame; elegir el bloque con mayor subida respecto al bloque ~10 ms anterior
+  (≈4 bloques); si la subida ≥ 6 dB, `onsetTimeSec = timeSec − (N − onsetSample)/sampleRate`;
+  si no, `onsetTimeSec = timeSec − hop` (fallback). Test: golpe sintético en instante conocido
+  → `onsetTimeSec` a ±5 ms.
+- **Chroma**: `computeEnergyChroma` → `rollChroma(·, transpose)` → `energyChroma`;
+  `chroma = compressChroma(energyChroma, gamma)`; `bestChord = matchChord(chroma, templates)`
+  (vocabulario `buildTemplates` construido una vez en el constructor; `bestChord = null` si
+  `score === 0`).
+- `setTranspose(s)` guarda `((s % 12) + 12) % 12`. Con transposición, `chroma`, `energyChroma` y
+  `bestChord` ya están en espacio escrito.
+- Rendimiento: `process` de un frame de 8192 en < 3 ms en Node.
+- Test de integración (`tests/helpers/synth.ts` — exportar `synthChord`, `synthStrum`, `synthClick`,
+  `silence`, `mix`): `synthChord(midiNotes, sampleRate, seconds, opts)` con armónicos 1..8 y
+  pesos `0.7^(h−1)`, decaimiento exponencial por cuerda (graves 1.5 s, agudos 0.6 s), variación
+  aleatoria ±30 % por armónico (semilla fija), cuerdas graves 6 dB más fuertes, ataque de 10 ms
+  de ruido. Voicings reales de E, A, D, G, C, Em, Am, Dm (de `CHORD_LIBRARY`) →
+  `matchChord(compress(energyChroma))` top-1 correcto en ≥ 7 de 8 y siempre en top-2, a 44100 y
+  48000 Hz y a −20 y −44 dBFS. Senos puros E2 (82.41), F2 (87.31), A2 (110) a 44100, 48000 y
+  96000 → `chroma[pc] ≥ 0.95` y el resto ≤ 0.1. E2+B2 → E y B ≥ 0.5, F y C ≤ 0.1.
+  `rollChroma(chroma(A mayor), 2)` → máximos en G, B, D.
 
-## 6. Audio (navegador)
+## 5. Audio (navegador)
+
+### context.ts (ya escrito)
+`getAudioContext()` (singleton perezoso) y `ensureAudioContext()` (resume). Regla: nunca crear
+ni reanudar el contexto al montar una pantalla, solo dentro de un handler de click/touch, y
+llamar a `resume()` **antes de cualquier `await`** (iOS). Un contexto `suspended` tiene
+`currentTime` congelado: el reloj de la sesión y el metrónomo no avanzan.
 
 ### mic.ts
-- `class MicInput { start(deviceId?): Promise<void>; stop(); onFrame(cb: (frame: Float32Array, timeSec: number) => void); listDevices(): Promise<MediaDeviceInfo[]>; readonly context: AudioContext }`.
-  `getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, deviceId } })`.
-  `AnalyserNode.fftSize = 8192`, `smoothingTimeConstant = 0`. Bucle con `setInterval` a ~40 ms
-  (hop ≈ 0.04 s; el detector recibe `getFloatTimeDomainData`), `timeSec = context.currentTime`.
-- Un único `AudioContext` compartido con el metrónomo (exportar `getAudioContext()` en
-  `audio/context.ts`).
+- `class MicInput { constructor(fftSize = 8192); readonly fftSize; readonly context: AudioContext; start(deviceId?: string): Promise<void>; stop(): void; onFrame(cb: (frame: Float32Array, timeSec: number) => void): () => void; listDevices(): Promise<MediaDeviceInfo[]>; getTrackSettings(): MediaTrackSettings | null; isRunning(): boolean }`.
+- `start`: `getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, deviceId /* valor "ideal", no exact */ } })`.
+  Rechaza con `class MicError extends Error { code: 'insecure' | 'unsupported' | 'denied' | 'notfound' | 'device' }`
+  (`insecure` si `!window.isSecureContext`; `unsupported` si no hay `getUserMedia`; `denied` ←
+  `NotAllowedError`/`SecurityError`; `notfound` ← `NotFoundError`; `device` ← el resto).
+  `AnalyserNode.fftSize = fftSize`, `smoothingTimeConstant = 0`. Bucle `setInterval` ~40 ms que
+  llama a `getFloatTimeDomainData` en un buffer **nuevo por frame** y a los suscriptores con
+  `timeSec = context.currentTime` (RAW, sin corregir latencia; solo el motor la aplica). Varios
+  suscriptores; `onFrame` devuelve unsubscribe. `stop()` para el intervalo y las pistas.
+- `listDevices()` solo tiene etiquetas tras un `start()` con permiso.
+
+### micDetector.ts
+- `class MicDetectorSource implements DetectorSource { constructor(mic: MicInput, opts: DetectorOpts); onFrame(cb): () => void; setOptions(patch); setTranspose(s); readonly detector: ChordDetector }`
+  — crea `new ChordDetector(mic.context.sampleRate, { ...opts, fftSize: mic.fftSize })` y hace
+  fan-out de un `DetectorFrame` por frame del mic.
+- `detectorOptsFromSettings(s: Settings): DetectorOpts` → `{ a4, gateDb, onsetThreshold }`.
 
 ### metronome.ts
-- `class Metronome { constructor(ctx); scheduleClick(timeSec, accent: boolean); clear() }`.
-  Clics de osciladores cortos (1000 Hz acento / 800 Hz normal, 30 ms, envolvente
-  exponencial) — agudos y breves para que el detector no los confunda con un rasgueo (el
-  onset detector ignora >5 kHz no ayuda aquí; el motor **ignora onsets en ±30 ms de un clic**).
+- `class Metronome implements ClickScheduler { constructor(ctx: AudioContext); scheduleClick(nominalSec, accent); clear(); setEnabled(b) }`.
+  Clic **espectralmente separado** del análisis: seno a **4500 Hz (normal) / 5500 Hz (acento)**,
+  ganancia 0 → 0.5 con rampa lineal de 3 ms, luego `setTargetAtTime(0, t + 0.003, 0.008)`,
+  `osc.stop(t + 0.05)`. Rationale: el chroma solo mira MIDI 40..88 (+50 cents ≈ 1358 Hz) y el
+  flujo de onsets se corta en 3500 Hz, así que el clic no puede crear ni onsets ni energía de
+  chroma. **No existe ningún filtro temporal de onsets cerca de un clic** (un rasgueo perfecto
+  coincide con el clic por construcción).
+- `scheduleClick(nominal)` arranca el oscilador en `nominal − (ctx.outputLatency || 0.03)` para
+  que se **oiga** en el instante nominal (cuando la pelota aterriza). `clear()` para todos los
+  osciladores pendientes (guardar referencias). `setEnabled(false)` hace que `scheduleClick` sea
+  no-op (sin romper la planificación del motor).
+
+### calibrate.ts
+- `runCalibration(source: DetectorSource, clicks: ClickScheduler, clock: Clock, opts?: { n = 8; intervalSec = 1; onProgress?: (i) => void }): Promise<{ latencySec: number; samples: number[] } >`
+  — programa `n` clics nominales a `clock.now() + 1 + i·intervalSec`; para cada clic toma el
+  onset RAW (`onsetTimeSec ?? timeSec`) más cercano en `[nominal − 0.15, nominal + 0.5]`;
+  exige ≥ 5 muestras y desviación absoluta mediana ≤ 0.04 s, si no rechaza con
+  `CalibrationError` (mensaje en español: "No se detectaron suficientes rasgueos" /
+  "Demasiada variación, repite la calibración"); `latencySec = median(onset − nominal)`
+  acotado a [−0.1, 0.5]. Con el clic fuera de banda, los únicos onsets son los rasgueos del
+  usuario, y `median(onset − nominal)` mide exactamente el desfase que ve el juez cuando el
+  usuario sigue el metrónomo/pelota. Termina (resuelve o rechaza) como muy tarde 1 s después
+  del último clic, usando `setTimeout`. Test con `DetectorSource`, `ClickScheduler` y `Clock` falsos.
+
+## 6. tempo.ts (puro)
+- `beatToSec(segments: TempoSegment[], beat): number` (tramos; extrapolación lineal con
+  `segments[0]` para `beat < 0`), `secToBeat(segments, sec)`, `songDurationSec(song)` =
+  `beatToSec(song.tempoSegments, song.totalBeats)` (sin `tempoScale`).
+- Tests: `[{0,120},{8,60}]` → `beatToSec(12) === 8`; `beatToSec(−4) === −2`;
+  `secToBeat(beatToSec(b)) ≈ b` para varios b incluidos negativos; un compás de 6/8 a 120 dura 3 s.
 
 ## 7. Motor de práctica (`game/`)
 
 ### judge.ts (puro)
-- `judgeEvent(event: StrumEvent, evidence: Evidence, opts: JudgeOpts): Verdict`
-  - `Evidence = { onsets: number[] /* seg, ya corregidos por latencia */, chromaAt: (t0, t1) => Float32Array /* chroma medio en ventana */ }`
-  - `JudgeOpts = { early = 0.15, late = 0.25, analysisWindow = 0.3, minScore = 0.55, margin = 0.05 }`.
-  - Si no hay onset en `[t - early, t + late]` → `missed`.
-  - Con onset `o` (el más cercano a `t`): chroma medio en `[o + 0.03, o + analysisWindow]`;
-    ranking contra plantillas del vocabulario **más** la plantilla del voicing esperado.
-    Si el esperado está en top-1, o (en top-2 y `score(expected) ≥ minScore` y
-    `best - score(expected) ≤ margin`) → `correct` (con `timing = o - t`). Si no → `wrong`
-    con `detected = best.name`.
-  - Eventos con acorde `nc` → `skipped`.
-- La sesión también rellena `timingLabel`: `'perfect'` si |timing| ≤ 0.07, `'good'` ≤ 0.15,
-  `'late'|'early'` en el resto.
+`judgeEvent(input: JudgeInput, evidence: Evidence, opts: JudgeOpts): JudgeResult`.
+Todo en segundos de reloj (wall). Reglas, en orden:
+1. `input.chord.quality === 'nc'` → `kind: 'skipped'`, `timingLabel: null`.
+2. `evidence.onset === null` → `missed`.
+3. `timing = onset − expectedSec`; `timingLabel` = `perfect` si `|timing| ≤ perfectSec`, `good`
+   si `≤ goodSec`, si no `early`/`late` según el signo.
+4. `input.muted` → `correct` (solo timing, sin chroma).
+5. `t0 = onset + 0.02`; `t1 = min(onset + analysisWindowSec, nextOnset − 0.02 si hay)`; si
+   `t1 − t0 < 0.05` → `t1 = t0 + 0.05`. `c = chromaAt(t0, t1)`. Si `c` es todo ceros → `missed`
+   (`timing` y `timingLabel: null` se descartan: el veredicto `missed` no lleva timing).
+6. `vocab = mergeExpectedTemplate(opts.templates, input.expectedTemplate)`;
+   `{ best } = matchChord(c, vocab)`; `expectedScore = cosine(c, expectedTemplate.vector)`.
+   `E = input.expectedPcs`, `B = best.pcs`.
+7. `expectedScore < minScore` → `wrong`, `detected = best.name`.
+8. Si `B ≠ E` (como conjuntos): si `B ⊇ E`, `d = min_{p∈E} c[p] − max_{p∈B\E} c[p]`; si no,
+   `d = mean_{p∈E\B} c[p] − mean_{p∈B\E} c[p]` (media de conjunto vacío = 0). `d < 0` → `wrong`,
+   `detected = best.name`.
+9. Comprobación de tercera, **siempre**: `third = qualityThird(input.chord.quality)`; si no es
+   null, `other = third === 4 ? 3 : 4`; si `c[(root+third)%12] < c[(root+other)%12]` → `wrong`,
+   `detected = swapThirdName(input.chord)`.
+10. Si no, `correct` con `timing`, `timingLabel`, `expectedScore`.
+`timingLabel` solo es no-null cuando `kind === 'correct'`; `timing` se incluye en `correct` y
+`wrong`. `detected` solo en `wrong`.
 
 ### engine.ts
-- `class PracticeSession extends EventTarget` (o con `on(event, cb)`):
-  - `constructor(song, { detector?: DetectorSource, metronome, ctx, settings })`.
-  - `start()`: cuenta atrás de 1 compás (clics acentuados), luego arranca.
-    `pause()/resume()/stop()/seekBar(n)`.
-  - Reloj: `songTime = (ctx.currentTime - startAt) · tempoScale` — todo en segundos de
-    canción; `beatToSec(beat)` con tramos de tempo; `settings.tempoScale` (0.5–1.2).
-  - Planifica clics de metrónomo con look-ahead de 0.5 s si `settings.metronome`.
-  - Recibe `DetectorFrame`s: guarda onsets (`t - settings.latencySec`), acumula chroma en un
-    ring buffer de ~2 s para `chromaAt`.
-  - Para cada evento: cuando `songTime > event.time + late + analysisWindow`, juzga y emite
-    `verdict`. Si el mic está apagado (`settings.listen = false`), no juzga (verdict `skipped`).
-  - `getState(): SessionState` (para el renderer, cada frame): `songTimeSec`, `beat`,
-    `currentEventIndex`, `verdicts[]`, `score`, `streak`, `phase: 'countin'|'playing'|'paused'|'ended'`.
-  - Al final: `summary: { total, correct, wrong, missed, accuracy, perChord: Record<name, {total, correct}> }`.
-- Puntuación: correct = 100 (+10 si perfect), streak bonus ×1.1 cada 5 seguidos; wrong 0;
-  missed 0.
+`class PracticeSession` — `constructor(song: Song, deps: SessionDeps)`.
+- `on<K extends keyof SessionEvents>(k: K, cb: (e: SessionEvents[K]) => void): () => void`.
+  Sin `EventTarget`. **Sin temporizadores propios**: la pantalla llama `update()` en cada rAF;
+  los tests lo llaman a mano con un `Clock` falso.
+- **Reloj**: `segments = song.tempoSegments`; `songSec(beat) = beatToSec(segments, beat)`.
+  Anclaje en cada arranque (`playFrom`): `anchorBeat = startBeat − beatsPerBar(compás de
+  arranque)`, `anchorWall = clock.now() + 0.1`. `wallSec(beat) = anchorWall + (songSec(beat) −
+  songSec(anchorBeat)) / tempoScale`. `beat(now) = secToBeat(segments, songSec(anchorBeat) +
+  (now − anchorWall) · tempoScale)`. `songTimeSec = songSec(beat)`. `tempoScale` solo afecta al
+  reloj; tolerancias, latencia y ventanas son segundos reales.
+- **Fases** (`phase = 'idle'` tras el constructor):
+  - `playFrom(barIndex)` (interno): `startBeat = bars[barIndex].startBeat`; borra `verdicts[i]` y
+    `hits[i]` de eventos con `time >= startBeat`; vacía los buffers de evidencia (onsets y ring
+    de chroma); recalcula `score`, `streak` y `bestStreak` recorriendo `verdicts`; ancla el
+    reloj; `phase = 'countin'` (clics acentuados en cada beat entero de
+    `[anchorBeat, startBeat)`; `countInBeatsLeft = ceil(startBeat − beat)`); al llegar a
+    `beat >= startBeat` → `'playing'`. Emite `phase` en cada transición.
+  - `start(fromBar = 0)`: solo en `'idle'`; = `playFrom(fromBar)`.
+  - `pause()`: solo en `'countin'`/`'playing'`; congela (`pausedBeat = beat`), `clicks.clear()`,
+    ignora `DetectorFrame`s mientras dura, `phase = 'paused'`.
+  - `resume()`: solo en `'paused'`; = `playFrom(índice del compás que contiene max(0, pausedBeat))`
+    (cuenta atrás de 1 compás y se repite el compás actual completo).
+  - `seekBar(n)`: solo en `'idle'`/`'paused'`; `n` acotado a `[0, bars.length − 1]`; fija la
+    posición (`pausedBeat = bars[n].startBeat`), borra veredictos con `time >= startBeat` y marca
+    `skipped` (0 puntos) los anteriores sin veredicto; no arranca.
+  - `setLoop(range: LoopRange | null)`: en cualquier fase no terminada; fin del bucle =
+    `bars[toBar].startBeat + bars[toBar].beats`. Al alcanzar el fin del bucle (con margen para
+    juzgar los últimos eventos: cuando `now ≥ wallSec(loopEndBeat) + latencySec + lateSec +
+    analysisWindowSec + 0.1`, o cuando todos los eventos del tramo tienen veredicto), se vuelcan
+    los veredictos de la pasada a los contadores acumulados, `pass++`, y `playFrom(fromBar)`
+    (con cuenta atrás). Los onsets durante la cuenta atrás no caen en ninguna ventana y se
+    ignoran. Con bucle activo la sesión no termina sola.
+  - Fin natural (sin bucle): cuando `now ≥ wallSec(song.totalBeats) + latencySec + lateSec +
+    analysisWindowSec + 0.1` → `finish('finished')`.
+  - `stop()`: en cualquier fase salvo `'ended'` → `finish('stopped')`.
+  - `finish(reason)`: `clicks.clear()`, los eventos de la pasada actual sin veredicto pasan a
+    `skipped`, se calcula `summary` (acumulados de todas las pasadas + la actual), `phase =
+    'ended'`, emite `ended`; después la sesión es inerte (todos los métodos son no-op).
+  - `setSettings(patch: Partial<Settings>)`: `metronome`/`listen`/tolerancias/`latencySec` se
+    aplican en vivo; `tempoScale` solo en `'idle'`/`'paused'`.
+  - `getState(): SessionState` — lectura pura, O(1), puede devolver el mismo objeto mutado (el
+    renderer no lo muta). `update(): SessionState` = avanzar + `getState()`.
+- **Metrónomo**: en `update()`, si `settings.metronome && deps.clicks`, planifica con 0.5 s de
+  antelación los clics de los beats enteros (acento en el primer beat de cada compás y en la
+  cuenta atrás) hasta el fin de la canción/bucle. Llevar `lastScheduledBeat`.
+- **Evidencia** (solo si `deps.detector && settings.listen`; si no, todos los eventos reciben
+  `skipped` cuando pasa su instante):
+  - Al recibir un `DetectorFrame` (ignorado en `'paused'`/`'idle'`/`'ended'`): guardar en un ring
+    buffer de ~3 s `{ start: timeSec − fftSize/sampleRate, end: timeSec, energyChroma, gated:
+    max(energyChroma) === 0 }` (`fftSize/sampleRate` = 8192/`ctx.sampleRate`; pasar
+    `frameSeconds` en el constructor de la sesión si se quiere; por defecto 8192/48000). Si
+    `frame.onset`, `o = frame.onsetTimeSec ?? frame.timeSec`; añadir a la lista de onsets (RAW);
+    **asignación**: buscar el evento no-`nc` sin onset asignado cuya ventana
+    `[expectedSec(e) − earlySec, expectedSec(e) + lateSec]` contenga `o`, el más cercano por
+    `|o − expectedSec(e)|` (con `expectedSec(e) = wallSec(e.time) + latencySec`); si existe,
+    `hits[e] = { eventIndex, timing: o − expectedSec, timingLabel }` y emitir `hit`. Un onset se
+    asigna como máximo a un evento y viceversa.
+  - `live` se actualiza con cada frame (`rmsDb`, `bestChord`, `gateDb` del detector si expone
+    `getGateDb`, si no `settings.gateDb`).
+  - **Veredicto** del evento `e` (en `update()`), en orden de índice:
+    - con onset asignado `o`: cuando el último frame recibido tiene `end ≥ min(o +
+      analysisWindowSec, nextOnset − 0.02)` (el ring ya cubre la ventana) → `judgeEvent` con
+      `Evidence = { onset: o, nextOnset, chromaAt }`;
+    - sin onset: cuando el último frame recibido tiene `end > expectedSec(e) + lateSec + 0.05`
+      (o `now > expectedSec + lateSec + 0.5` como respaldo si no llegan frames) → `missed`;
+    - `nc` → `skipped` cuando `now ≥ expectedSec(e)`.
+    `chromaAt(t0, t1)`: media de `energyChroma` de los frames no gated con `start ≥ t0 && end ≤
+    t1`; si ninguno cabe, el frame no gated con mayor solapamiento con `[t0, t1]`; si todos
+    están gated → ceros; luego `compressChroma`. El motor construye `JudgeOpts` una vez
+    (`templates = buildTemplates()`, tolerancias de `settings`, `analysisWindowSec = 0.3`,
+    `minScore = 0.6`, `perfectSec = 0.07`, `goodSec = 0.15`) y cachea por nombre de acorde
+    `expectedPcs`/`expectedTemplate` (`deps.shapes[name]` → `shapePitchClasses`, si es `null`
+    → `chordPitchClasses(chord)`).
+  - `points` (motor): `streak` cuenta `correct` consecutivos incluyendo el actual; `wrong` y
+    `missed` ponen `streak = 0` y valen 0; `skipped` no altera la racha y vale 0.
+    `points = round((100 + (timingLabel === 'perfect' ? 10 : 0)) · 1.1 ** min(floor(streak / 5), 5))`.
+    `score = Σ points`; `bestStreak = máximo de streak`. `Verdict = { ...result, points }`,
+    guardado en `verdicts[eventIndex]`, emitido como `verdict`.
+- **Capo/afinación**: la pantalla llama `source.setTranspose(song.capo + settings.tuningOffset)`;
+  el motor no transpone nada (los frames ya vienen en espacio escrito).
+- **Resumen**: `total = eventos juzgados en todas las pasadas` (`correct + wrong + missed +
+  skipped === total`), `accuracy = judged > 0 ? correct / judged : 0` con `judged = total −
+  skipped`, `passes`, `medianTimingSec` (mediana de `timing` de los `correct`, `null` si < 4),
+  `perChord[name]` (excluye `skipped`), `score`, `bestStreak`.
+- Invariantes: `verdicts.length === hits.length === song.events.length` (prealocado con
+  `undefined`); `summary.score === state.score`.
 
 ## 8. UI
 
-### Pantallas (router simple por hash: `#/`, `#/edit/:id`, `#/play/:id`, `#/settings`)
-- **Biblioteca** (`#/`): lista de canciones (ejemplos + del usuario) con título, artista,
-  tempo, nº de acordes; botones "Practicar", "Editar", "Duplicar", "Borrar"; "Nueva
-  canción"; enlace a Ajustes.
-- **Editor** (`#/edit/:id`): textarea grande (monospace) + panel lateral con: errores (línea +
-  mensaje), lista de acordes usados con mini-diagrama (amarillo si sin digitación), duración
-  total, botón "Probar" (va a Practicar) y "Guardar". Autosave en borrador.
-- **Practicar** (`#/play/:id`):
-  - Cabecera: título, tempo efectivo, selector de velocidad (50 %–120 %), toggles Metrónomo y
-    Escuchar (micrófono), nivel de entrada (barra), acorde detectado en vivo (texto pequeño).
-  - Zona superior: diagrama grande del acorde **actual** (con dedos numerados) y pequeño del
-    **siguiente** con etiqueta "Siguiente".
-  - Autopista (canvas, ancho completo, ~40 % de la altura): 6 líneas horizontales
-    (cuerdas; 1ª arriba, 6ª abajo, como mira un diestro su propia guitarra). Línea de golpeo
-    vertical fija al 25 % del ancho. Los eventos se desplazan de derecha a izquierda; cada
-    evento dibuja en cada cuerda un círculo con el nº de traste (o "0" al aire, nada si
-    muteada) y una flecha ↓/↑ de dirección; el nombre del acorde encima del primer evento
-    de cada cambio. Líneas verticales tenues por beat, más marcadas por compás. Escala:
-    1 beat = ~140 px (ajustable a la anchura).
-  - **Pelota**: círculo que salta en parábola de un evento al siguiente y aterriza sobre la
-    línea de golpeo exactamente en `event.time` (altura del salto proporcional a la
-    duración). Cuando aterriza, onda expansiva. Color según veredicto del último evento.
-  - Veredictos: el evento se colorea verde (`correct`), rojo (`wrong`, mostrando el acorde
-    detectado debajo), gris (`missed`); texto flotante "¡Perfecto!/¡Bien!/Tarde/Pronto/Mal/…".
-  - Pie: puntuación, racha, barra de progreso, botones Pausa/Reanudar, Reiniciar, Salir.
-  - Cuenta atrás visual "4 3 2 1" sobre la autopista.
-  - Sin micrófono (permiso denegado o `listen` off): la animación funciona igual, sin juicio.
-- **Resumen**: precisión %, puntuación, tabla por acorde, botones Repetir / Biblioteca.
-- **Ajustes** (`#/settings`): dispositivo de entrada, latencia (ms, slider -100..300) con
-  botón "Calibrar" (8 clics de metrónomo; el usuario rasguea con cada uno; latencia =
-  mediana de `onset - click`), sensibilidad del onset (umbral), afinación A4, tolerancias.
-  Persistido en localStorage (`Settings` en types.ts).
+### Router y almacenamiento
+- Rutas: `#/` (Biblioteca), `#/edit/:id`, `#/play/:id`, `#/settings`. Ids `[a-z0-9_:-]+`
+  (`newId()` → `s_<base36 timestamp><4 aleatorios>`; sin `crypto.randomUUID`). Ruta desconocida o
+  id inexistente → `location.replace('#/')`. Resumen no es ruta: es la vista de Practicar
+  cuando `phase === 'ended'`.
+- `main.ts`: `current: (() => void) | null`; en carga inicial y en cada `hashchange`:
+  `current?.()`, `root.replaceChildren()`, `current = screen.mount(root, params)`.
+- `examples.ts` exporta `EXAMPLE_SONGS: StoredSong[]` con `id: 'ex:<slug>'`, `builtin: true`
+  (nunca se persisten). Al menos 6 ejemplos, en conjunto cubriendo: 4/4 y 3/4, `*n`, `N.C.`,
+  silencios `-`, cambio de tempo, patrón con `U` y `x`, repeticiones (`x2`, `[Sección] x2`,
+  recuperación de sección), letra `>`, capo. Sugeridos (dominio público/tradicionales o
+  progresiones genéricas): "Progresión pop (C G Am F)", "Blues en A (12 compases)", "Cielito
+  Lindo" (3/4), "Cumpleaños feliz" (3/4), "Amazing Grace" (3/4), "Balada Em C G D", "La Bamba"
+  (C F G). Todos deben parsear **sin errores ni warnings** (test).
+- `storage.ts`: claves `guitarzero.songs` (`{ version: 1, songs: StoredSong[] }`) y
+  `guitarzero.settings` (`{ version: 1, settings: Partial<Settings> }`); versión distinta o JSON
+  inválido → `console.warn` y vacío. Todo acceso a `localStorage` en try/catch con copia en
+  memoria como fallback. API: `listSongs(): StoredSong[]` (ejemplos + usuario, usuario por
+  `updatedAt` desc), `getSong(id): StoredSong | null`, `saveSong(s)` (fija `updatedAt`; ignora
+  builtin), `deleteSong(id)`, `duplicateSong(id): StoredSong` (título + " (copia)"),
+  `newSong(template?): StoredSong`, `newId()`, `loadSettings(): Settings` =
+  `{ ...DEFAULT_SETTINGS, ...pick(stored, keys(DEFAULT_SETTINGS)) }` con clamps (`tempoScale`
+  0.5..1.2, `latencySec` −0.1..0.5, `earlySec`/`lateSec` 0..1, `a4` 415..466, `tuningOffset`
+  −12..12), `saveSettings(s)`, `getFlag(name): boolean` / `setFlag(name, v)` (p. ej.
+  `latencyCalibrated`, `loop:<songId>`).
+
+### Biblioteca (`#/`)
+Lista de canciones (ejemplos con etiqueta "Ejemplo" + del usuario) con título, artista, tempo,
+compás, nº de acordes, duración; botones "Practicar", "Editar" (en builtin = duplicar y abrir
+la copia), "Duplicar", "Borrar" (deshabilitado en builtin, con confirmación); "Nueva canción"
+(crea `newSong()` con plantilla `title: Nueva canción\ntempo: 80\n\nC . . . | G . . . |` y navega
+a `#/edit/<id>`); "Progresión rápida" (plantilla `title: Progresión\ntempo: 80\nstrum: D-DU-UDU\n\nC | G | Am | F |`
+y abre el Editor); enlace a Ajustes. Cabecera con el nombre de la app.
+
+### Editor (`#/edit/:id`)
+Textarea grande (monospace) + panel lateral con: errores y warnings (línea + mensaje, click
+lleva a la línea), lista de acordes usados con mini-diagrama (amarillo + "sin digitación" si
+`getChordShape` es null), compases, duración total (`songDurationSec`, expandida), botones
+"Probar" (flush + `#/play/:id`) y "Guardar" (flush + feedback visual "Guardado"), "Volver".
+Autosave = `saveSong` con debounce 500 ms y flush en unmount. `<details>` plegable "Formato" con
+la gramática de la sección 2 resumida (incluyendo `>`, `x2`, `*n`, `-`, `N.C.`). `#/edit/ex:*`
+directo → `location.replace('#/')`.
+
+### Practicar (`#/play/:id`)
+- Al montar: parsea `getSong(id).source`; construye `shapes` (`getChordShape` por
+  `song.chordNames`, clave = nombre tal como lo escribió el usuario); crea `MicInput`,
+  `MicDetectorSource(mic, detectorOptsFromSettings(settings))` (+ `setTranspose(song.capo +
+  settings.tuningOffset)`), `Metronome(getAudioContext())` **sin reanudar el contexto** y la
+  `PracticeSession` con `clock = { now: () => ctx.currentTime }`. `phase = 'idle'` con una capa
+  "Empezar" grande sobre la autopista (también Espacio). Nunca arranca sola.
+- Handler de "Empezar", en este orden: `getAudioContext().resume()` (síncrono, antes de
+  cualquier `await`); si `settings.listen`, `try { await mic.start(settings.inputDeviceId ??
+  undefined) } catch (e: MicError) { mostrar el motivo en español y continuar con
+  `live.listening = false` }`; `navigator.wakeLock?.request('screen')` en try/catch; luego
+  `session.start()` (o `seekBar` + `start` según la sección elegida).
+- Durante `'idle'` el HUD ya muestra nivel de entrada y acorde detectado en cuanto el mic está
+  activo (botón "Probar micrófono" que hace `mic.start()` sin arrancar la sesión), para
+  comprobar que la app oye la guitarra.
+- Cabecera (una fila): título; tempo efectivo; selector de velocidad (50 %–120 %, paso 10;
+  si está sonando → `pause()`, aplicar, `resume()`); toggle Metrónomo; toggle Escuchar con estado
+  del micrófono ("Micrófono: activo | permiso denegado [Reintentar] | sin dispositivo |
+  desactivado | no seguro (usa https/localhost)"); barra de nivel de entrada con marca en el
+  umbral (`live.gateDb`); acorde detectado en vivo (≥ 24 px); toggle "Repetir" (atajo `L`) y,
+  solo si la canción tiene secciones, desplegable "Sección" ("Toda la canción" + un tramo por
+  bloque contiguo de compases con la misma etiqueta, "Estrofa (c. 5–12)"); insignia "Sin
+  evaluación" cuando no se escucha. Pista: "Usa auriculares para que el micrófono no capte el
+  metrónomo". Aviso no bloqueante si `mic.getTrackSettings()` indica `autoGainControl`,
+  `noiseSuppression` o `echoCancellation` activados o indefinidos.
+- Banner descartable mientras `!getFlag('latencyCalibrated')`: "Primera vez con micrófono:
+  calibra la latencia (unos 10 s) para que 'a tiempo' sea a tiempo" → `#/settings`.
+- Zona de diagramas: actual grande (dedos numerados) + siguiente pequeño con "Siguiente".
+  Actual = `song.events[max(nextEventIndex − 1, 0)].chord`; siguiente = primer evento
+  `j ≥ nextEventIndex` con `chordChange` y nombre distinto.
+- **Autopista** (`HighwayRenderer`): 6 líneas horizontales (cuerdas; 1ª arriba, 6ª abajo como en
+  una tablatura; `settings.invertStrings` pone la 6ª arriba: `rowOf(i) = invert ? i : 5 − i`).
+  Línea de golpeo vertical fija en `strikeX = 0.25 · width`. Se dibuja en beats:
+  `x = strikeX + (event.time − state.beat) · pxPerBeat`, `pxPerBeat = clamp(width / 8, 90, 160)`.
+  Líneas verticales tenues por beat, más marcadas por compás, con el nº de compás y la
+  etiqueta de sección. Marcadores: si `event.chordChange` → columna completa (círculo con nº de
+  traste por cuerda, "0" al aire, nada si muteada) con el nombre encima; resto de eventos →
+  barra vertical fina que cruza las 6 cuerdas con flecha ↓/↑ (más tenue para `up`); `muted` →
+  X sobre las cuerdas; `nc` → solo la etiqueta "N.C."; `shapes[name] === null` → marcador único
+  con el nombre en amarillo. Letra: bloque DOM bajo el canvas con la línea actual (última con
+  `barIndex ≤ compás actual`) resaltada y la siguiente en gris; oculto si no hay letra.
+- **Pelota**: X fija en la línea de golpeo, bota en vertical: `y = h · 4f(1−f)` con
+  `f = (beat − t_i) / (t_{i+1} − t_i)` entre eventos consecutivos (incluidos `nc`);
+  `h = clamp(0.5 · Δbeats · pxPerBeat, 24, 0.6 · alto)`. Al aterrizar (`beat − t_i < 0.5` beats),
+  onda expansiva. En la cuenta atrás bota en cada beat con altura fija y el número encima
+  (`beatsPerBar … 1`), y el último bote aterriza sobre el primer evento. Color: neutro; flash
+  breve (~0.4 s) del color del último veredicto emitido; en modo sin evaluación siempre neutro.
+- **Feedback en dos fases**: al aparecer `state.hits[i]` → anillo blanco en el evento + texto
+  flotante del timing ("¡Perfecto!" / "¡Bien!" / "Tarde" / "Pronto") en color neutro; al
+  aparecer `state.verdicts[i]` → colorear el marcador verde (`correct`), rojo (`wrong`, con el
+  acorde detectado debajo y "Mal"), gris (`missed`, "Perdido"). El renderer cachea por
+  identidad de objeto (`Map<index, {hit, verdict, firstSeenMs}>`): entrada nueva → `firstSeenMs
+  = nowMs`, anima 1 s; si el objeto deja de coincidir (Reiniciar/seek) se descarta.
+- Pie: puntuación, racha, "Pasada N" si hay bucle, barra de progreso (del tramo si hay bucle),
+  botones Pausa/Reanudar, Reiniciar (`stop()` ignorando ese `ended`, nueva sesión, `start()`),
+  Salir (`stop()` → Resumen). Toque/click en el canvas = pausa/reanudar. Teclado: Espacio =
+  empezar/pausa/reanudar, `R` = reiniciar, `Esc` = salir, `L` = bucle. `visibilitychange` oculto
+  o `ctx.state !== 'running'` → `pause()`; al reanudar (siempre desde un gesto) `ctx.resume()`,
+  si la pista del mic terminó → `mic.start()`, y volver a pedir el wake lock.
+- Estado inicial de "Repetir": el valor guardado (`getFlag('loop:<id>')`) o, si no hay, ON si
+  la canción no tiene secciones y tiene ≤ 8 compases; se guarda al cambiarlo. Con bucle,
+  `setLoop` cubre la sección elegida o toda la canción.
+- **Resumen** (misma pantalla, `phase === 'ended'`): precisión % (o "Sesión sin evaluación
+  (micrófono desactivado)" si `judged === 0`), puntuación, mejor racha, pasadas, tabla por
+  acorde (acierto %, o "—"), pista de latencia si `medianTimingSec !== null && |mediana| ≥ 0.08`:
+  "De media tocas X ms tarde/pronto. Si seguías el metrónomo, casi seguro es latencia del
+  audio, no tú." con botones "Compensar (+X ms)" (`latencySec = clamp(latencySec + mediana,
+  −0.1, 0.5)`, guardar, `setFlag('latencyCalibrated')`) y "Calibrar en Ajustes"; si `missed /
+  judged ≥ 0.5` mostrar solo "Calibrar en Ajustes" + "El micrófono capta poco: acércalo o baja el
+  umbral en Ajustes". Botones Repetir / Biblioteca.
+- Unmount: `session.stop()`, unsubscribe de frames, `mic.stop()`, `cancelAnimationFrame`,
+  `metronome.clear()`, liberar wake lock, quitar listeners de teclado/visibilidad. El contexto
+  compartido no se cierra.
+- Bucle rAF (propiedad de la pantalla): `session.update()` → `renderer.render(state,
+  performance.now())` → actualizar HUD DOM solo si cambió. `resize()` desde un `ResizeObserver`.
+
+### API de render
+```ts
+// ui/highway.ts
+export class HighwayRenderer {
+  constructor(canvas: HTMLCanvasElement, song: Song, shapes: Record<string, ChordShape | null>, settings: Settings);
+  setSettings(s: Settings): void;
+  resize(): void;   // canvas.width/height = clientWidth/Height * devicePixelRatio; ctx.setTransform(dpr,0,0,dpr,0,0); layout en px CSS
+  render(state: SessionState, nowMs: number): void;  // nowMs = performance.now()
+}
+// ui/chordDiagram.ts
+export function drawChordDiagram(ctx: CanvasRenderingContext2D, shape: ChordShape | null,
+  box: { x: number; y: number; w: number; h: number }, opts?: { title?: string; showFingers?: boolean; muted?: boolean }): void;
+// shape null -> caja con el título y "sin digitación". Diagrama vertical estándar: 6ª a la izquierda,
+// cejuela arriba (o "3fr" si baseFret > 1), X/O sobre las cuerdas, cejilla como barra, dedos numerados.
+```
+
+### Ajustes (`#/settings`)
+Dispositivo de entrada ("Dispositivo por defecto" + botón "Detectar dispositivos" que hace
+`start()` → `listDevices()` → `stop()`), latencia (slider −100..500 ms) con botón "Calibrar"
+(instrucciones: "Rasguea con cada clic"; progreso i/8; resultado o error; guarda y
+`setFlag('latencyCalibrated')`), umbral mínimo de silencio (`gateDb`, −70..−20), sensibilidad
+del onset (`onsetThreshold`, 1.0..3.0), afinación A4 (415..466), afinación de la guitarra
+(`tuningOffset`: "Estándar" 0, "Medio tono abajo (Eb)" −1, "Un tono abajo (D)" −2), tolerancias
+(`earlySec`, `lateSec`), "Invertir cuerdas en la autopista (6ª arriba)", metrónomo por
+defecto, escuchar por defecto. Persistido con `saveSettings`. Unmount: `mic.stop()`.
 
 ### Estilo
-- Tema oscuro, fuente del sistema, acento cian/verde; responsive (funciona en móvil en
-  horizontal). `styles.css` con variables CSS.
+Tema oscuro, fuente del sistema, acento cian/verde; variables CSS en `:root`. Responsive:
+vertical/escritorio → autopista ~40 % de la altura; `@media (orientation: landscape) and
+(max-height: 500px)` → cabecera y pie en una sola fila compacta, columna izquierda (~30 %) con
+los diagramas, autopista con `flex: 1` en el resto. Botones táctiles grandes (≥ 44 px).
 
-## 9. Tests (Vitest)
-- notes: parseo de símbolos (incluye `Bb`, `F#m7`, `G/B`, `N.C.`, entrada inválida).
-- chords: biblioteca sin voicings inválidos (`frets.length === 6`, dedos coherentes),
-  `shapePitchClasses(G) ⊇ {G,B,D}`, cejilla generada para `F#m`/`Bbm7`/`C#7`.
-- parser: ejemplos de la sección 2, división equitativa, `*n`, errores con línea, cambio de
-  tempo a mitad, patrón de rasgueo, evento extra al cambiar acorde sobre `-`.
-- fft: vs DFT ingenua; seno puro → pico en el bin correcto.
-- chroma/templates: seno puro de 440 Hz → chroma máximo en A; acordes sintetizados → top-1.
-- onset: 4 golpes → 4 onsets; ruido → 0.
-- judge: casos correct/wrong/missed/perfect/late.
-- engine: con un `DetectorSource` falso (inyección de frames), `beatToSec` con cambios de
-  tempo, cuenta atrás y resumen.
+## 9. Tests (Vitest, `tests/**/*.test.ts`)
+- notes: parseo de símbolos (`Bb`, `F#m7`, `G/B`, `N.C.`, `CM7`, `C-7`, inválidos), `qualityThird`,
+  `swapThirdName`.
+- chords: biblioteca válida (`frets.length === 6`, dedos coherentes con trastes, barre dentro
+  de rango), `shapePitchClasses(G) ⊇ {G,B,D}`, cejilla generada para `F#m`/`Bbm7`/`C#7`/`Ab`.
+- parser: todos los ejemplos de la sección 2, reparto equitativo, `*n`, `.` a inicio de compás,
+  errores con línea (y severidad), cambio de tempo a mitad (`tempoSegments`), patrón de rasgueo
+  con `U`/`x`/longitud 4/8/16, evento extra al cambiar acorde sobre `-`, silencios sin eventos,
+  `N.C.`, `x3` de línea, `[Sección] x2`, recuperación de sección (con otro tempo), errores
+  `x0`/`x99`/`x2` en compás, `>` sin errores y con `barIndex` correcto, `chordChange`, `capo`.
+- tempo: sección 6.
+- fft: vs DFT ingenua; seno puro.
+- chroma: senos puros a 3 sample rates; acordes sintetizados; invariante de escala;
+  `rollChroma`; `mergeExpectedTemplate`; `cosine` sin NaN.
+- onset: sección 4.
+- detector: gated en silencio; onset refinado ±5 ms; suelo de ruido; `setTranspose`.
+- judge: correct/wrong/missed/perfect/late/early; `nc` → skipped; muted → solo timing; chroma
+  cero → missed; superset detectado (Am7 con Am esperado) → correct; A vs Am por tercera; C vs
+  Am relativo; ventana acotada por `nextOnset`.
+- engine (Clock, DetectorSource y ClickScheduler falsos; sin `vi.useFakeTimers`): cuenta atrás
+  (`countInBeatsLeft` 4→0, `phase` 'playing'); onset en `expectedSec` exacto → `hit` inmediato y
+  `correct` `perfect`; sin frames → `missed`; `listen = false` → `skipped` y `accuracy === 0` sin
+  NaN; `tempoScale = 0.5` no ensancha tolerancias; pausa/reanudación con cuenta atrás; bucle de
+  2 compases → cuenta atrás y vuelta a `fromBar`, `summary.passes === 3` tras 3 pasadas;
+  `latencySec = 0.2`: los frames usados por `chromaAt` están después del onset; clics
+  planificados en los beats correctos; `ended` con `perChord`.
+- calibrate: con fakes, 8 clics con onsets a +80 ms → `latencySec ≈ 0.08`; 3 onsets → rechazo.
+- storage: ida y vuelta, merge de ajustes con defaults y clamps, JSON inválido → vacío.
+- examples: todos parsean sin errores ni warnings.
 
 ## 10. Criterios de aceptación
 1. `npm run build` y `npm test` en verde.
-2. Abrir `npm run dev`, ir a un ejemplo, "Practicar": la autopista se anima, la pelota aterriza
-   en la línea de golpeo con cada rasgueo, el diagrama cambia con el acorde.
-3. Con micrófono: al tocar el acorde esperado en el momento, evento verde; acorde
-   distinto, rojo con el nombre detectado; sin tocar, gris.
+2. `npm run dev`, abrir un ejemplo, "Practicar", pulsar "Empezar": la autopista se anima, la pelota
+   aterriza en la línea de golpeo con cada rasgueo, el diagrama cambia con el acorde. Recargar
+   la página en `#/play/:id` y pulsar "Empezar" funciona igual.
+3. Con micrófono: al tocar el acorde esperado en el momento, anillo inmediato y evento verde;
+   acorde distinto, rojo con el nombre detectado; sin tocar, gris. El flash aparece antes de que
+   el evento salga de la línea de golpeo.
 4. Editor: crear una canción nueva con el formato de la sección 2, errores visibles con línea.
+5. Bucle de una progresión de 4 compases con cuenta atrás entre pasadas.
