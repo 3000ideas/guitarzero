@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  HIGHWAY_COLORS,
+  directionColor,
+  directionGlyph,
   HighwayRenderer,
   MARGIN_PX,
   ballHeight,
@@ -485,5 +488,20 @@ describe('drawChordDiagram', () => {
   it('does not throw on a tiny box', () => {
     const { ctx } = fakeCtx();
     expect(() => drawChordDiagram(ctx, F_SHAPE, { x: 0, y: 0, w: 4, h: 4 })).not.toThrow();
+  });
+});
+
+describe('strum direction glyphs', () => {
+  it('directionGlyph maps down/up to ↓/↑', () => {
+    expect(directionGlyph('down')).toBe('↓');
+    expect(directionGlyph('up')).toBe('↑');
+  });
+
+  it('directionColor keeps the verdict colour when judged and tells ↑ from ↓ otherwise', () => {
+    expect(directionColor('down', '#22c55e')).toBe('#22c55e');
+    expect(directionColor('up', '#22c55e')).toBe('#22c55e');
+    expect(directionColor('down', null)).toBe(HIGHWAY_COLORS.neutral);
+    expect(directionColor('up', null)).toBe(HIGHWAY_COLORS.upStrum);
+    expect(directionColor('up', null)).not.toBe(directionColor('down', null));
   });
 });

@@ -42,6 +42,9 @@ const FONT_CHORD = `bold 15px ${FONT_FAMILY}`;
 const FONT_LABEL = `bold 12px ${FONT_FAMILY}`;
 const FONT_FLOAT = `bold 15px ${FONT_FAMILY}`;
 const FONT_COUNT = `bold 28px ${FONT_FAMILY}`;
+/** Strum direction glyphs (↓ / ↑) drawn on the chord-name row and above the ball. */
+const FONT_ARROW = `bold 17px ${FONT_FAMILY}`;
+const FONT_ARROW_BIG = `bold 24px ${FONT_FAMILY}`;
 
 /** String names by string index (0 = low E). */
 const STRING_NAMES = ['E', 'A', 'D', 'G', 'B', 'e'];
@@ -63,6 +66,8 @@ export const HIGHWAY_COLORS = {
   accent: '#22d3ee',
   neutral: '#38bdf8',
   neutralText: '#e2e8f0',
+  /** Up strums get their own hue so ↓ and ↑ are told apart at a glance. */
+  upStrum: '#f9a8d4',
   unknown: '#facc15',
   correct: '#22c55e',
   wrong: '#ef4444',
@@ -286,6 +291,17 @@ export function verdictText(kind: VerdictKind): string {
     default:
       return '';
   }
+}
+
+/** Glyph for a strum direction. */
+export function directionGlyph(direction: StrumDirection): '↓' | '↑' {
+  return direction === 'up' ? '↑' : '↓';
+}
+
+/** Colour of a direction glyph: the verdict/marker colour when judged, else neutral for ↓ and pink for ↑. */
+export function directionColor(direction: StrumDirection, judgedColor: string | null): string {
+  if (judgedColor !== null) return judgedColor;
+  return direction === 'up' ? HIGHWAY_COLORS.upStrum : HIGHWAY_COLORS.neutral;
 }
 
 export function verdictColor(kind: VerdictKind | null | undefined): string {
@@ -680,18 +696,41 @@ export class HighwayRenderer {
       else if (shape) this.drawColumn(x, shape, color, onColor);
       else this.drawUnknownMarker(x, color, onColor);
 
-      if (ev.chordChange) this.drawName(ev.chord.name, x, nameColor);
+      const judged = kind === 'correct' || kind === 'wrong' || kind === 'missed';
+      const arrowColor = directionColor(ev.direction, judged ? color : null);
+      if (ev.chordChange) {
+        const w = this.drawName(ev.chord.name, x, nameColor);
+        if (!ev.muted) this.drawDirectionGlyph(x + w / 2 + 12, L.chordNameY, ev.direction, arrowColor, FONT_ARROW);
+      } else if (!ev.muted) {
+        this.drawDirectionGlyph(x, L.chordNameY, ev.direction, arrowColor, FONT_ARROW);
+      }
       if (verdict && (kind === 'wrong' || kind === 'missed')) this.drawVerdictLabels(x, verdict, color);
     }
   }
 
-  private drawName(text: string, x: number, color: string): void {
+  private drawName(text: string, x: number, color: string): number {
     const ctx = this.ctx;
     ctx.font = FONT_CHORD;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
     ctx.fillStyle = color;
     ctx.fillText(text, x, this.layout.chordNameY);
+    return ctx.measureText(text).width;
+  }
+
+  /** ↓ / ↑ glyph with a dark outline so it stays legible over grid lines and markers. */
+  private drawDirectionGlyph(x: number, baselineY: number, direction: StrumDirection, color: string, font: string): void {
+    const ctx = this.ctx;
+    ctx.font = font;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    ctx.lineWidth = 4;
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = C.bg;
+    const glyph = directionGlyph(direction);
+    ctx.strokeText(glyph, x, baselineY);
+    ctx.fillStyle = color;
+    ctx.fillText(glyph, x, baselineY);
   }
 
   /** Translucent halo behind a marker during the first second after its verdict. */
@@ -909,6 +948,14 @@ export class HighwayRenderer {
     ctx.lineWidth = 1;
     ctx.stroke();
     ctx.restore();
+
+    // Direction of the strum the ball is flying towards (↓ / ↑), above the ball while playing.
+    if (!countIn && (state.phase === 'playing' || state.phase === 'paused')) {
+      const next = events[state.nextEventIndex];
+      if (next && next.chord.quality !== 'nc' && !next.muted) {
+        this.drawDirectionGlyph(sx, y - L.ballR - 6, next.direction, directionColor(next.direction, null), FONT_ARROW_BIG);
+      }
+    }
 
     // Count-in number above the ball.
     if (countIn && state.countInBeatsLeft > 0) {
