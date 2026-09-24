@@ -637,3 +637,193 @@ los diagramas, autopista con `flex: 1` en el resto. Botones táctiles grandes (�
    el evento salga de la línea de golpeo.
 4. Editor: crear una canción nueva con el formato de la sección 2, errores visibles con línea.
 5. Bucle de una progresión de 4 compases con cuenta atrás entre pasadas.
+6. Pista de audio (sección 11): cargar un MP3 en el editor, detectar tempo e inicio, ajustarlo en
+   la forma de onda, y en Practicar la pista suena sincronizada con la autopista, se para al
+   pausar y vuelve a empezar (con cuenta atrás) al reanudar o al repetir el bucle.
+
+## 11. Pista de audio (backing track)
+
+Objetivo: que la canción **suene** mientras se practica. El usuario carga un archivo de audio
+por canción (MP3, WAV, OGG, M4A…), lo sincroniza con la rejilla de compases (dónde cae el
+compás 1 y a qué tempo) y la app lo reproduce durante la práctica siguiendo la velocidad, las
+pausas, los saltos de sección y los bucles. Todo local: el archivo se guarda en IndexedDB del
+navegador; no se sube a ningún sitio.
+
+Tipos (ya añadidos a `types.ts`): `AudioTrackInfo`, `StoredSong.audio`, `TempoEstimate`,
+`SessionState.countInStartBeat`, `Settings.backingTrack`, `Settings.echoCancellation`.
+
+### song/audioStore.ts
+- IndexedDB `guitarzero` (versión 1), object store `tracks` con clave `songId` y valor
+  `{ songId, blob: Blob, name, type, size, addedAt }`.
+- API (todas async): `putTrack(songId, blob, meta: { name, type, size }): Promise<void>`,
+  `getTrack(songId): Promise<Blob | null>`, `deleteTrack(songId): Promise<void>`,
+  `copyTrack(fromId, toId): Promise<boolean>`, `hasIndexedDb(): boolean`. Si no hay IndexedDB
+  (o falla al abrir), fallback a un `Map` en memoria (no persiste; `hasIndexedDb()` false).
+  Errores → `reject(new Error('<mensaje en español>'))`.
+- `storage.ts`: `duplicateSong` copia `audio` y llama `void copyTrack(id, newId)`;
+  `deleteSong` llama `void deleteTrack(id)`; `saveSong` conserva `audio` tal cual (puede ser
+  `null` para quitar la pista). `listSongs`/tarjetas: la Biblioteca muestra una insignia "♪ pista"
+  cuando `audio` existe.
+
+### audio/backing.ts
+- `class BackingTrack { constructor(ctx: AudioContext); load(blob: Blob): Promise<{ durationSec: number; sampleRate: number; channels: number }>; readonly buffer: AudioBuffer | null; start(whenWall: number, audioOffsetSec: number, rate: number): void; stop(): void; setGain(g: number): void; isPlaying(): boolean; monoSamples(): Float32Array; dispose(): void }`.
+- `load`: `blob.arrayBuffer()` → `ctx.decodeAudioData` (funciona con el contexto suspendido).
+- `start(whenWall, audioOffsetSec, rate)`: nuevo `AudioBufferSourceNode` → `GainNode` →
+  `destination`; `playbackRate.value = rate`. Si `audioOffsetSec >= 0`: `source.start(max(whenWall,
+  ctx.currentTime), audioOffsetSec)` (si `whenWall` ya pasó, compensar: `offset += (ctx.currentTime −
+  whenWall)·rate`). Si `audioOffsetSec < 0` (la rejilla empieza antes que el audio):
+  `source.start(whenWall − audioOffsetSec / rate, 0)`. Si `audioOffsetSec >= duration` → no hace
+  nada. `stop()` para y desconecta la fuente actual (idempotente).
+- `monoSamples()`: mezcla de canales a mono (para análisis y forma de onda), cacheada.
+
+### dsp/tempoEstimate.ts (puro, testeable)
+- `estimateTempo(samples: Float32Array, sampleRate: number, opts?: { minBpm?: 60; maxBpm?: 200; maxSeconds?: 90 }): TempoEstimate`.
+- Algoritmo: (1) decimación por promedio de bloques a ≈ 11025 Hz de los primeros
+  `maxSeconds`; (2) envolvente de ataques: STFT (RealFFT 1024, hop 256, Hann) → flujo de media
+  onda sobre `log(1 + mag)` → `o[n]`; restar media móvil de 0.5 s y rectificar; (3)
+  autocorrelación de `o` para lags entre `60/maxBpm` y `60/minBpm` s, ponderada por una
+  preferencia log-gaussiana centrada en 120 BPM (σ = 0.8 octavas); (4) pico → `beatPeriodSec`
+  (interpolación parabólica); comparar con ×2 y ×½ dentro del rango y elegir el de mayor
+  puntuación ponderada; `bpm = 60 / beatPeriodSec` redondeado a 0.1; (5) fase: φ ∈ [0, T)
+  que maximiza Σ o[φ + k·T]; `firstBeatSec` = el primer φ + k·T cuyo `o` local supera el 30 %
+  del máximo de la envolvente (para no señalar silencio inicial); (6) `confidence` = (pico −
+  media) / (máx − media) de la autocorrelación en el rango, acotado a 0..1. Con señal casi
+  nula (RMS < 1e-4) → `{ bpm: 120, confidence: 0, firstBeatSec: 0 }`.
+- Tests (`tests/dsp/tempoEstimate.test.ts`): clics sintéticos (ruido corto con decaimiento) a
+  100 BPM desde 0.37 s durante 30 s + ruido −40 dBFS → `bpm` 100 ± 1, `firstBeatSec ≡ 0.37 (mod
+  0.6) ± 0.03`, `confidence ≥ 0.5`; 140 BPM → 140 ± 1.5; silencio → `confidence === 0`;
+  rendimiento: 60 s de audio a 44.1 kHz en < 1.5 s en Node.
+
+### ui/waveform.ts
+- `class WaveformView { constructor(canvas: HTMLCanvasElement, opts: { onOffsetChange: (sec: number) => void; onSeek?: (sec: number) => void }); setAudio(samples: Float32Array, sampleRate: number): void; setGrid(grid: { bpm: number; beatsPerBar: number; offsetSec: number; totalBeats: number } | null): void; setPlayhead(sec: number | null): void; setViewport(startSec: number, seconds: number): void; zoomBy(factor: number, aroundSec?: number): void; scrollBy(sec: number): void; resize(): void; render(): void; dispose(): void }`.
+- Precalcula picos (min/max) por milisegundo en `setAudio`. Dibuja: forma de onda (tema
+  oscuro), líneas de beat tenues y de compás marcadas con el número de compás, marcador de
+  inicio (offset) como una línea de acento con asa arrastrable (pointer events; `onOffsetChange`
+  al soltar y durante el arrastre), playhead. Click simple → `onSeek(sec)`; `Shift+click` → fija
+  el inicio ahí (`onOffsetChange`). Rueda → zoom alrededor del cursor; arrastre con botón
+  central o `Alt` → scroll. DPR correcto; `resize()` desde `ResizeObserver` del dueño.
+
+### Editor — panel "Pista de audio" (bajo el textarea, ancho completo)
+- Sin pista: botón "Cargar audio…" (`<input type=file accept="audio/*">` oculto) + nota
+  "MP3, WAV, OGG, M4A. Se guarda en este navegador, no se sube a ningún sitio". Al cargar:
+  `putTrack` + `BackingTrack.load` (para duración y muestras) + `saveSong({ ...song, audio })` con
+  `offsetSec: 0`, `gain: 0.8`. Mostrar errores (formato no soportado, cuota) en español.
+- Con pista: nombre, duración (`fmtSeconds`), tamaño (MB), botón "Quitar" (confirm →
+  `deleteTrack` + `audio: null`).
+- Forma de onda (`WaveformView`) con la rejilla de `tempo`/`time`/`totalBeats` del texto actual
+  (se actualiza al re-parsear el texto, en el mismo debounce del autosave).
+- Sincronización: campo numérico "Inicio del compás 1 (s)" (paso 0.01) con botones
+  `−0.1 −0.01 +0.01 +0.1` y `−1 pulso`/`+1 pulso` (±60/bpm); "Marcar inicio" (fija el inicio en
+  la posición actual del playhead mientras suena; si no suena, en la posición del último
+  `onSeek`); "Detectar tempo e inicio" → `estimateTempo(backing.monoSamples(), sampleRate)`
+  tras un `setTimeout(0)` con "Analizando…"; resultado "≈ 96 BPM (confianza alta ≥ 0.6 /
+  media ≥ 0.3 / baja), inicio 1.32 s" con botones "Aplicar tempo" (reescribe o inserta la
+  cabecera `tempo:` en el texto del textarea y dispara el autosave) y "Aplicar inicio".
+  Aviso si `tempoSegments.length > 1`: "La pista solo se sincroniza con tempo constante".
+- Escucha de prueba: "▶ Escuchar con metrónomo" (reanuda el contexto; reproduce desde
+  `offset − 1 compás` si ≥ 0, si no desde 0; clics de `Metronome` en cada beat de la rejilla
+  durante 8 compases, acento en el 1; playhead moviéndose en la forma de onda con rAF) y "▶
+  Desde aquí" (desde el último `onSeek`, sin clics); "■ Parar". Volumen (0–100 %) → `gain`.
+- Todo cambio de `offsetSec`/`gain` se guarda con `saveSong` (debounce 300 ms).
+
+### Practicar
+- Al montar, si `stored.audio` y `settings.backingTrack`: `getTrack(id)` → `BackingTrack.load`;
+  texto "Cargando pista…" en la cabecera; "Empezar" espera a la carga (o continúa sin pista si
+  falla, con aviso). Toggle "Pista" (persiste `settings.backingTrack`) y slider de volumen (solo
+  si hay pista). Aviso junto a Escuchar cuando `backingTrack && listen`: "Con la pista por
+  altavoces el micrófono la oirá y la evaluación no será fiable: usa auriculares".
+- Sincronización con el motor (la pantalla es la dueña de la pista): en cada evento
+  `phase === 'countin'` (arranque, reanudación, bucle): `backing.stop()`; `b =
+  state.countInStartBeat`; `backing.start(session.wallSec(b), audio.offsetSec +
+  beatToSec(song.tempoSegments, b), settings.tempoScale)`. En `paused`/`ended` → `stop()`.
+  El cambio de velocidad ya pasa por pausa/reanudación (reinicia con el nuevo `rate`; a menos
+  velocidad suena más grave — indicarlo en el título del selector).
+- Motor: `playFrom` fija `countInStartBeat` en el estado.
+- Mic: `MicInput.start` usa `echoCancellation: settings.echoCancellation` (pasar por
+  `detectorOptsFromSettings`/parámetro de `start(deviceId, { echoCancellation })`). Ajustes:
+  casilla "Cancelación de eco (si usas altavoces con la pista)" y "Reproducir pista de audio".
+
+### Tests
+- `tests/dsp/tempoEstimate.test.ts` (arriba). `tests/song/storage.test.ts`: `duplicateSong`
+  copia `audio`; `saveSong` con `audio: null`. `audioStore`/`backing`/`waveform`: solo
+  typecheck (navegador). Motor: `countInStartBeat` correcto tras `start()`, `resume()` y
+  bucle.
+
+## 12. Transcripción automática de acordes
+
+Objetivo: al subir una canción (audio), la app **propone la tablatura de acordes** completa:
+tempo, compás, tonalidad y un acorde por pulso, y genera el texto de la sección 2 listo para
+practicar. Es un borrador (con voz y batería mezcladas acierta la mayoría de acordes, no todos):
+el usuario lo revisa en el editor. Tipos (ya en `types.ts`): `TranscribedBeat`,
+`TranscribedBar`, `ChordTranscription`.
+
+### dsp/chordTranscribe.ts (puro, testeable en Node)
+- `transcribeChords(samples: Float32Array, sampleRate: number, opts?: { bpm?: number; firstBeatSec?: number; beatsPerBar?: 4 | 3; vocabulary?: 'basic' | 'extended'; a4?: number; onProgress?: (p: number) => void }): ChordTranscription`.
+- Pasos:
+  1. Tempo: si `opts.bpm` falta, `estimateTempo` (sección 11); `firstBeatSec` igual. Rejilla de
+     pulsos `t_k = firstBeatSec + k·60/bpm` hasta el final del audio (descartar pulsos con
+     energía casi nula al principio y al final para no producir compases vacíos de más de 2 al
+     inicio; los del final se cortan cuando la energía cae bajo el 5 % del máximo durante > 2
+     compases).
+  2. Chroma por pulso: decimar a 11025 Hz (reutilizar la decimación de `tempoEstimate.ts` si es
+     exportable; si no, una función local equivalente), STFT con `RealFFT(4096)`, hop 1024,
+     `computeEnergyChroma(mag, 11025, 4096, { a4 })` por frame; el chroma de un pulso = media
+     de `energyChroma` de los frames cuyo centro cae en `[t_k, t_{k+1})`; después
+     `compressChroma`. Energía del pulso = media de `Σ energyChroma`.
+  3. Tonalidad: chroma global (suma de energías) correlacionado (Pearson) con los perfiles de
+     Krumhansl-Kessler mayor `[6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88]` y
+     menor `[6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17]` en las 12 rotaciones →
+     `key`. `name` en español: "Do mayor", "La menor" (`NOTE_NAMES_SHARP` → Do Do# Re Re# Mi Fa
+     Fa# Sol Sol# La La# Si).
+  4. Vocabulario: `basic` = 12 × {maj, min} (24); `extended` = + {7, m7, maj7} (60). Plantillas
+     con `templateForPitchClasses`. Acordes diatónicos de la tonalidad (mayor: I ii iii IV V vi
+     + V7; menor natural/armónica: i III iv v/V VI VII + V7): `bonus = +0.06`; el resto `−0.03`.
+  5. Emisión por pulso y acorde: `cosine(chromaPulso, plantilla) + bonus`. Estado extra `N`
+     (sin acorde): emisión `0.45` si la energía del pulso < 8 % de la mediana de energías, si
+     no `0`.
+  6. Decodificación Viterbi sobre los pulsos: `score = Σ emisión − Σ penalizaciones`;
+     penalización por cambio de acorde `0.28` en pulsos que no son inicio de compás y `0.10` en
+     inicios de compás. Como el primer tiempo fuerte no se conoce, se decodifica para cada fase
+     `φ ∈ [0, beatsPerBar)` (inicio de compás = `k ≡ φ mod beatsPerBar`) y se elige la fase
+     con mayor puntuación total → `firstDownbeatSec = t_φ` (los pulsos anteriores a φ se
+     descartan). `confidence` = media de `(mejor − segunda emisión)` por pulso, acotada 0..1.
+  7. `bars`: agrupar los pulsos desde `φ` de `beatsPerBar` en `beatsPerBar` fusionando
+     consecutivos iguales; el último compás incompleto se rellena con el último acorde.
+- Rendimiento: 4 min de audio a 44.1 kHz en < 3 s en Node.
+- Tests (`tests/dsp/chordTranscribe.test.ts`): sintetizar con `tests/helpers/synth.ts` la
+  progresión C G Am F (voicings de `CHORD_LIBRARY`, 4 pulsos por acorde, rasgueo en cada
+  pulso, 100 BPM, 2 vueltas, ruido −40 dBFS, sin silencio inicial) → `bpm` 100 ± 1, `key`
+  Do mayor, ≥ 90 % de pulsos con el acorde correcto, `bars` = 8 compases con un acorde cada uno,
+  `firstDownbeatSec ≈ 0` (±0.1). Segunda prueba con 1.5 s de silencio inicial y Em C G D →
+  `firstDownbeatSec ≈ 1.5` (±0.1), ≥ 85 % de pulsos. Tercera: 3/4 (`beatsPerBar: 3`) con
+  Am F C → compases de 3. Caso `extended`: G7 detectado en un G7 sintetizado al menos en la
+  mitad de sus pulsos (o `G`: nunca otra raíz).
+
+### song/chartFromTranscription.ts (puro)
+- `chartFromTranscription(t: ChordTranscription, opts: { title: string; artist?: string; strum?: string }): string`
+  — texto de la sección 2: cabeceras `title`, `artist` (si hay), `tempo: <bpm redondeado>`,
+  `time: <beatsPerBar>/4`, `strum:` (`D-DU-UDU` en 4/4, `D-DUDU` en 3/4 salvo `opts.strum`),
+  línea `# Acordes detectados automáticamente: revisa y corrige. Tonalidad: <key.name>`, y los
+  compases, 4 por línea: cada acorde `X` seguido de `.` por cada pulso adicional
+  (`C . . . | G . Am . |`), `N.C.` para `null`. Nombres con sostenidos tal cual (`F#m`).
+- `replaceChart(source: string, chart: string): string` — sustituye en un texto existente todo
+  lo que no sea `title:`/`artist:`/`capo:` por el nuevo chart (conserva esas cabeceras del
+  original si existen).
+- Tests: el texto generado parsea sin errores ni warnings y reproduce `bars`; `replaceChart`
+  conserva título y artista.
+
+### UI
+- Editor, panel "Pista de audio": botón **"Detectar acordes"** (activo con pista cargada) con
+  selector "Compás" (4/4 | 3/4) y casilla "Incluir séptimas". Al pulsar: "Analizando acordes…"
+  (progreso %), luego un resumen "Tonalidad Sol mayor · 96 BPM · 48 compases · G D Em C" con
+  botones **"Sustituir acordes"** (`replaceChart` sobre el textarea, fija `offsetSec =
+  firstDownbeatSec`, autosave) e **"Insertar al final"**. Aviso de confianza baja (< 0.15):
+  "Confianza baja: revisa los acordes".
+- Biblioteca: botón **"Desde audio…"** junto a "Nueva canción": `<input type=file
+  accept="audio/*">`; al elegir: crea la canción (`newSong`, título = nombre del archivo sin
+  extensión), `putTrack`, decodifica con `BackingTrack.load` (contexto compartido; no hace
+  falta reanudarlo), `estimateTempo` + `transcribeChords` (con progreso en un pequeño diálogo
+  "Analizando <archivo>… 40 %"), `chartFromTranscription`, `saveSong` con `audio`
+  (`offsetSec = firstDownbeatSec`, `gain 0.8`) y navega a `#/edit/<id>`. Errores en español.
+- Prueba en navegador: el archivo se genera por JavaScript en el sandbox (no hay diálogo de
+  archivos), como en la sección 11.

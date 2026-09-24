@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import type { DetectorFrame } from '../../src/types';
 import { CHORD_LIBRARY, shapeMidiNotes } from '../../src/music/chords';
-import { ChordDetector, NOISE_RING_FRAMES, REFINE_BLOCK, SILENCE_DB, refineOnsetSample, rmsDbOf } from '../../src/dsp/detector';
-import { mix, runDetector, silence, sine, synthChord, synthStrum, whiteNoise } from '../helpers/synth';
+import {
+  ChordDetector,
+  NOISE_HOLD_SEC,
+  NOISE_RING_FRAMES,
+  NOISE_RISE_FLAT_DB,
+  REFINE_BLOCK,
+  SILENCE_DB,
+  refineOnsetSample,
+  rmsDbOf,
+} from '../../src/dsp/detector';
+import { mix, runDetector, silence, sine, synthChord, synthStrum, synthStrumSequence, whiteNoise } from '../helpers/synth';
 
 const SR = 48000;
 const N = 8192;
@@ -12,6 +21,57 @@ function notes(name: string): number[] {
   const shape = CHORD_LIBRARY.find((s) => s.name === name);
   if (!shape) throw new Error(`missing library shape ${name}`);
   return shapeMidiNotes(shape);
+}
+
+interface FloorFrame {
+  frame: DetectorFrame;
+  floorDb: number;
+  gateDb: number;
+}
+
+/** Runs the detector at a 40 ms hop and records the noise floor and gate after every frame. */
+function runWithFloor(sig: Float32Array, det: ChordDetector): FloorFrame[] {
+  const hop = Math.round(HOP * SR);
+  const out: FloorFrame[] = [];
+  for (let end = N; end <= sig.length; end += hop) {
+    const frame = det.process(sig.subarray(end - N, end), end / SR);
+    out.push({ frame, floorDb: det.getNoiseFloorDb(), gateDb: det.getGateDb() });
+  }
+  return out;
+}
+
+/**
+ * Re-struck strums `spacingSec` apart starting at 1 s (chords alternate through `chords`), each
+ * ringing until the next attack, over a white-noise room at `noiseDb`.
+ */
+function sparseStrums(
+  spacingSec: number,
+  count: number,
+  opts: { chords?: string[]; dbfs?: number | number[]; decayScale?: number; noiseDb?: number } = {},
+): { sig: Float32Array; times: number[] } {
+  const chords = opts.chords ?? ['E', 'G'];
+  const times: number[] = [];
+  const voicings: number[][] = [];
+  for (let i = 0; i < count; i++) {
+    times.push(1.0 + i * spacingSec);
+    voicings.push(notes(chords[i % chords.length]));
+  }
+  const total = 1.0 + count * spacingSec + 0.5;
+  const strums = synthStrumSequence(voicings, SR, times, total, { dbfs: opts.dbfs ?? -20, decayScale: opts.decayScale ?? 1 });
+  const sig = mix([{ signal: whiteNoise(SR, total, opts.noiseDb ?? -60), atSec: 0 }, { signal: strums, atSec: 0 }], SR, total);
+  return { sig, times };
+}
+
+/** Every strum has exactly one onset within `windowSec` after its attack, with a refined time within `tolSec`. */
+function expectOneOnsetPerStrum(frames: DetectorFrame[], times: number[], windowSec: number, tolSec: number, label: string): void {
+  const onsets = frames.filter((f) => f.onset);
+  expect(onsets, `${label}: onset count`).toHaveLength(times.length);
+  for (let i = 0; i < times.length; i++) {
+    const at = times[i];
+    const mine = onsets.filter((o) => o.timeSec >= at && o.timeSec <= at + windowSec);
+    expect(mine, `${label}: strum ${i} at ${at}`).toHaveLength(1);
+    expect(Math.abs(mine[0].onsetTimeSec! - at), `${label}: strum ${i} refined time`).toBeLessThanOrEqual(tolSec);
+  }
 }
 
 function allZero(v: Float32Array): boolean {
@@ -109,7 +169,7 @@ describe('ChordDetector: gate and noise floor', () => {
     }
   });
 
-  it('the floor is not updated within 1 s of an accepted onset (continuous strumming keeps it)', () => {
+  it('the floor is not updated within 1 s of an attack, and the ringing chords afterwards never lift it', () => {
     const det = new ChordDetector(SR, { gateDb: -70 });
     const total = 9;
     const parts = [{ signal: whiteNoise(SR, total, -60), atSec: 0 }];
@@ -129,9 +189,168 @@ describe('ChordDetector: gate and noise floor', () => {
       if (t > 1.2 && t < 5.4) expect(f.rmsDb).toBeGreaterThan(-45);
     }
     expect(onsets).toBe(8);
-    // One second after the last onset the estimate follows the ring again (the chords keep
-    // ringing until the end, so the 10th percentile of the last 3 s is now above -60).
-    expect(det.getNoiseFloorDb()).toBeGreaterThan(-55);
+    expect(det.getLastActivitySec()).toBeGreaterThan(4.5);
+    // The chords keep ringing until the end, so the 10th percentile of the last 3 s is far above
+    // -60; a decaying chord is not noise and the floor must not follow it (it used to, which
+    // gated the next strum of anyone playing sparse patterns).
+    expect(det.getNoiseFloorDb()).toBeCloseTo(-60, 0);
+    expect(det.getGateDb()).toBeCloseTo(-50, 0);
+  });
+
+  it('sparse re-struck strums 1.5 s apart (half notes at 80 bpm): every strum is an onset, the floor stays at the room level', () => {
+    // Regression: the floor used to be the 10th percentile of the last 3 s whatever they held,
+    // frozen only for 1 s after an ACCEPTED onset. With strums >= 1.5 s apart the ring filled
+    // with the decaying chord, the gate climbed above the attack frames, no onset was accepted
+    // any more and the estimate locked up: 2 of 7 strums detected, the rest judged 'missed'.
+    const { sig, times } = sparseStrums(1.5, 7);
+    const det = new ChordDetector(SR);
+    const run = runWithFloor(sig, det);
+    expectOneOnsetPerStrum(
+      run.map((r) => r.frame),
+      times,
+      0.2,
+      0.008,
+      '1.5 s',
+    );
+    for (const r of run) {
+      if (r.frame.timeSec < 0.7) continue;
+      expect(r.floorDb, `floor at ${r.frame.timeSec}`).toBeCloseTo(-60, 0);
+      expect(r.gateDb, `gate at ${r.frame.timeSec}`).toBeCloseTo(-50, 0);
+    }
+  });
+
+  it('one strum per bar at 60 bpm on a long-sustain guitar, loud and soft alternating: all onsets, gate never climbs', () => {
+    // decayScale 2.5: bass strings ring with a 3.75 s constant, so the chord is still at about
+    // -40 dBFS when the next strum comes 4 s later (the old estimator put the gate at -30 and
+    // detected 1 of 6). Soft strums (-28 dBFS) must survive too.
+    const { sig, times } = sparseStrums(4.0, 6, { decayScale: 2.5, dbfs: [-20, -28, -20, -28, -20, -28] });
+    const det = new ChordDetector(SR);
+    const run = runWithFloor(sig, det);
+    expectOneOnsetPerStrum(
+      run.map((r) => r.frame),
+      times,
+      0.2,
+      0.008,
+      '4 s',
+    );
+    for (const r of run) {
+      if (r.frame.timeSec < 0.7) continue;
+      expect(r.gateDb, `gate at ${r.frame.timeSec}`).toBeLessThanOrEqual(-49.5);
+    }
+  });
+
+  it('whole notes at 120 bpm (2 s) on a long-sustain guitar in a -50 dBFS room: all onsets', () => {
+    const { sig, times } = sparseStrums(2.0, 7, { decayScale: 2.5, noiseDb: -50 });
+    const det = new ChordDetector(SR);
+    const run = runWithFloor(sig, det);
+    // A loud room plus a long ringing tail blur the in-frame refinement a little (measured
+    // <= 14 ms here versus +-8 ms over silence); the judge's tolerances are several times that.
+    expectOneOnsetPerStrum(
+      run.map((r) => r.frame),
+      times,
+      0.2,
+      0.02,
+      '2 s / -50 dBFS',
+    );
+    for (const r of run) {
+      if (r.frame.timeSec < 0.7) continue;
+      expect(r.floorDb, `floor at ${r.frame.timeSec}`).toBeCloseTo(-50, 0);
+      expect(r.gateDb, `gate at ${r.frame.timeSec}`).toBeCloseTo(-40, 0);
+    }
+  });
+
+  it('a strum the gate swallows still holds the floor (activity is the flux crossing, not the accepted onset)', () => {
+    // gateDb -25 keeps every -30 dBFS strum gated (attack frames sit near -40 dBFS): no onset
+    // is ever accepted, yet each attack is activity and the ring full of ringing chords never
+    // becomes the floor.
+    const det = new ChordDetector(SR, { gateDb: -25 });
+    const total = 6;
+    const times = [1.0, 1.5, 2.0, 2.5, 3.0];
+    const strums = synthStrumSequence(
+      times.map(() => notes('G')),
+      SR,
+      times,
+      total,
+      { dbfs: -30 },
+    );
+    const sig = mix([{ signal: whiteNoise(SR, total, -60), atSec: 0 }, { signal: strums, atSec: 0 }], SR, total);
+    const run = runWithFloor(sig, det);
+    expect(run.filter((r) => r.frame.onset)).toHaveLength(0);
+    // The last strum (3.0 s) keeps the flux above the threshold for 3-4 hops; activity is the
+    // last of them.
+    expect(det.getLastActivitySec()).toBeGreaterThan(3.0);
+    expect(det.getLastActivitySec()).toBeLessThan(3.0 + 6 * HOP + 1e-6);
+    for (const r of run) {
+      if (r.frame.timeSec < 0.7) continue;
+      expect(r.floorDb, `floor at ${r.frame.timeSec}`).toBeCloseTo(-60, 0);
+    }
+    expect(NOISE_HOLD_SEC).toBe(1);
+  });
+
+  it('the floor rises for a stationary noise increase (-60 -> -45 dBFS) but not for a chord ringing for 14 s', () => {
+    // A: the room gets noisier at 3 s. Two attack-free rings a ring apart must agree before the
+    // estimate rises, so it takes a few seconds; then the gate follows.
+    const stepSig = mix([{ signal: whiteNoise(SR, 3.0, -60), atSec: 0 }, { signal: whiteNoise(SR, 12.0, -45, 9), atSec: 3.0 }], SR, 15.0);
+    const detA = new ChordDetector(SR);
+    const runA = runWithFloor(stepSig, detA);
+    const before = runA.filter((r) => r.frame.timeSec > 0.7 && r.frame.timeSec < 3.0);
+    expect(before.length).toBeGreaterThan(10);
+    for (const r of before) expect(r.floorDb).toBeCloseTo(-60, 0);
+    const late = runA.filter((r) => r.frame.timeSec > 11.0);
+    expect(late.length).toBeGreaterThan(10);
+    for (const r of late) {
+      expect(r.floorDb, `floor at ${r.frame.timeSec}`).toBeCloseTo(-45, 0);
+      expect(r.gateDb, `gate at ${r.frame.timeSec}`).toBeCloseTo(-35, 0);
+    }
+    // The step is a flux crossing (activity) and the adaptive onset threshold needs ~1 s to
+    // settle on the louder noise, then two attack-free rings a ring apart must agree: the rise
+    // lands 2-3 rings after the step, never sooner.
+    const risen = runA.find((r) => r.floorDb > -50);
+    expect(risen).toBeDefined();
+    expect(risen!.frame.timeSec).toBeGreaterThan(3.0 + 2 * NOISE_RING_FRAMES * HOP);
+    expect(risen!.frame.timeSec).toBeLessThan(3.0 + 3 * NOISE_RING_FRAMES * HOP);
+    expect(NOISE_RISE_FLAT_DB).toBe(2);
+    // B: one loud E chord (-15 dBFS, bass decay constant 4.5 s) ringing for 14 s over the same
+    // -60 dBFS room: its level drops ~2 dB/s, it is never "flat" and the floor stays put.
+    const ringSig = mix(
+      [
+        { signal: whiteNoise(SR, 15.0, -60), atSec: 0 },
+        { signal: synthStrum(notes('E'), SR, 14.0, { dbfs: -15, decayScale: 3 }), atSec: 1.0 },
+      ],
+      SR,
+      15.0,
+    );
+    const detB = new ChordDetector(SR);
+    const runB = runWithFloor(ringSig, detB);
+    expect(runB.filter((r) => r.frame.onset)).toHaveLength(1);
+    for (const r of runB) {
+      if (r.frame.timeSec < 0.7) continue;
+      expect(r.floorDb, `floor at ${r.frame.timeSec}`).toBeCloseTo(-60, 0);
+    }
+    // The chord is still open (well above the gate) 8 s in, i.e. the ring was above the floor.
+    const eight = runB.find((r) => r.frame.timeSec > 9.0)!;
+    expect(eight.frame.rmsDb).toBeGreaterThan(-45);
+    expect(eight.frame.bestChord?.name).toBe('E');
+  });
+
+  it('a muted start (digital silence) followed by room noise: the first clean ring is taken at once', () => {
+    // The analyser delivers zeros until the AudioContext runs: the floor initialises at -100
+    // and must adopt the real room level (a rise, through the partially-silent frames at the
+    // boundary) as soon as the ring holds a full 3 s of audio, without the stationarity wait.
+    const sig = mix([{ signal: whiteNoise(SR, 6.0, -55, 5), atSec: 1.5 }], SR, 7.5);
+    const det = new ChordDetector(SR);
+    const run = runWithFloor(sig, det);
+    const early = run.filter((r) => r.frame.timeSec > 0.7 && r.frame.timeSec < 1.5);
+    for (const r of early) expect(r.floorDb).toBe(SILENCE_DB);
+    const settled = run.filter((r) => r.frame.timeSec > 1.5 + NOISE_RING_FRAMES * HOP + 0.1);
+    expect(settled.length).toBeGreaterThan(10);
+    for (const r of settled) {
+      expect(r.floorDb, `floor at ${r.frame.timeSec}`).toBeCloseTo(-55, 0);
+      expect(r.gateDb, `gate at ${r.frame.timeSec}`).toBeCloseTo(-45, 0);
+    }
+    // Meanwhile the gate never exceeded the room level + 10 dB (a provisional floor is never
+    // above the clean estimate).
+    for (const r of run) expect(r.gateDb).toBeLessThanOrEqual(-45 + 0.5);
   });
 
   it('setOptions updates gateDb, a4 and onsetThreshold live', () => {

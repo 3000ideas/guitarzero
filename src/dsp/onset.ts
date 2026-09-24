@@ -1,6 +1,7 @@
 /**
  * Attack (onset) detector: half-wave rectified spectral flux of log(1 + |X|) restricted to the
- * loHz..hiHz band, against an adaptive threshold median(last N flux) * threshold + eps.
+ * loHz..hiHz band, against an adaptive threshold baseline(last N flux) * threshold + eps, where
+ * the baseline is the lower quartile of the recent flux (the flux of the frames between attacks).
  * The metronome click (4.5 / 5.5 kHz) lives above hiHz, so it cannot create onsets.
  * Pure TypeScript, testable in Node.
  */
@@ -10,9 +11,9 @@ export interface OnsetOpts {
   hopSeconds?: number;
   /** Minimum time between two onsets in seconds. Default 0.1. */
   minIntervalSec?: number;
-  /** Multiplier over the median flux. Default 1.5. */
+  /** Multiplier over the baseline flux. Default 1.5. */
   threshold?: number;
-  /** Number of past flux values in the median. Default 24 (~1 s at a 40 ms hop). */
+  /** Number of past flux values in the baseline. Default 24 (~1 s at a 40 ms hop). */
   historyFrames?: number;
   /** Band analysed, Hz. Defaults 70 and 3500. */
   loHz?: number;
@@ -25,9 +26,21 @@ export interface OnsetOpts {
  * magnitudes, 70..3500 Hz): digital silence 0, a -80 dBFS noise floor ~0.6, the in-band leakage
  * of a -20 dBFS metronome click (4.5/5.5 kHz, 3 ms attack, 8 ms decay) <= 5.5, a strum at
  * -20 dBFS 60..190, at -40 dBFS ~30..60. The floor must sit well above the click and below
- * quiet strums.
+ * quiet strums. Being per bin, eps halves at 96 kHz / 8192 while the click leakage does not
+ * (12 % margin instead of 2.8x): the app pins its AudioContext to 48 kHz for this reason.
  */
 export const ONSET_EPS_PER_BIN = 0.025;
+
+/**
+ * Percentile of the flux history used as the adaptive baseline. The median would be fine for a
+ * stationary background, but with dense strumming (16th notes at >= 100 bpm: one attack every
+ * 3-4 hops) most hops carry attack flux and the median climbs to the level of the attacks
+ * themselves, hiding them; the lower quartile still reads the hops between attacks. For
+ * stationary white noise the flux spread is ~7.5 % of its mean, so the lower quartile sits within
+ * 5 % of the median and keeps the same false-positive margin (60 s maximum ~1.28x mean versus a
+ * threshold >= 1.42x mean + eps).
+ */
+export const ONSET_BASELINE_PERCENTILE = 0.25;
 
 export class OnsetDetector {
   readonly sampleRate: number;
@@ -43,6 +56,11 @@ export class OnsetDetector {
   /** Flux and threshold of the last processed frame (diagnostics). */
   lastFlux = 0;
   lastThreshold = 0;
+  /**
+   * Whether the last processed frame's flux exceeded its threshold, armed or not (diagnostics;
+   * the chord detector uses it as "something was struck", even while its gate is closed).
+   */
+  lastAbove = false;
 
   private threshold: number;
   private prevLog: Float64Array;
@@ -55,6 +73,8 @@ export class OnsetDetector {
   private lastOnsetTime = -Infinity;
   /** Whether the previous (armed) frame was already above its threshold. */
   private wasAbove = false;
+  /** Lowest flux seen since the last accepted onset (the run's valley). */
+  private valley = Infinity;
 
   constructor(sampleRate: number, fftSize: number, opts: OnsetOpts = {}) {
     this.sampleRate = sampleRate;
@@ -87,14 +107,19 @@ export class OnsetDetector {
 
   /**
    * Feeds one magnitude spectrum stamped at `timeSec` (end of the frame). Returns true when the
-   * frame is an accepted onset: flux above the adaptive threshold on an UPWARD crossing (the
-   * first frame of a run above the threshold; with a 171 ms Hann frame and a 40 ms hop one
-   * attack keeps the flux positive for 3-4 hops while it slides towards the window centre, and
-   * only the first of them is the onset) and at least `minIntervalSec` after the previous onset
-   * (real timeSec deltas). The first frame is never an onset. With `armed = false` the detector
-   * only updates its state (spectrum, flux history) and never fires nor starts the refractory
-   * period (used while the level gate is closed); a run above the threshold that started while
-   * disarmed still counts as a fresh crossing once armed.
+   * frame is an accepted onset: flux above the adaptive threshold, at least `minIntervalSec`
+   * after the previous onset (real timeSec deltas), and either an UPWARD crossing (the first
+   * frame of a run above the threshold; with a 171 ms Hann frame and a 40 ms hop one attack
+   * keeps the flux positive for 3-4 hops while it slides towards the window centre, and only the
+   * first of them is the onset) or a fresh rise inside a run: the flux climbs above
+   * valley * threshold + eps, where the valley is the lowest flux since the last onset (a second
+   * attack 3 hops after the first, e.g. 16th notes at 120 bpm, lands while the first run is
+   * still above the threshold and would never produce a new crossing; the decaying tail of a
+   * single strum never rises that much, so it fires once). The first frame is never an onset.
+   * With `armed = false` the detector only updates its state (spectrum, flux history, valley)
+   * and never fires nor starts the refractory period (used while the level gate is closed); a
+   * run above the threshold that started while disarmed still counts as a fresh crossing once
+   * armed. `lastAbove` reports the threshold test of every frame, armed or not.
    */
   process(mag: Float32Array, timeSec: number, armed = true): boolean {
     const cur = this.curLog;
@@ -110,6 +135,7 @@ export class OnsetDetector {
       this.swap();
       this.lastFlux = 0;
       this.lastThreshold = this.eps;
+      this.lastAbove = false;
       return false;
     }
     let flux = 0;
@@ -118,15 +144,20 @@ export class OnsetDetector {
       if (d > 0) flux += d;
     }
     // Without history the frame cannot be compared with anything: never fire.
-    const median = this.historyCount > 0 ? this.medianHistory() : flux;
-    const thr = median * this.threshold + this.eps;
+    const baseline = this.historyCount > 0 ? this.baselineHistory() : flux;
+    const thr = baseline * this.threshold + this.eps;
     this.lastFlux = flux;
     this.lastThreshold = thr;
     const above = this.historyCount > 0 && flux > thr;
+    this.lastAbove = above;
+    const fresh = !this.wasAbove || flux > this.valley * this.threshold + this.eps;
     let fire = false;
-    if (armed && above && !this.wasAbove && timeSec - this.lastOnsetTime >= this.minIntervalSec) {
+    if (armed && above && fresh && timeSec - this.lastOnsetTime >= this.minIntervalSec) {
       fire = true;
       this.lastOnsetTime = timeSec;
+      this.valley = flux;
+    } else if (flux < this.valley) {
+      this.valley = flux;
     }
     this.wasAbove = armed && above;
     this.pushHistory(flux);
@@ -146,13 +177,16 @@ export class OnsetDetector {
     if (this.historyCount < this.historyFrames) this.historyCount++;
   }
 
-  private medianHistory(): number {
+  /** ONSET_BASELINE_PERCENTILE of the flux history (linear interpolation between ranks). */
+  private baselineHistory(): number {
     const n = this.historyCount;
     const s = this.scratch;
     for (let i = 0; i < n; i++) s[i] = this.history[i];
     const view = s.subarray(0, n);
     view.sort();
-    const mid = n >> 1;
-    return n % 2 === 1 ? view[mid] : 0.5 * (view[mid - 1] + view[mid]);
+    const pos = ONSET_BASELINE_PERCENTILE * (n - 1);
+    const lo = Math.floor(pos);
+    const hi = Math.min(n - 1, lo + 1);
+    return view[lo] + (view[hi] - view[lo]) * (pos - lo);
   }
 }

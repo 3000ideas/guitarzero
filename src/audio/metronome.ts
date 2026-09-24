@@ -9,13 +9,13 @@ import type { ClickScheduler } from '../types';
 
 export const CLICK_FREQ_HZ = 4500;
 export const CLICK_ACCENT_FREQ_HZ = 5500;
-export const CLICK_GAIN = 0.5;
+export const CLICK_GAIN = 0.85;
 /** Linear attack ramp length. */
 export const CLICK_ATTACK_SEC = 0.003;
-/** Exponential decay time constant after the attack. */
-export const CLICK_DECAY_TAU_SEC = 0.008;
-/** Oscillator stop time relative to its start. */
-export const CLICK_LENGTH_SEC = 0.05;
+/** Exponential decay time constant after the attack (longer = more audible on small speakers). */
+export const CLICK_DECAY_TAU_SEC = 0.018;
+/** Oscillator stop time relative to its start (> 5 tau so the tail is silent before the stop). */
+export const CLICK_LENGTH_SEC = 0.1;
 /** Used when the context does not report outputLatency (Safari) or reports 0. */
 export const DEFAULT_OUTPUT_LATENCY_SEC = 0.03;
 
@@ -41,15 +41,18 @@ export class Metronome implements ClickScheduler {
   }
 
   /**
-   * Schedules a click to be heard at `nominalSec` (AudioContext clock). No-op while disabled, and
-   * never schedules in the past: a start time already behind ctx.currentTime is skipped.
+   * Schedules a click to be heard at `nominalSec` (AudioContext clock). No-op while disabled.
+   * Only clicks whose nominal instant is already gone are skipped; a click whose (latency-shifted)
+   * start time is already past is started immediately, so high output latency (Bluetooth) never
+   * silences the first count-in click.
    */
   scheduleClick(nominalSec: number, accent: boolean): void {
     if (!this.enabled || !Number.isFinite(nominalSec)) return;
     const ctx = this.ctx;
-    const t = nominalSec - this.outputLatencySec();
-    if (t < ctx.currentTime) return;
-    this.prune(ctx.currentTime);
+    const now = ctx.currentTime;
+    if (nominalSec < now) return;
+    const t = Math.max(nominalSec - this.outputLatencySec(), now);
+    this.prune(now);
 
     const osc = ctx.createOscillator();
     osc.type = 'sine';

@@ -3,6 +3,8 @@
  * left, nut on top (or an "Nfr" label when baseFret > 1), X/O markers above the strings,
  * barre as a rounded bar, finger numbers inside the dots and the title above.
  * All coordinates are CSS px inside `box`; the context state is restored afterwards.
+ * With baseFret > 1 the left padding widens to the measured label width so "6fr" is never
+ * clipped, even in the 96 px "Siguiente" canvas of the practice screen.
  */
 import type { ChordShape } from '../types';
 
@@ -49,6 +51,47 @@ export function diagramFretCount(shape: ChordShape): number {
   for (const f of shape.frets) if (f > maxFret) maxFret = f;
   if (shape.barre && shape.barre.fret > maxFret) maxFret = shape.barre.fret;
   return Math.max(4, maxFret - shape.baseFret + 1);
+}
+
+/** Gap between the "Nfr" label and the nearest dot on the 6th string, CSS px. */
+export const FRET_LABEL_GAP = 3;
+/** Inset of the label from the left edge of the box, CSS px. */
+export const FRET_LABEL_INSET = 2;
+
+/** "3fr" — label shown left of the first row when the diagram does not start at the nut. */
+export function fretLabelText(baseFret: number): string {
+  return `${baseFret}fr`;
+}
+
+/**
+ * Left padding that fits a fret label of `labelWidth` px: the default `padX`, or more when
+ * the label + gap + a dot radius would not fit between the box edge and the 6th string.
+ */
+export function fretLabelPadding(padX: number, labelWidth: number, dotR: number): number {
+  return Math.max(padX, FRET_LABEL_INSET + labelWidth + FRET_LABEL_GAP + dotR + 1);
+}
+
+/** Width of `text` at `font`; falls back to an estimate when measureText is unavailable / returns 0. */
+function measureLabel(ctx: CanvasRenderingContext2D, font: string, text: string, px: number): number {
+  ctx.font = font;
+  let w = 0;
+  try {
+    w = ctx.measureText(text).width;
+  } catch {
+    w = 0;
+  }
+  if (!Number.isFinite(w) || w <= 0) w = text.length * px * 0.6;
+  return w;
+}
+
+interface GridGeometry {
+  gridLeft: number;
+  gw: number;
+  cellW: number;
+  markerH: number;
+  gridTop: number;
+  cellH: number;
+  dotR: number;
 }
 
 function roundedRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, radius: number): void {
@@ -135,21 +178,38 @@ export function drawChordDiagram(
     titleH = titlePx * 1.45;
   }
 
-  // Grid geometry.
+  // Grid geometry. The padding is symmetric by default; when the diagram does not start at the
+  // nut, ONLY the left padding grows so that the "Nfr" label (measured at its font) fits inside
+  // the box next to the first row. Strings and dots follow the same rules in both cases.
   const padX = box.w * 0.15;
-  const gridLeft = box.x + padX;
-  const gw = box.w - 2 * padX;
-  const cellW = gw / 5;
-  const markerH = clamp(cellW * 0.8, 8, 20);
-  const gridTop = box.y + titleH + markerH + 5;
   const gridBottom = box.y + box.h - box.h * 0.06;
   const nFrets = diagramFretCount(shape);
-  const cellH = (gridBottom - gridTop) / nFrets;
+  const geometry = (padLeft: number): GridGeometry => {
+    const gridLeft = box.x + padLeft;
+    const gw = box.w - padLeft - padX;
+    const cellW = gw / 5;
+    const markerH = clamp(cellW * 0.8, 8, 20);
+    const gridTop = box.y + titleH + markerH + 5;
+    const cellH = (gridBottom - gridTop) / nFrets;
+    const dotR = Math.min(cellW, cellH) * 0.36;
+    return { gridLeft, gw, cellW, markerH, gridTop, cellH, dotR };
+  };
+  let g = geometry(padX);
+  let fretLabel: { text: string; font: string; width: number } | null = null;
+  if (shape.baseFret > 1) {
+    const px = clamp(g.cellH * 0.45, 9, 14);
+    const font = `${Math.round(px)}px ${FONT_FAMILY}`;
+    const text = fretLabelText(shape.baseFret);
+    const width = measureLabel(ctx, font, text, px);
+    fretLabel = { text, font, width };
+    const padLeft = fretLabelPadding(padX, width, g.dotR);
+    if (padLeft > padX) g = geometry(padLeft);
+  }
+  const { gridLeft, gw, cellW, markerH, gridTop, cellH, dotR } = g;
   if (cellH <= 1 || cellW <= 1) {
     ctx.restore();
     return;
   }
-  const dotR = Math.min(cellW, cellH) * 0.36;
   const nutH = clamp(cellH * 0.12, 3, 6);
   const gridRight = gridLeft + gw;
 
@@ -180,14 +240,15 @@ export function drawChordDiagram(
     ctx.stroke();
   }
 
-  // "3fr" label when the diagram does not start at the nut.
-  if (shape.baseFret > 1) {
-    const px = clamp(cellH * 0.45, 9, 14);
-    ctx.font = `${Math.round(px)}px ${FONT_FAMILY}`;
+  // "3fr" label when the diagram does not start at the nut: right-aligned just left of the
+  // 6th string's dot, never starting before box.x + FRET_LABEL_INSET (the padding made room).
+  if (fretLabel) {
+    ctx.font = fretLabel.font;
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = C.marker;
-    ctx.fillText(`${shape.baseFret}fr`, gridLeft - dotR - 3, gridTop + cellH / 2);
+    const right = Math.max(gridLeft - dotR - FRET_LABEL_GAP, box.x + FRET_LABEL_INSET + fretLabel.width);
+    ctx.fillText(fretLabel.text, right, gridTop + cellH / 2);
   }
 
   // X / O markers above the nut.

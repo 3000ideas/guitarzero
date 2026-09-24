@@ -75,6 +75,44 @@ C . . . | G . . . | x2             # repite esta línea 2 veces
 - El patrón `strum` admite 1, 2 o 4 caracteres por beat (negras, corcheas o semicorcheas).
 - Los comentarios empiezan por `#` (al inicio de línea o tras un espacio; `F#m` no es comentario).
 
+## Pista de audio: que suene la canción
+
+Por defecto solo suena el metrónomo. Para que suene la canción real:
+
+1. En la **Biblioteca**, pulsa "Editar" en tu canción (en un ejemplo, "Editar" crea una copia).
+2. En el panel **Pista de audio** del editor, pulsa "Cargar audio…" y elige el archivo (MP3,
+   WAV, OGG, M4A). Se guarda en tu navegador (IndexedDB); no se sube a ningún sitio.
+3. Sincroniza la pista con los acordes:
+   - Pulsa **"Detectar tempo e inicio"**: la app analiza el audio y propone el tempo (BPM) y el
+     instante del primer pulso. "Aplicar tempo" escribe la cabecera `tempo:` de la canción.
+   - Ajusta **"Inicio del compás 1"** hasta que las líneas de compás de la forma de onda caigan
+     sobre los golpes de la canción (botones ±0,01 s, ±0,1 s y ±1 pulso, o arrastra el marcador;
+     `Shift+click` en la forma de onda lo fija ahí).
+   - Comprueba con **"Escuchar con metrónomo"**: si los clics caen en los pulsos de la canción,
+     está sincronizada.
+4. En **Practicar**, la pista arranca con la cuenta atrás, se para al pausar y vuelve a empezar
+   al reanudar o al repetir el bucle. Sigue la velocidad elegida (a menos velocidad suena más
+   grave). Toggle "Pista" y volumen en la cabecera.
+
+Importante: si la pista suena por altavoces, el micrófono la oirá y la evaluación no será
+fiable. Usa **auriculares**. En Ajustes hay una opción de cancelación de eco por si no puedes.
+La sincronización supone tempo constante (sin cambios de `tempo:` a mitad).
+
+## Subir una canción y obtener los acordes automáticamente
+
+En la **Biblioteca**, pulsa **"Desde audio…"** y elige el archivo de la canción. La app:
+
+1. Guarda el audio en el navegador y estima el tempo y el primer pulso.
+2. Detecta la tonalidad y asigna un acorde a cada pulso (mayores y menores; opcionalmente
+   séptimas), suavizando para que los cambios caigan en los compases.
+3. Genera el texto de la canción (`tempo:`, `time:`, `strum:` y los compases con sus acordes)
+   y abre el editor con la pista ya sincronizada.
+
+Es un **borrador**: con voz, batería y bajo mezclados, la detección acierta la mayoría de los
+acordes, pero conviene repasarlos en el editor (pulsa "Escuchar con metrónomo" y corrige lo
+que no cuadre). En el panel "Pista de audio" del editor también puedes volver a lanzar
+"Detectar acordes" eligiendo compás (4/4 o 3/4) e incluir séptimas.
+
 ## Cómo juzga la app
 
 Cada rasgueo esperado tiene una ventana de tiempo (150 ms antes, 250 ms después). Si detecta

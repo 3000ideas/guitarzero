@@ -5,7 +5,8 @@
  * (tempo, time signature, chord count, duration — computed with parseSong + songDurationSec)
  * and the actions Practicar / Editar (a builtin is duplicated first and the copy is opened) /
  * Duplicar / Borrar (disabled for builtins, asks for confirmation). "Nueva canción" and
- * "Progresión rápida" create a song from their templates and open the editor.
+ * "Progresión rápida" create a song from their templates and open the editor. Songs with a
+ * backing track (StoredSong.audio) carry a "♪ pista" badge.
  *
  * `songMeta` and the formatting helpers are pure (testable in Node).
  */
@@ -38,7 +39,12 @@ export interface SongMeta {
   durationSec: number;
   errors: number;
   warnings: number;
+  /** The song has a backing track (StoredSong.audio) -> "♪ pista" badge. */
+  hasAudio: boolean;
 }
+
+/** Badge text of a song with a backing track. */
+export const AUDIO_BADGE = '♪ pista';
 
 export const UNTITLED = 'Sin título';
 
@@ -85,6 +91,7 @@ export function songMeta(stored: StoredSong): SongMeta {
     durationSec: song.bars.length > 0 ? songDurationSec(song) : 0,
     errors: errorCount,
     warnings: warningCount,
+    hasAudio: stored.audio !== null && stored.audio !== undefined,
   };
 }
 
@@ -134,6 +141,7 @@ export const libraryScreen: Screen = {
         'div.song-head',
         null,
         h('div.grow', null, h('div.song-title', null, title), meta.artist ? h('div.song-artist', null, meta.artist) : null),
+        meta.hasAudio ? h('span.badge.badge-ok', { title: 'Tiene pista de audio' }, AUDIO_BADGE) : null,
         meta.builtin ? h('span.badge.badge-accent', null, 'Ejemplo') : null,
       );
 

@@ -51,6 +51,11 @@ export const END_MARGIN_SEC = 0.1;
 export const MISSED_FRAME_MARGIN_SEC = 0.05;
 /** 'missed' fallback on the clock when no frames arrive. */
 export const MISSED_CLOCK_MARGIN_SEC = 0.5;
+/**
+ * A loop pass restarts no earlier than this long after its end beat, even when every event is
+ * already judged: the colour of the last verdict stays on screen before the count-in wipes it.
+ */
+export const LOOP_HOLD_SEC = 0.6;
 /** Clicks whose nominal time is already this far in the past are not scheduled. */
 const CLICK_PAST_TOLERANCE_SEC = 0.05;
 
@@ -147,6 +152,8 @@ export class PracticeSession {
   private startBeat = 0;
   /** Position the next resume/start plays from (bar containing it). */
   private pausedBeat = 0;
+  /** Wall time at which the clock was frozen by pause(). */
+  private pausedWall = 0;
   /** Lowest start beat of the current pass (events below it are not part of the pass). */
   private passStartBeat = 0;
   private lastScheduledBeat = -Infinity;
@@ -163,6 +170,8 @@ export class PracticeSession {
   private bestStreak = 0;
   /** Streak carried over from completed passes. */
   private baseStreak = 0;
+  /** Best streak reached by the end of the completed passes (the current pass is walked from verdicts). */
+  private accBestStreak = 0;
   private readonly acc: Accumulated = {
     total: 0,
     correct: 0,
@@ -200,6 +209,7 @@ export class PracticeSession {
       streak: 0,
       live: { rmsDb: -100, bestChord: null, listening: this.isListening(), gateDb: this.currentGateDb() },
       countInBeatsLeft: 0,
+      countInStartBeat: 0,
       loop: null,
       pass: 1,
       summary: null,
@@ -362,22 +372,50 @@ export class PracticeSession {
     this.playFrom(bar, true);
   }
 
-  /** Freezes the clock. Only in 'countin' / 'playing'. */
+  /**
+   * Freezes the clock. Only in 'countin' / 'playing'. The bars left behind (and the whole pass
+   * once its end beat has gone by) get their pending verdicts decided with the evidence at hand:
+   * resume() replays the current bar only, so those events would never be judged otherwise.
+   */
   pause(): void {
     const phase = this.state.phase;
     if (phase !== 'countin' && phase !== 'playing') return;
-    const beat = this.beatAt(this.deps.clock.now());
+    const now = this.deps.clock.now();
+    const beat = this.beatAt(now);
     this.state.beat = beat;
     this.state.songTimeSec = this.songSec(beat);
     this.pausedBeat = phase === 'countin' ? this.startBeat : beat;
+    this.pausedWall = now;
     this.state.countInBeatsLeft = 0;
     this.deps.clicks?.clear();
+    if (phase === 'playing') {
+      const passEnd = this.passEndBeat();
+      const bar = this.song.bars[this.barIndexAt(beat)];
+      this.flushPending(beat >= passEnd ? passEnd : bar ? bar.startBeat : 0, now);
+    }
     this.setPhase('paused');
   }
 
-  /** Count-in of one bar, then the bar that was playing is repeated in full. Only in 'paused'. */
+  /**
+   * Count-in of one bar, then the bar that was playing is repeated in full. Only in 'paused'.
+   * A pause that landed after the end of the pass (the judging tail) has nothing to repeat: the
+   * pass is closed instead (next loop pass with its count-in, or the natural end of the song).
+   */
   resume(): void {
     if (this.state.phase !== 'paused') return;
+    const passEnd = this.passEndBeat();
+    if (this.pausedBeat >= passEnd) {
+      this.flushPending(passEnd, this.pausedWall);
+      const loop = this.state.loop;
+      if (loop) {
+        this.dumpPass();
+        this.state.pass++;
+        this.playFrom(loop.fromBar, true);
+      } else {
+        this.finish('finished');
+      }
+      return;
+    }
     this.playFrom(this.barIndexAt(Math.max(0, this.pausedBeat)), false);
   }
 
@@ -458,14 +496,19 @@ export class PracticeSession {
     this.state.songTimeSec = this.songSec(this.anchorBeat);
     this.state.nextEventIndex = upperBound(events, this.anchorBeat);
     this.state.countInBeatsLeft = Math.ceil(startBeat - this.anchorBeat);
+    // Where this count-in starts (= the anchor): the screen syncs the backing track from here.
+    this.state.countInStartBeat = this.anchorBeat;
     this.setPhase('countin');
+    // The first count-in click falls at the anchor, ANCHOR_LEAD_SEC from now: schedule it here
+    // with the full lead instead of waiting for the next animation frame.
+    this.scheduleClicks(this.anchorWall - ANCHOR_LEAD_SEC);
   }
 
   /** Walks the current verdicts: score (over the accumulated), streak and best streak. */
   private recomputeScoring(): void {
     let score = this.acc.score;
     let streak = this.baseStreak;
-    let best = this.bestStreak;
+    let best = this.accBestStreak;
     for (const v of this.state.verdicts) {
       if (!v) continue;
       score += v.points;
@@ -504,6 +547,7 @@ export class PracticeSession {
       this.clearEvent(i);
     }
     this.baseStreak = this.state.streak;
+    this.accBestStreak = this.bestStreak;
   }
 
   private buildSummary(): SessionSummary {
@@ -601,12 +645,20 @@ export class PracticeSession {
       const loop = state.loop;
       if (loop) {
         const end = this.loopEndBeat(loop);
-        if (beat >= end && (now >= this.passOverWall(end) || this.verdictCursor >= lowerBound(events, end))) {
+        // Restart once every event is judged (or the judging margin ran out), but never before the
+        // hold after the end beat: the last verdict must be seen before the count-in clears it.
+        if (
+          beat >= end &&
+          now >= this.wallSec(end) + LOOP_HOLD_SEC &&
+          (this.verdictCursor >= lowerBound(events, end) || now >= this.passOverWall(end))
+        ) {
+          this.flushPending(end, now);
           this.dumpPass();
           state.pass++;
           this.playFrom(loop.fromBar, true);
         }
       } else if (now >= this.passOverWall(this.song.totalBeats)) {
+        this.flushPending(this.song.totalBeats, now);
         this.finish('finished');
       }
     }
@@ -748,20 +800,9 @@ export class PracticeSession {
       } else {
         const o = this.assignedOnset[i];
         if (o !== undefined) {
-          const nextOnset = this.nextOnsetAfter(o);
-          const { t1 } = analysisWindow(o, nextOnset, analysisWindowSec);
+          const { t1 } = analysisWindow(o, this.nextOnsetAfter(o), analysisWindowSec);
           if (this.lastFrameEnd >= t1 || now > o + analysisWindowSec + MISSED_CLOCK_MARGIN_SEC) {
-            const info = this.expectedFor(e.chord);
-            const input: JudgeInput = {
-              eventIndex: i,
-              chord: e.chord,
-              muted: e.muted,
-              expectedSec: expected,
-              expectedPcs: info.pcs,
-              expectedTemplate: info.template,
-            };
-            const evidence: Evidence = { onset: o, nextOnset, chromaAt: this.chromaAt };
-            result = judgeEvent(input, evidence, this.judgeOpts);
+            result = this.judgeAssigned(i, o);
           }
         } else if (
           this.lastFrameEnd > expected + lateSec + MISSED_FRAME_MARGIN_SEC ||
@@ -774,6 +815,49 @@ export class PracticeSession {
       this.applyVerdict(result);
       this.verdictCursor = i + 1;
     }
+  }
+
+  /** judgeEvent for event `i` with its assigned onset `o` over the ring buffer as it stands. */
+  private judgeAssigned(i: number, o: number): JudgeResult {
+    const e = this.song.events[i];
+    const info = this.expectedFor(e.chord);
+    const input: JudgeInput = {
+      eventIndex: i,
+      chord: e.chord,
+      muted: e.muted,
+      expectedSec: this.expectedSec(e),
+      expectedPcs: info.pcs,
+      expectedTemplate: info.template,
+    };
+    const evidence: Evidence = { onset: o, nextOnset: this.nextOnsetAfter(o), chromaAt: this.chromaAt };
+    return judgeEvent(input, evidence, this.judgeOpts);
+  }
+
+  /**
+   * Decides, in index order, the pending events of the pass below `untilBeat` with the evidence
+   * at hand, as of wall time `now`: an assigned onset is judged with whatever the ring holds, an
+   * event whose window has closed with no onset is 'missed', and the rest ('nc', not listening,
+   * window still open) are 'skipped'. Called when the pass is over (loop restart, natural end)
+   * and when a pause leaves a bar behind, so no event is silently dropped or left unjudged.
+   */
+  private flushPending(untilBeat: number, now: number): void {
+    const events = this.song.events;
+    const state = this.state;
+    const listening = this.isListening();
+    const stop = lowerBound(events, Math.min(untilBeat, this.passEndBeat()));
+    const { lateSec } = this.judgeOpts;
+    for (let i = this.verdictCursor; i < stop; i++) {
+      if (state.verdicts[i] !== undefined) continue;
+      const e = events[i];
+      const o = this.assignedOnset[i];
+      let result: JudgeResult;
+      if (e.chord.quality === 'nc' || !listening) result = { eventIndex: i, kind: 'skipped', timingLabel: null };
+      else if (o !== undefined) result = this.judgeAssigned(i, o);
+      else if (now > this.expectedSec(e) + lateSec) result = { eventIndex: i, kind: 'missed', timingLabel: null };
+      else result = { eventIndex: i, kind: 'skipped', timingLabel: null };
+      this.applyVerdict(result);
+    }
+    if (stop > this.verdictCursor) this.verdictCursor = stop;
   }
 
   /** Points, streak and score for a judged event; stores and emits the verdict. */

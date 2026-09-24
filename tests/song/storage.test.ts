@@ -25,10 +25,11 @@ import {
   setFlag,
   withSourceTitle,
 } from '../../src/song/storage';
+import { copyTrack, deleteTrack, getTrack, hasIndexedDb, putTrack } from '../../src/song/audioStore';
 import { EXAMPLE_SONGS } from '../../src/song/examples';
 import { parseSong } from '../../src/song/parser';
 import { DEFAULT_SETTINGS } from '../../src/types';
-import type { Settings, StoredSong } from '../../src/types';
+import type { AudioTrackInfo, Settings, StoredSong } from '../../src/types';
 
 // ---------------------------------------------------------------- localStorage shim
 
@@ -291,6 +292,95 @@ describe('songs with a localStorage shim', () => {
     shim.setItem(SONGS_KEY, JSON.stringify({ version: STORAGE_VERSION, songs: [external] }));
     expect(getSong('s_mine')).toBeNull();
     expect(getSong('s_other')).toEqual(external);
+  });
+});
+
+// ---------------------------------------------------------------- backing track metadata
+
+const AUDIO: AudioTrackInfo = { name: 'tema.mp3', type: 'audio/mpeg', size: 3_200_000, durationSec: 201.5, offsetSec: 1.32, gain: 0.8 };
+
+/** Lets the fire-and-forget copyTrack / deleteTrack of storage.ts settle. */
+const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+describe('backing track metadata (audio)', () => {
+  it('saveSong keeps audio as given and round-trips it through localStorage', () => {
+    const shim = installShim();
+    const stored = saveSong({ ...song('s_audio'), audio: AUDIO });
+    expect(stored.audio).toEqual(AUDIO);
+    expect(stored.audio).not.toBe(AUDIO); // a copy, not the caller's object
+    expect(getSong('s_audio')!.audio).toEqual(AUDIO);
+    expect((rawSongs(shim) as { songs: StoredSong[] }).songs[0].audio).toEqual(AUDIO);
+    // a song saved without audio has no audio key at all
+    const plain = saveSong(song('s_plain'));
+    expect('audio' in plain).toBe(false);
+    expect('audio' in getSong('s_plain')!).toBe(false);
+  });
+
+  it('saveSong with audio: null drops the track (stored as null, readable as null)', () => {
+    const shim = installShim();
+    saveSong({ ...song('s_rm'), audio: AUDIO });
+    const removed = saveSong({ ...getSong('s_rm')!, audio: null });
+    expect(removed.audio).toBeNull();
+    expect(getSong('s_rm')!.audio).toBeNull();
+    expect((rawSongs(shim) as { songs: StoredSong[] }).songs[0].audio).toBeNull();
+    expect(listSongs().filter((s) => !s.builtin)[0].audio).toBeNull();
+  });
+
+  it('duplicateSong copies the audio metadata (as an independent copy)', () => {
+    installShim();
+    saveSong({ ...song('s_src', 'Con pista'), audio: AUDIO });
+    const copy = duplicateSong('s_src');
+    expect(copy.audio).toEqual(AUDIO);
+    expect(copy.audio).not.toBe(getSong('s_src')!.audio);
+    expect(getSong(copy.id)!.audio).toEqual(AUDIO);
+    // a song without audio duplicates without audio
+    saveSong(song('s_dry'));
+    expect('audio' in duplicateSong('s_dry')).toBe(false);
+  });
+
+  it('malformed audio metadata in storage is dropped while the song is kept', () => {
+    const shim = installShim();
+    shim.setItem(
+      SONGS_KEY,
+      JSON.stringify({
+        version: 1,
+        songs: [
+          { ...song('s_bad1'), audio: 'nope' },
+          { ...song('s_bad2'), audio: { ...AUDIO, offsetSec: 'x' } },
+          { ...song('s_ok'), audio: { ...AUDIO, extra: 1 } },
+        ],
+      }),
+    );
+    const user = listSongs().filter((s) => !s.builtin);
+    expect(user.map((s) => s.id).sort()).toEqual(['s_bad1', 's_bad2', 's_ok']);
+    expect('audio' in getSong('s_bad1')!).toBe(false);
+    expect('audio' in getSong('s_bad2')!).toBe(false);
+    expect(getSong('s_ok')!.audio).toEqual(AUDIO);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('audioStore falls back to memory in Node and follows duplicate / delete without throwing', async () => {
+    installShim();
+    expect(hasIndexedDb()).toBe(false);
+    const blob = new Blob(['audio-bytes'], { type: 'audio/mpeg' });
+    await putTrack('s_blob', blob, { name: AUDIO.name, type: AUDIO.type, size: AUDIO.size });
+    expect(await getTrack('s_blob')).toBe(blob);
+    expect(await getTrack('s_none')).toBeNull();
+    expect(await copyTrack('s_none', 's_other')).toBe(false);
+
+    saveSong({ ...song('s_blob'), audio: AUDIO });
+    const copy = duplicateSong('s_blob');
+    await settle();
+    expect(await getTrack(copy.id)).toBe(blob);
+
+    expect(deleteSong('s_blob')).toBe(true);
+    await settle();
+    expect(await getTrack('s_blob')).toBeNull();
+    expect(await getTrack(copy.id)).toBe(blob);
+    await deleteTrack(copy.id);
+    expect(await getTrack(copy.id)).toBeNull();
+    await deleteTrack(copy.id); // idempotent
+    expect(warn).not.toHaveBeenCalled();
   });
 });
 

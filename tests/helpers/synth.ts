@@ -36,6 +36,12 @@ export interface ChordSynthOpts {
   harmonics?: number;
   /** Duration of the noisy pick attack in seconds (default 0.01). */
   attackNoiseSec?: number;
+  /**
+   * Multiplies every string's decay time constant (default 1: bass 1.5 s, treble 0.6 s). A real
+   * acoustic guitar sustains longer than the default model: 2..3 gives bass strings ringing
+   * with a 3..4.5 s time constant.
+   */
+  decayScale?: number;
 }
 
 function clamp01(x: number): number {
@@ -63,6 +69,7 @@ export function synthChord(midiNotes: number[], sampleRate: number, seconds: num
   const rng = makeRng(opts.seed ?? 1);
   const harmonics = opts.harmonics ?? 8;
   const attackNoiseSec = opts.attackNoiseSec ?? 0.01;
+  const decayScale = opts.decayScale !== undefined && opts.decayScale > 0 ? opts.decayScale : 1;
   const n = Math.max(0, Math.round(seconds * sampleRate));
   const out = new Float64Array(n);
   const env = new Float64Array(n);
@@ -70,7 +77,7 @@ export function synthChord(midiNotes: number[], sampleRate: number, seconds: num
   for (let i = 0; i < midiNotes.length; i++) {
     const midi = midiNotes[i];
     const f0 = midiToFreq(midi);
-    const tau = decaySecFor(midi);
+    const tau = decaySecFor(midi) * decayScale;
     const gain = dbToLin(stringBoostDb(midi));
     const start = Math.min(n, Math.max(0, Math.round((opts.offsets?.[i] ?? 0) * sampleRate)));
     for (let t = start; t < n; t++) {
@@ -113,6 +120,53 @@ export function synthStrum(midiNotes: number[], sampleRate: number, seconds: num
   const n = midiNotes.length;
   const offsets = midiNotes.map((_, i) => atSec + (n > 1 ? (i * spread) / (n - 1) : 0));
   return synthChord(midiNotes, sampleRate, seconds, { ...opts, offsets });
+}
+
+export interface StrumSequenceOpts extends Omit<StrumSynthOpts, 'atSec' | 'dbfs' | 'seed'> {
+  /** Peak level of each strum in dBFS: one value for all or one per strum (default -20). */
+  dbfs?: number | number[];
+  /**
+   * Re-striking a string stops its old vibration: the previous strum is faded out over this many
+   * seconds right before the next attack (default 0.015). 0 keeps a purely additive mix.
+   */
+  dampSec?: number;
+  /** Seed of the first strum; strum i uses seed + i (default 1). */
+  seed?: number;
+}
+
+/**
+ * A sequence of re-struck strums: strum i (notes `chords[i]`) starts at `times[i]` and rings until
+ * the next one (the last until `totalSec`), damped over `dampSec` before the next attack so the
+ * chords do not pile up as a purely additive mix would. Returns `totalSec` seconds of signal.
+ */
+export function synthStrumSequence(
+  chords: number[][],
+  sampleRate: number,
+  times: number[],
+  totalSec: number,
+  opts: StrumSequenceOpts = {},
+): Float32Array {
+  if (chords.length === 0 || times.length !== chords.length) throw new Error('chords and times must have the same length');
+  const dampSec = opts.dampSec ?? 0.015;
+  const seed = opts.seed ?? 1;
+  const strumOpts: StrumSynthOpts = {};
+  if (opts.offsets !== undefined) strumOpts.offsets = opts.offsets;
+  if (opts.harmonics !== undefined) strumOpts.harmonics = opts.harmonics;
+  if (opts.attackNoiseSec !== undefined) strumOpts.attackNoiseSec = opts.attackNoiseSec;
+  if (opts.decayScale !== undefined) strumOpts.decayScale = opts.decayScale;
+  if (opts.spreadSec !== undefined) strumOpts.spreadSec = opts.spreadSec;
+  const parts: MixPart[] = times.map((atSec, i) => {
+    const end = i + 1 < times.length ? times[i + 1] : totalSec;
+    const len = Math.max(0, end - atSec);
+    const level = Array.isArray(opts.dbfs) ? (opts.dbfs[i] ?? opts.dbfs[opts.dbfs.length - 1] ?? -20) : (opts.dbfs ?? -20);
+    const s = synthStrum(chords[i], sampleRate, len, { ...strumOpts, dbfs: level, seed: seed + i });
+    if (i + 1 < times.length && dampSec > 0) {
+      const damp = Math.min(s.length, Math.round(dampSec * sampleRate));
+      for (let k = 0; k < damp; k++) s[s.length - 1 - k] *= k / damp;
+    }
+    return { signal: s, atSec };
+  });
+  return mix(parts, sampleRate, totalSec);
 }
 
 export interface ClickOpts {

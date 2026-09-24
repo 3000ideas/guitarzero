@@ -9,7 +9,13 @@ let ctx: AudioContext | null = null;
 export function getAudioContext(): AudioContext {
   if (!ctx) {
     const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    ctx = new Ctor({ latencyHint: 'interactive' });
+    // Pin 48 kHz so the DSP (fftSize 8192, band limits) sees the same resolution on every device
+    // (a 96 kHz interface would halve the frequency resolution). Fall back if the browser refuses.
+    try {
+      ctx = new Ctor({ latencyHint: 'interactive', sampleRate: 48000 });
+    } catch {
+      ctx = new Ctor({ latencyHint: 'interactive' });
+    }
   }
   return ctx;
 }

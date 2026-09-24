@@ -131,6 +131,18 @@ export interface ParseResult {
   errors: ParseError[];
 }
 
+/** Metadata of the backing audio file attached to a song (the blob itself lives in IndexedDB, see song/audioStore.ts). */
+export interface AudioTrackInfo {
+  name: string;
+  type: string;
+  size: number;
+  durationSec: number;
+  /** Seconds into the audio where beat 0 (start of bar 1) falls. Negative if the chart starts before the audio. */
+  offsetSec: number;
+  /** Linear playback gain 0..1 (default 0.8). */
+  gain: number;
+}
+
 export interface StoredSong {
   id: string;
   title: string;
@@ -139,6 +151,46 @@ export interface StoredSong {
   updatedAt: number;
   /** Bundled examples are read-only (Duplicate to edit). */
   builtin?: boolean;
+  /** Backing track metadata, or null/undefined when the song has no audio. */
+  audio?: AudioTrackInfo | null;
+}
+
+/** One beat of an automatic chord transcription (dsp/chordTranscribe.ts). */
+export interface TranscribedBeat {
+  timeSec: number;
+  /** Chord name in sharp spelling (e.g. 'F#m'), or null for no chord (N.C.). */
+  chord: string | null;
+  /** Emission score of the chosen chord in this beat, 0..1. */
+  score: number;
+}
+
+export interface TranscribedBar {
+  /** Index of the first beat of the bar within `beats`. */
+  startBeat: number;
+  /** Chords in order with their duration in beats (merged consecutive equal chords). */
+  chords: Array<{ chord: string | null; beats: number }>;
+}
+
+export interface ChordTranscription {
+  bpm: number;
+  beatsPerBar: number;
+  /** Seconds into the audio of the first downbeat (start of bar 1). */
+  firstDownbeatSec: number;
+  key: { root: number; mode: 'major' | 'minor'; name: string };
+  beats: TranscribedBeat[];
+  bars: TranscribedBar[];
+  /** Mean over beats of (best - second best emission score), clamped 0..1. */
+  confidence: number;
+}
+
+/** Result of dsp/tempoEstimate.ts. */
+export interface TempoEstimate {
+  bpm: number;
+  beatPeriodSec: number;
+  /** Seconds into the audio of the first detected beat (a beat, not necessarily a downbeat). */
+  firstBeatSec: number;
+  /** 0..1 — peak of the autocorrelation relative to its mean over the search range. */
+  confidence: number;
 }
 
 // ---------------------------------------------------------------- dsp
@@ -332,6 +384,8 @@ export interface SessionState {
   live: { rmsDb: number; bestChord: ChordMatch | null; listening: boolean; gateDb: number };
   /** Count-in beats remaining, beatsPerBar..1 during 'countin' (= ceil(-relativeBeat)), else 0. */
   countInBeatsLeft: number;
+  /** Beat at which the current/last count-in started (= startBeat - beatsPerBar of the start bar). 0 before any start. */
+  countInStartBeat: number;
   loop: LoopRange | null;
   /** 1-based pass counter (increments each time the loop restarts). */
   pass: number;
@@ -374,6 +428,10 @@ export interface Settings {
   tuningOffset: number;
   /** Draw the 6th string on top (player's view) instead of tab order (1st on top). */
   invertStrings: boolean;
+  /** Play the song's backing track (when the song has one) during practice. */
+  backingTrack: boolean;
+  /** Ask the browser for echo cancellation on the mic (helps when the backing track plays through speakers). */
+  echoCancellation: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -389,4 +447,6 @@ export const DEFAULT_SETTINGS: Settings = {
   lateSec: 0.25,
   tuningOffset: 0,
   invertStrings: false,
+  backingTrack: true,
+  echoCancellation: false,
 };

@@ -8,9 +8,17 @@
  * The shared AudioContext is created suspended at mount (MicDetectorSource reads its sample
  * rate) and resumed only from user gestures (Empezar / Reanudar / Probar micrófono),
  * synchronously before any await.
+ *
+ * Backing track (SPEC section 11 "Practicar"): when the song has audio and
+ * `settings.backingTrack` is on, the file is loaded from IndexedDB at mount ("Cargando pista…";
+ * Empezar waits for it, or goes on without it after a failure). The screen owns the track: on
+ * every `phase === 'countin'` (start, resume, loop restart) it restarts the audio so that the
+ * count-in start beat is heard at `session.wallSec(b)`; 'paused' / 'ended' stop it. The header
+ * gets a "Pista" toggle and a volume slider (gain saved with the song, debounced).
  */
 import './practice.css';
 import type {
+  AudioTrackInfo,
   ChordShape,
   ChordSymbol,
   LoopRange,
@@ -22,12 +30,15 @@ import type {
   StrumEvent,
 } from '../../types';
 import { parseSong } from '../../song/parser';
-import { getFlag, getSong, hasFlag, loadSettings, saveSettings, setFlag } from '../../song/storage';
+import { getFlag, getSong, hasFlag, loadSettings, saveSettings, saveSong, setFlag } from '../../song/storage';
+import { getTrack } from '../../song/audioStore';
+import { beatToSec } from '../../song/tempo';
 import { getChordShape } from '../../music/chords';
 import { getAudioContext } from '../../audio/context';
 import { MicError, MicInput } from '../../audio/mic';
 import { MicDetectorSource, detectorOptsFromSettings } from '../../audio/micDetector';
 import { Metronome } from '../../audio/metronome';
+import { BackingTrack } from '../../audio/backing';
 import { PracticeSession } from '../../game/engine';
 import { HighwayRenderer, countInStartBeat, lowerBound } from '../highway';
 import { drawChordDiagram } from '../chordDiagram';
@@ -37,6 +48,14 @@ import { append, clear, h } from '../dom';
 
 /** Speed selector values (percent of the written tempo). */
 export const SPEED_OPTIONS: readonly number[] = [50, 60, 70, 80, 90, 100, 110, 120];
+/** Debounce of the song save after a backing-track volume change. */
+export const BACKING_SAVE_DELAY_MS = 300;
+/** Shown next to the speed selector when the song has a backing track. */
+export const SPEED_TITLE_WITH_TRACK = 'A menos velocidad la pista suena más grave';
+/** Shown while the backing track is being loaded / when it failed. */
+export const BACKING_LOADING_TEXT = 'Cargando pista…';
+export const BACKING_FAILED_TEXT = 'No se pudo cargar la pista: se practica sin ella';
+export const HEADPHONES_WARNING = 'Con la pista por altavoces el micrófono la oirá y la evaluación no será fiable: usa auriculares';
 /** The summary shows the latency hint when |median timing| reaches this (seconds). */
 export const LATENCY_HINT_MIN_SEC = 0.08;
 /** The summary shows the low-input hint when missed / judged reaches this. */
@@ -80,6 +99,9 @@ const MIC_RETRY_KINDS: readonly MicStatusKind[] = ['denied', 'notfound', 'device
 let bannerDismissed = false;
 
 const noop = (): void => {};
+/** Upper bound on waiting for AudioContext.resume() before starting/resuming the session. */
+const RESUME_WAIT_MS = 1000;
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ------------------------------------------------------------------ pure helpers
 
@@ -125,6 +147,20 @@ export function nearestSpeed(tempoScale: number): number {
   return clamp(pct, SPEED_OPTIONS[0], SPEED_OPTIONS[SPEED_OPTIONS.length - 1]);
 }
 
+/**
+ * Audio position (seconds into the file) that corresponds to song beat `beat`:
+ * `audio.offsetSec + beatToSec(tempoSegments, beat)`. Negative during a count-in that starts
+ * before the audio (BackingTrack.start then delays the source instead of seeking).
+ */
+export function backingPositionSec(audio: Pick<AudioTrackInfo, 'offsetSec'>, song: Pick<Song, 'tempoSegments'>, beat: number): number {
+  return audio.offsetSec + beatToSec(song.tempoSegments, beat);
+}
+
+/** The headphones warning is shown when the track will play while the mic is evaluating. */
+export function needsHeadphonesWarning(hasAudio: boolean, settings: Pick<Settings, 'backingTrack' | 'listen'>): boolean {
+  return hasAudio && settings.backingTrack && settings.listen;
+}
+
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
 }
@@ -157,6 +193,7 @@ interface HudCache {
   next: string;
   lyric: number;
   tempo: string;
+  headphones: boolean | null;
 }
 
 function freshHud(): HudCache {
@@ -175,6 +212,7 @@ function freshHud(): HudCache {
     next: '\0',
     lyric: -2,
     tempo: '',
+    headphones: null,
   };
 }
 
@@ -217,11 +255,21 @@ export const practiceScreen: Screen = {
     let disposed = false;
     let starting = false;
     let ignoreEnded = false;
+    let internalPause = false;
     let micStatus: MicStatusKind = settings.listen ? 'inactive' : 'off';
     let wakeLock: WakeLockSentinel | null = null;
     let hud = freshHud();
     let diagramsDirty = true;
     let raf = 0;
+
+    // Backing track (metadata from the song; the file from IndexedDB, decoded on demand).
+    let audio: AudioTrackInfo | null = stored.audio ?? null;
+    let backing: BackingTrack | null = null;
+    /** Pending / finished load; resolves true when `backing` is ready. Null before the first attempt or after a failure. */
+    let backingLoad: Promise<boolean> | null = null;
+    /** The last load failed: Empezar does not retry by itself (toggling "Pista" on does). */
+    let backingFailed = false;
+    let backingSaveTimer: number | null = null;
 
     // ---------------------------------------------------------------- session
 
@@ -234,7 +282,11 @@ export const practiceScreen: Screen = {
           if (!ignoreEnded && !disposed) showSummary(summary, reason);
         }),
         s.on('phase', (phase) => {
-          if (phase === 'paused' || phase === 'ended') releaseWakeLock();
+          // Internal pause/resume pairs (speed or section change) keep the wake lock.
+          if (phase === 'ended' || (phase === 'paused' && !internalPause)) releaseWakeLock();
+          // The backing track follows every count-in (start, resume, loop) and stops with the session.
+          if (phase === 'countin') syncBacking(s);
+          else if (phase === 'paused' || phase === 'ended') backing?.stop();
         }),
       ];
       return s;
@@ -269,13 +321,43 @@ export const practiceScreen: Screen = {
     const titleEl = h('div.practice-title', { title: song.title || 'Sin título' }, song.title || 'Sin título', h('small', null, subtitleParts.join(' · ')));
     const tempoEl = h('span.practice-tempo');
 
-    const speedSelect = h('select', { class: 'practice-select', 'aria-label': 'Velocidad', onchange: () => onSpeedChange() });
+    const speedSelect = h('select', {
+      class: 'practice-select',
+      'aria-label': 'Velocidad',
+      title: audio ? SPEED_TITLE_WITH_TRACK : undefined,
+      onchange: () => onSpeedChange(),
+    });
     for (const pct of SPEED_OPTIONS) speedSelect.appendChild(h('option', { value: String(pct) }, `${pct} %`));
     speedSelect.value = String(nearestSpeed(settings.tempoScale));
 
     const metronomeToggle = h('input', { type: 'checkbox', checked: settings.metronome, onchange: () => onMetronomeChange() });
     const listenToggle = h('input', { type: 'checkbox', checked: settings.listen, onchange: () => void onListenChange() });
     const loopToggle = h('input', { type: 'checkbox', checked: loopOn, onchange: () => setLoop(loopToggle.checked) });
+
+    // Backing-track controls: only when the song has audio.
+    const backingToggle = h('input', { type: 'checkbox', checked: settings.backingTrack, onchange: () => void onBackingChange() });
+    const backingVolume = h('input', {
+      type: 'range',
+      class: 'practice-volume',
+      min: '0',
+      max: '100',
+      step: '1',
+      value: String(Math.round(clamp(audio ? audio.gain : 0.8, 0, 1) * 100)),
+      'aria-label': 'Volumen de la pista',
+      title: 'Volumen de la pista',
+      oninput: () => onBackingVolume(),
+    });
+    const backingStatusEl = h('span.practice-backing-status');
+    const backingControls = audio
+      ? h(
+          'div.practice-backing',
+          null,
+          h('label.practice-toggle', { title: 'Reproducir la pista de audio de la canción' }, backingToggle, 'Pista'),
+          backingVolume,
+          backingStatusEl,
+        )
+      : null;
+    const headphonesWarn = h('div.practice-headphones', { hidden: true }, HEADPHONES_WARNING);
 
     const micStatusEl = h('span.practice-mic-status');
     const micRetryBtn = h('button', { class: 'btn practice-btn-small', type: 'button', hidden: true, onclick: () => void enableListening() }, 'Reintentar');
@@ -301,11 +383,13 @@ export const practiceScreen: Screen = {
       tempoEl,
       h('label.practice-field', null, 'Velocidad', speedSelect),
       h('label.practice-toggle', null, metronomeToggle, 'Metrónomo'),
+      backingControls,
       h('label.practice-toggle', null, listenToggle, 'Escuchar'),
       h('div.practice-mic', null, h('span.practice-mic-label', null, 'Micrófono:'), micStatusEl, micRetryBtn, levelEl, liveChordEl, noEvalBadge),
       h('label.practice-toggle', { title: 'Atajo: L' }, loopToggle, 'Repetir'),
       sectionSelect ? h('label.practice-field', null, 'Sección', sectionSelect) : null,
       h('div.practice-hint', null, 'Usa auriculares para que el micrófono no capte el metrónomo'),
+      headphonesWarn,
       agcNotice,
     );
 
@@ -430,7 +514,7 @@ export const practiceScreen: Screen = {
       void ctx.resume().catch(noop);
       setMicStatus('starting');
       try {
-        await mic.start(settings.inputDeviceId ?? undefined);
+        await mic.start(settings.inputDeviceId ?? undefined, { echoCancellation: settings.echoCancellation });
       } catch (err) {
         if (!disposed) setMicStatus(micStatusFromError(err));
         return false;
@@ -462,7 +546,8 @@ export const practiceScreen: Screen = {
       const active: string[] = [];
       if (ts.autoGainControl !== false) active.push('control automático de ganancia');
       if (ts.noiseSuppression !== false) active.push('supresión de ruido');
-      if (ts.echoCancellation !== false) active.push('cancelación de eco');
+      // Echo cancellation is only unexpected when the user did not ask for it (Ajustes).
+      if (ts.echoCancellation !== false && !settings.echoCancellation) active.push('cancelación de eco');
       if (active.length === 0) {
         agcNotice.hidden = true;
         return;
@@ -490,6 +575,109 @@ export const practiceScreen: Screen = {
       if (w && !w.released) w.release().catch(noop);
     }
 
+    // ---------------------------------------------------------------- backing track
+
+    function setBackingStatus(text: string, isError = false): void {
+      backingStatusEl.textContent = text;
+      backingStatusEl.classList.toggle('is-error', isError);
+    }
+
+    /**
+     * Loads (once) the song's audio file into a BackingTrack. Never rejects: resolves true when
+     * the track is ready, false when the song has no audio, the load failed or the screen was
+     * unmounted meanwhile. Decoding works on the suspended context.
+     */
+    function ensureBackingLoaded(): Promise<boolean> {
+      if (!audio) return Promise.resolve(false);
+      if (backingLoad) return backingLoad;
+      const info = audio;
+      setBackingStatus(BACKING_LOADING_TEXT);
+      const load = (async (): Promise<boolean> => {
+        let track: BackingTrack | null = null;
+        try {
+          const blob = await getTrack(id);
+          if (disposed) return false;
+          if (!blob) throw new Error('No se encontró el archivo de audio en este navegador');
+          track = new BackingTrack(ctx);
+          await track.load(blob);
+          if (disposed) {
+            track.dispose();
+            return false;
+          }
+          track.setGain(info.gain);
+          backing = track;
+          backingFailed = false;
+          setBackingStatus('');
+          return true;
+        } catch (err) {
+          track?.dispose();
+          backingFailed = true;
+          backingLoad = null; // toggling "Pista" on again retries
+          if (!disposed) {
+            console.warn('No se pudo cargar la pista de audio', err);
+            setBackingStatus(BACKING_FAILED_TEXT, true);
+          }
+          return false;
+        }
+      })();
+      backingLoad = load;
+      return load;
+    }
+
+    /** Restarts the audio so that the count-in start beat of `s` is heard at its wall time. */
+    function syncBacking(s: PracticeSession): void {
+      if (!backing || !audio || !settings.backingTrack) return;
+      const b = s.getState().countInStartBeat;
+      backing.stop();
+      backing.start(s.wallSec(b), backingPositionSec(audio, song, b), settings.tempoScale);
+    }
+
+    /** "Pista" toggle: persists the setting and starts/stops the audio in the middle of a pass. */
+    async function onBackingChange(): Promise<void> {
+      const on = backingToggle.checked;
+      settings = { ...settings, backingTrack: on };
+      saveSettings({ backingTrack: on });
+      if (!on) {
+        backing?.stop();
+        return;
+      }
+      void ctx.resume().catch(noop); // gesture: the track may start right away
+      if (!backing) {
+        backingFailed = false;
+        const ok = await ensureBackingLoaded();
+        if (!ok || disposed || !backingToggle.checked) return;
+      }
+      const phase = session.getState().phase;
+      if (phase === 'countin' || phase === 'playing') syncBacking(session);
+    }
+
+    function onBackingVolume(): void {
+      if (!audio) return;
+      const pct = clamp(Math.round(Number(backingVolume.value)), 0, 100);
+      if (!Number.isFinite(pct)) return;
+      const gain = pct / 100;
+      if (gain === audio.gain) return;
+      audio = { ...audio, gain };
+      backing?.setGain(gain);
+      if (backingSaveTimer !== null) clearTimeout(backingSaveTimer);
+      backingSaveTimer = window.setTimeout(() => {
+        backingSaveTimer = null;
+        flushBackingSave();
+      }, BACKING_SAVE_DELAY_MS);
+    }
+
+    /** Writes the pending gain change to the song (explicit `audio`, so the track metadata is kept). */
+    function flushBackingSave(): void {
+      if (backingSaveTimer !== null) {
+        clearTimeout(backingSaveTimer);
+        backingSaveTimer = null;
+      }
+      if (!audio || !stored || stored.builtin) return;
+      if (stored.audio && stored.audio.gain === audio.gain) return;
+      saveSong({ ...stored, audio: { ...audio } });
+      stored.audio = { ...audio };
+    }
+
     // ---------------------------------------------------------------- controls
 
     /** "Empezar": resume the context, start the mic if listening, wake lock, then the session. */
@@ -498,7 +686,9 @@ export const practiceScreen: Screen = {
       starting = true;
       startBtn.disabled = true;
       try {
-        void ctx.resume().catch(noop); // synchronously, before any await (iOS)
+        // Synchronously, before any await (iOS). The promise is awaited (bounded) below so the
+        // session never starts against a still-suspended context (the rAF guard would pause it).
+        const resumed = ctx.resume().catch(noop);
         if (settings.listen) {
           const ok = await startMic();
           if (disposed) return;
@@ -508,7 +698,13 @@ export const practiceScreen: Screen = {
             session.setSettings({ listen: false });
           }
         }
+        // The backing track must be decoded before the count-in starts (or we go on without it).
+        if (audio && settings.backingTrack && !backingFailed) {
+          await ensureBackingLoaded();
+          if (disposed) return;
+        }
         await requestWakeLock();
+        await Promise.race([resumed, delay(RESUME_WAIT_MS)]);
         if (disposed || session.getState().phase !== 'idle') return;
         const run = runs[selectedRun];
         if (run) session.seekBar(run.fromBar);
@@ -525,7 +721,7 @@ export const practiceScreen: Screen = {
       if (starting || disposed || session.getState().phase !== 'paused') return;
       starting = true;
       try {
-        void ctx.resume().catch(noop);
+        const resumed = ctx.resume().catch(noop);
         if (settings.listen && !mic.isRunning()) {
           const ok = await startMic();
           if (disposed) return;
@@ -536,6 +732,7 @@ export const practiceScreen: Screen = {
           }
         }
         await requestWakeLock();
+        await Promise.race([resumed, delay(RESUME_WAIT_MS)]);
         if (disposed || session.getState().phase !== 'paused') return;
         session.resume();
       } finally {
@@ -581,11 +778,21 @@ export const practiceScreen: Screen = {
       const tempoScale = clamp(Number(speedSelect.value) / 100, 0.5, 1.2);
       const phase = session.getState().phase;
       const playing = phase === 'countin' || phase === 'playing';
-      if (playing) session.pause();
+      if (playing) pauseInternally();
       saveSettings({ tempoScale });
       settings = { ...settings, tempoScale };
       session.setSettings({ tempoScale });
       if (playing) session.resume();
+    }
+
+    /** pause() for an immediate internal resume (speed/section change): keeps the wake lock. */
+    function pauseInternally(): void {
+      internalPause = true;
+      try {
+        session.pause();
+      } finally {
+        internalPause = false;
+      }
     }
 
     function onMetronomeChange(): void {
@@ -621,7 +828,7 @@ export const practiceScreen: Screen = {
       const phase = session.getState().phase;
       if (phase === 'ended') return;
       const playing = phase === 'countin' || phase === 'playing';
-      if (playing) session.pause();
+      if (playing) pauseInternally();
       const run = runs[selectedRun];
       session.seekBar(run ? run.fromBar : 0);
       applyLoop();
@@ -801,6 +1008,11 @@ export const practiceScreen: Screen = {
         hud.listening = listening;
         noEvalBadge.hidden = listening;
       }
+      const headphones = needsHeadphonesWarning(audio !== null, settings);
+      if (headphones !== hud.headphones) {
+        hud.headphones = headphones;
+        headphonesWarn.hidden = !headphones;
+      }
 
       const bpm = bpmAt(song, Math.max(0, state.beat));
       const scale = settings.tempoScale;
@@ -956,6 +1168,7 @@ export const practiceScreen: Screen = {
     }
     applyLoop();
     raf = requestAnimationFrame(frame);
+    if (audio && settings.backingTrack) void ensureBackingLoaded();
 
     // ---------------------------------------------------------------- unmount
 
@@ -966,6 +1179,9 @@ export const practiceScreen: Screen = {
       source.dispose();
       mic.stop();
       metronome.clear();
+      flushBackingSave();
+      backing?.dispose();
+      backing = null;
       releaseWakeLock();
       window.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('visibilitychange', onVisibility);

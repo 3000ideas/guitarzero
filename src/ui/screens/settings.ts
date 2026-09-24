@@ -5,6 +5,8 @@
  * starts the mic to obtain device labels and stops it again; "Calibrar" runs runCalibration()
  * over a MicDetectorSource + Metronome on the shared AudioContext (resumed inside the click
  * handler, before any await) and stores the measured latency plus the `latencyCalibrated` flag.
+ * The "Pista de audio" group (SPEC section 11) holds `backingTrack` and `echoCancellation`;
+ * every mic start here passes `echoCancellation` like the practice screen does.
  */
 import './settings.css';
 import type { Screen, Settings } from '../../types';
@@ -119,7 +121,7 @@ export const settingsScreen: Screen = {
       detectBtn.disabled = true;
       deviceStatus.textContent = 'Solicitando permiso…';
       try {
-        await mic.start(settings.inputDeviceId ?? undefined);
+        await mic.start(settings.inputDeviceId ?? undefined, { echoCancellation: settings.echoCancellation });
         const devices = await mic.listDevices();
         if (disposed) return;
         fillDevices(devices);
@@ -173,7 +175,7 @@ export const settingsScreen: Screen = {
       let source: MicDetectorSource | null = null;
       let metronome: Metronome | null = null;
       try {
-        await mic.start(settings.inputDeviceId ?? undefined);
+        await mic.start(settings.inputDeviceId ?? undefined, { echoCancellation: settings.echoCancellation });
         if (disposed || signal.aborted) throw new CalibrationError('cancelled');
         source = new MicDetectorSource(mic, detectorOptsFromSettings(settings));
         metronome = new Metronome(ctx);
@@ -345,6 +347,24 @@ export const settingsScreen: Screen = {
         checkboxField('Invertir cuerdas en la autopista (6ª arriba)', settings.invertStrings, (v) => update({ invertStrings: v })),
         checkboxField('Metrónomo por defecto', settings.metronome, (v) => update({ metronome: v }), 'Estado inicial del metrónomo al abrir Practicar.'),
         checkboxField('Escuchar por defecto', settings.listen, (v) => update({ listen: v }), 'Estado inicial de la evaluación por micrófono al abrir Practicar.'),
+      ),
+
+      h(
+        'fieldset.settings-group',
+        null,
+        h('legend', null, 'Pista de audio'),
+        checkboxField(
+          'Reproducir pista de audio',
+          settings.backingTrack,
+          (v) => update({ backingTrack: v }),
+          'Si la canción tiene una pista (se carga en el Editor), suena durante la práctica siguiendo la velocidad, las pausas, los saltos de sección y los bucles. También se puede activar o desactivar desde Practicar.',
+        ),
+        checkboxField(
+          'Cancelación de eco (si usas altavoces con la pista)',
+          settings.echoCancellation,
+          (v) => update({ echoCancellation: v }),
+          'Pide al navegador que elimine del micrófono lo que sale por los altavoces (pista y metrónomo). Con auriculares déjala desactivada: la señal sin procesar detecta mejor los acordes.',
+        ),
       ),
 
       h('footer.settings-footer', null, h('a', { class: 'btn', href: '#/' }, 'Volver')),

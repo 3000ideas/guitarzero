@@ -12,7 +12,7 @@ import type {
   Verdict,
 } from '../../src/types';
 import { DEFAULT_SETTINGS } from '../../src/types';
-import { PracticeSession, DEFAULT_FRAME_SECONDS, END_MARGIN_SEC } from '../../src/game/engine';
+import { PracticeSession, DEFAULT_FRAME_SECONDS, END_MARGIN_SEC, LOOP_HOLD_SEC } from '../../src/game/engine';
 import { DEFAULT_JUDGE_OPTS } from '../../src/game/judge';
 import { HARMONIC_DECAY, HARMONIC_OFFSETS, compressChroma } from '../../src/dsp/chroma';
 import { chordPitchClasses, parseChordSymbol } from '../../src/music/notes';
@@ -386,6 +386,79 @@ describe('PracticeSession: count-in', () => {
     expect(r.session.getState().phase).toBe('playing');
     expect(r.session.wallSec(0)).toBeCloseTo(4.1, 9);
     expect(r.session.wallSec(4)).toBeCloseTo(8.1, 9);
+  });
+});
+
+describe('PracticeSession: countInStartBeat (backing track sync)', () => {
+  it('is 0 before any start and the count-in anchor (start bar - one bar) after start()', () => {
+    const r = rig(SRC_2BARS);
+    expect(r.session.getState().countInStartBeat).toBe(0);
+    r.session.start();
+    const st = r.session.getState();
+    expect(st.countInStartBeat).toBe(-4);
+    expect(st.countInStartBeat).toBe(st.beat);
+    // The screen starts the track at wallSec(countInStartBeat): the anchor, 0.1 s after start().
+    expect(r.session.wallSec(st.countInStartBeat)).toBeCloseTo(0.1, 9);
+    r.drive.advanceTo(wall(2));
+    expect(r.session.getState().phase).toBe('playing');
+    expect(r.session.getState().countInStartBeat).toBe(-4); // unchanged while playing
+  });
+
+  it('follows the start bar (seekBar + start) and the time signature', () => {
+    const r = rig(SRC_2BARS);
+    r.session.seekBar(1);
+    r.session.start();
+    expect(r.session.getState().countInStartBeat).toBe(0); // bar 1 starts at beat 4, minus 4
+    expect(r.session.wallSec(0)).toBeCloseTo(0.1, 9);
+
+    const r34 = rig(SRC_34);
+    r34.session.start();
+    expect(r34.session.getState().countInStartBeat).toBe(-3);
+  });
+
+  it('is updated on resume() (one bar before the bar being repeated)', () => {
+    const r = rig(SRC_2BARS);
+    r.session.start();
+    r.drive.advanceTo(wall(5.5));
+    r.session.pause();
+    expect(r.session.getState().countInStartBeat).toBe(-4); // pause keeps the last value
+    r.session.resume();
+    const st = r.session.getState();
+    expect(st.phase).toBe('countin');
+    expect(st.countInStartBeat).toBe(0);
+    expect(st.beat).toBe(0);
+    expect(r.session.wallSec(0)).toBeCloseTo(wall(5.5) + 0.1, 9);
+
+    // Pausing during the count-in and resuming keeps the same start bar.
+    r.drive.advanceTo(wall(5.5) + 0.5);
+    r.session.pause();
+    r.session.resume();
+    expect(r.session.getState().countInStartBeat).toBe(0);
+  });
+
+  it('is updated on every loop restart', () => {
+    const r = rig(SRC_2BARS);
+    r.session.setLoop({ fromBar: 1, toBar: 1 });
+    r.session.seekBar(1);
+    r.session.start();
+    expect(r.session.getState().countInStartBeat).toBe(0);
+    const loopEnd = r.session.wallSec(8);
+    // Everything is judged before the end beat; the restart waits for the hold after it.
+    r.drive.advanceTo(loopEnd + LOOP_HOLD_SEC + 0.02);
+    let st = r.session.getState();
+    expect(st.pass).toBe(2);
+    expect(st.phase).toBe('countin');
+    expect(st.countInStartBeat).toBe(0);
+    expect(r.session.wallSec(0)).toBeCloseTo(r.clock.now() + 0.1, 1);
+
+    const r2 = rig(SRC_2BARS);
+    r2.session.setLoop({ fromBar: 0, toBar: 1 });
+    r2.session.start();
+    r2.drive.advanceTo(6.1 + LOOP_HOLD_SEC + 0.05);
+    st = r2.session.getState();
+    expect(st.pass).toBe(2);
+    expect(st.countInStartBeat).toBe(-4);
+    expect(st.beat).toBe(-4);
   });
 });
 
@@ -929,12 +1002,13 @@ describe('PracticeSession: loop', () => {
     expect(r.session.getState().loop).toEqual({ fromBar: 0, toBar: 1 });
     r.session.start();
     // Pass 1: everything missed (gated frames) -> all judged before the loop end (beat 8 at 6.1).
-    r.drive.advanceTo(6.05);
+    // The restart still waits LOOP_HOLD_SEC after the end beat so the last verdict can be seen.
+    r.drive.advanceTo(6.1 + LOOP_HOLD_SEC - 0.05);
     let st = r.session.getState();
     expect(st.phase).toBe('playing');
     expect(st.pass).toBe(1);
     expect(st.verdicts.every((v) => v?.kind === 'missed')).toBe(true);
-    r.drive.advanceTo(6.15);
+    r.drive.advanceTo(6.1 + LOOP_HOLD_SEC + 0.05);
     st = r.session.getState();
     expect(st.phase).toBe('countin');
     expect(st.pass).toBe(2);
@@ -943,13 +1017,13 @@ describe('PracticeSession: loop', () => {
     expect(st.verdicts.every((v) => v === undefined)).toBe(true);
     expect(st.hits.every((h) => h === undefined)).toBe(true);
     const restart = r.session.wallSec(0) - 0.1 - 2; // clock time at the restart
-    expect(restart).toBeCloseTo(6.1, 1);
+    expect(restart).toBeCloseTo(6.1 + LOOP_HOLD_SEC, 1);
 
     // Pass 2 with a couple of hits.
     const p2 = r.session.wallSec(0);
     r.drive.strum(p2, C);
     r.drive.strum(p2 + 0.5, C);
-    r.drive.advanceTo(p2 + 4 + 0.05);
+    r.drive.advanceTo(p2 + 4 + LOOP_HOLD_SEC + 0.05);
     st = r.session.getState();
     expect(st.phase).toBe('countin');
     expect(st.pass).toBe(3);
@@ -1000,7 +1074,7 @@ describe('PracticeSession: loop', () => {
     let st = r.session.getState();
     expect(st.pass).toBe(1);
     expect(st.verdicts.slice(4).every((v) => v?.kind === 'missed')).toBe(true);
-    r.drive.advanceTo(loopEnd + 0.05);
+    r.drive.advanceTo(loopEnd + LOOP_HOLD_SEC + 0.05);
     st = r.session.getState();
     expect(st.pass).toBe(2);
     expect(st.phase).toBe('countin');
@@ -1010,6 +1084,7 @@ describe('PracticeSession: loop', () => {
     r.drive.advanceTo(40);
     st = r.session.getState();
     expect(st.phase).not.toBe('ended');
+    // One pass = count-in (2 s) + bar (2 s) + hold (0.6 s) + lead (0.1 s) = 4.7 s.
     expect(st.pass).toBeGreaterThan(5);
     r.session.stop();
     const s = r.ended[0].summary;
@@ -1036,7 +1111,285 @@ describe('PracticeSession: loop', () => {
   });
 });
 
+describe('PracticeSession: pass end, judging tail and pending verdicts', () => {
+  const SRC_8TH_1BAR = 'title: E\ntempo: 120\nstrum: DDDDDDDD\n\nC . . . |';
+  const SRC_8TH_2BARS = 'title: E2\ntempo: 120\nstrum: DDDDDDDD\n\nC . . . | C . . . |';
+  const SRC_4BARS = 'title: Four\ntempo: 120\n\nC . . . | G . . . | C . . . | G . . . |';
+
+  it('the loop restart waits LOOP_HOLD_SEC after the end beat so the last verdict stays visible', () => {
+    const r = rig(SRC_8TH_1BAR);
+    r.session.setLoop({ fromBar: 0, toBar: 0 });
+    r.session.start();
+    for (let i = 0; i < 8; i++) r.drive.strum(wall(i / 2), C);
+    const end = r.session.wallSec(4);
+    // The last strum (beat 3.5) is judged ~0.06 s after the end beat: before the fix the pass
+    // restarted in that same tick and its colour was never shown.
+    r.drive.advanceTo(end + LOOP_HOLD_SEC - 0.05);
+    let st = r.session.getState();
+    expect(st.phase).toBe('playing');
+    expect(st.pass).toBe(1);
+    expect(st.verdicts[7]!.kind).toBe('correct');
+    expect(r.verdicts.length).toBe(8);
+    const lastVerdictAt = r.verdicts[7].at;
+    expect(lastVerdictAt).toBeGreaterThan(end);
+
+    r.drive.advanceTo(end + LOOP_HOLD_SEC + 0.05);
+    st = r.session.getState();
+    expect(st.phase).toBe('countin');
+    expect(st.pass).toBe(2);
+    expect(st.verdicts.every((v) => v === undefined)).toBe(true);
+    const restartAt = r.session.wallSec(st.countInStartBeat) - 0.1;
+    expect(restartAt - end).toBeGreaterThanOrEqual(LOOP_HOLD_SEC - 1e-9);
+    expect(restartAt - lastVerdictAt).toBeGreaterThan(0.5);
+
+    // The pass counters are intact: 8 judged in pass 1, the 8 of pass 2 skipped at stop().
+    r.session.stop();
+    const s = r.ended[0].summary;
+    expect(s.passes).toBe(2);
+    expect(s.total).toBe(16);
+    expect(s.correct).toBe(8);
+    expect(s.skipped).toBe(8);
+    expect(s.score).toBe(st.score);
+  });
+
+  it('a loop restart on the wall-clock margin judges a still-pending strum instead of dropping it', () => {
+    const r = rig(SRC_8TH_2BARS);
+    r.session.setLoop({ fromBar: 0, toBar: 1 });
+    r.session.start();
+    for (let i = 0; i < 15; i++) r.drive.strum(wall(i / 2), C);
+    const lastStrum = wall(7.5) + 0.14; // hit assigned (window is +0.25), verdict needs frames up to +0.44
+    r.drive.strum(lastStrum, C);
+    r.drive.advanceTo(lastStrum + 0.05);
+    expect(r.session.getState().hits[15]).toBeDefined();
+    expect(r.session.getState().verdicts[15]).toBeUndefined();
+    // Frames stall from here on: the pass ends on the wall-clock margin, before the 0.5 s clock
+    // fallback of the pending event would have judged it.
+    r.drive.skipFramesUntil(1000);
+    r.drive.advanceTo(wall(8) + PASS_MARGIN + 0.02);
+    const st = r.session.getState();
+    expect(st.pass).toBe(2);
+    expect(st.phase).toBe('countin');
+    expect(r.verdicts.length).toBe(16);
+    expect(r.verdicts[15].verdict.eventIndex).toBe(15);
+    expect(r.verdicts[15].verdict.kind).toBe('correct');
+    expect(r.verdicts[15].verdict.timingLabel).toBe('good');
+    expect(r.verdicts[15].at).toBeCloseTo(wall(8) + PASS_MARGIN, 1);
+
+    r.session.stop();
+    const s = r.ended[0].summary;
+    expect(s.total).toBe(32); // 16 judged in pass 1 + 16 skipped in pass 2
+    expect(s.correct).toBe(16);
+    expect(s.skipped).toBe(16);
+    expect(s.correct + s.wrong + s.missed + s.skipped).toBe(s.total);
+  });
+
+  it('a pending verdict of the previous bar is decided at pause() and survives resume()', () => {
+    const r = rig(SRC_8TH_2BARS);
+    r.session.start();
+    for (let i = 0; i < 7; i++) r.drive.strum(wall(i / 2), C);
+    r.drive.strum(wall(3.5) + 0.12, C); // last strum of bar 0, slightly late: window open into bar 1
+    r.drive.advanceTo(wall(4) + 0.1);
+    let st = r.session.getState();
+    expect(st.hits[7]).toBeDefined();
+    expect(st.verdicts[7]).toBeUndefined();
+
+    r.session.pause();
+    st = r.session.getState();
+    expect(st.phase).toBe('paused');
+    expect(st.verdicts[7]!.kind).toBe('correct');
+    expect(st.verdicts[7]!.timingLabel).toBe('good');
+    expect(r.verdicts.length).toBe(8);
+    expect(st.streak).toBe(8);
+    const scoreBar0 = st.score;
+    expect(scoreBar0).toBe(4 * 110 + 3 * 121 + 110);
+
+    r.session.resume();
+    st = r.session.getState();
+    expect(st.phase).toBe('countin');
+    expect(st.beat).toBe(0);
+    expect(st.verdicts.slice(0, 8).every((v) => v!.kind === 'correct')).toBe(true);
+    expect(st.verdicts.slice(8).every((v) => v === undefined)).toBe(true);
+    expect(st.score).toBe(scoreBar0);
+    expect(st.streak).toBe(8);
+
+    // Bar 1 played perfectly: nothing ends up skipped.
+    const p = r.session.wallSec(4);
+    for (let i = 0; i < 8; i++) r.drive.strum(p + i * 0.25, C);
+    r.drive.advanceTo(r.session.wallSec(8) + PASS_MARGIN + 0.02);
+    const s = r.session.getState().summary!;
+    expect(r.ended[0].reason).toBe('finished');
+    expect(s.total).toBe(16);
+    expect(s.correct).toBe(16);
+    expect(s.skipped).toBe(0);
+    expect(s.bestStreak).toBe(16);
+  });
+
+  it('pausing in the judging tail of the last bar and resuming ends the song instead of replaying the bar', () => {
+    const r = rig(SRC_2BARS);
+    r.session.start();
+    for (let i = 0; i < 4; i++) r.drive.strum(wall(i), C);
+    for (let i = 4; i < 8; i++) r.drive.strum(wall(i), G);
+    r.drive.advanceTo(wall(8.4));
+    let st = r.session.getState();
+    expect(st.phase).toBe('playing');
+    expect(st.verdicts.every((v) => v?.kind === 'correct')).toBe(true);
+    const score = st.score;
+    expect(score).toBe(4 * 110 + 4 * 121);
+
+    r.session.pause();
+    expect(r.session.getState().phase).toBe('paused');
+    r.session.resume();
+    st = r.session.getState();
+    expect(st.phase).toBe('ended');
+    expect(r.ended.length).toBe(1);
+    expect(r.ended[0].reason).toBe('finished');
+    expect(st.verdicts.every((v) => v?.kind === 'correct')).toBe(true);
+    const s = r.ended[0].summary;
+    expect(s.total).toBe(8);
+    expect(s.correct).toBe(8);
+    expect(s.score).toBe(score);
+    expect(s.passes).toBe(1);
+    expect(r.phases).toEqual(['countin', 'playing', 'paused', 'ended']);
+  });
+
+  it('pausing in the judging tail of a loop pass closes the pass on resume (pending strum judged, then count-in)', () => {
+    const r = rig(SRC_4BARS);
+    r.session.setLoop({ fromBar: 0, toBar: 1 });
+    r.session.start();
+    for (let i = 0; i < 4; i++) r.drive.strum(wall(i), C);
+    for (let i = 4; i < 7; i++) r.drive.strum(wall(i), G);
+    r.drive.strum(wall(7) + 0.24, G); // late but inside the window: verdict pending past the loop end
+    r.drive.advanceTo(wall(8.04));
+    let st = r.session.getState();
+    expect(st.phase).toBe('playing');
+    expect(st.hits[7]).toBeDefined();
+    expect(st.verdicts[7]).toBeUndefined();
+
+    r.session.pause();
+    st = r.session.getState();
+    expect(st.phase).toBe('paused');
+    expect(st.verdicts[7]!.kind).toBe('correct');
+    expect(st.verdicts.slice(0, 8).every((v) => v!.kind === 'correct')).toBe(true);
+
+    r.session.resume();
+    st = r.session.getState();
+    expect(st.phase).toBe('countin');
+    expect(st.pass).toBe(2);
+    expect(st.beat).toBe(-4);
+    expect(st.countInStartBeat).toBe(-4);
+    expect(st.countInBeatsLeft).toBe(4);
+    expect(st.verdicts.every((v) => v === undefined)).toBe(true);
+    expect(st.streak).toBe(8);
+    expect(r.phases).toEqual(['countin', 'playing', 'paused', 'countin']);
+
+    // Pass 2 counts in over bar 0 and then plays inside the loop (no second count-in at bar 2).
+    r.drive.advanceTo(r.session.wallSec(0) + 0.05);
+    expect(r.session.getState().phase).toBe('playing');
+    expect(r.phases).toEqual(['countin', 'playing', 'paused', 'countin', 'playing']);
+    r.session.stop();
+    const s = r.ended[0].summary;
+    expect(s.passes).toBe(2);
+    expect(s.total).toBe(16);
+    expect(s.correct).toBe(8);
+    expect(s.skipped).toBe(8);
+    expect(s.bestStreak).toBe(8);
+  });
+
+  it('seekBar while paused moves the resume position after a pause in the tail', () => {
+    const r = rig(SRC_2BARS);
+    r.session.start();
+    r.drive.advanceTo(wall(8.2));
+    r.session.pause();
+    r.session.seekBar(1);
+    r.session.resume();
+    const st = r.session.getState();
+    expect(st.phase).toBe('countin');
+    expect(st.beat).toBe(0);
+    expect(st.verdicts.slice(0, 4).every((v) => v?.kind === 'missed')).toBe(true);
+    expect(st.verdicts.slice(4).every((v) => v === undefined)).toBe(true);
+  });
+
+  it('bestStreak is rebuilt from the surviving verdicts when a seek clears them', () => {
+    const r = rig(SRC_2BARS);
+    r.session.start();
+    for (let i = 0; i < 4; i++) r.drive.strum(wall(i), C);
+    r.drive.advanceTo(wall(6));
+    r.session.pause();
+    r.session.seekBar(0);
+    expect(r.session.getState().streak).toBe(0);
+    r.session.stop();
+    const s = r.ended[0].summary;
+    expect(s.correct).toBe(0);
+    expect(s.skipped).toBe(8);
+    expect(s.score).toBe(0);
+    expect(s.bestStreak).toBe(0);
+  });
+
+  it('bestStreak keeps the best of the completed passes and recomputes only the current one', () => {
+    const r = rig(SRC_8C);
+    r.session.setLoop({ fromBar: 0, toBar: 1 });
+    r.session.start();
+    for (let i = 0; i < 8; i++) r.drive.strum(wall(i), C);
+    r.drive.advanceTo(wall(8) + LOOP_HOLD_SEC + 0.05);
+    let st = r.session.getState();
+    expect(st.pass).toBe(2);
+    expect(st.streak).toBe(8);
+    const p2 = r.session.wallSec(0);
+    r.drive.strum(p2, C);
+    r.drive.strum(p2 + 0.5, C);
+    r.drive.advanceTo(p2 + 0.95); // both judged, event 2 (at p2 + 1) not yet missed
+    st = r.session.getState();
+    expect(st.streak).toBe(10);
+    r.session.pause();
+    r.session.seekBar(0);
+    st = r.session.getState();
+    expect(st.streak).toBe(8);
+    r.session.stop();
+    const s = r.ended[0].summary;
+    expect(s.correct).toBe(8);
+    expect(s.bestStreak).toBe(8);
+    // A resume that keeps the earlier bar of the pass keeps its streak too.
+    const r2 = rig(SRC_2BARS);
+    r2.session.start();
+    for (let i = 0; i < 4; i++) r2.drive.strum(wall(i), C);
+    r2.drive.advanceTo(wall(6));
+    r2.session.pause();
+    r2.session.resume();
+    r2.session.stop();
+    expect(r2.ended[0].summary.bestStreak).toBe(4);
+  });
+});
+
 describe('PracticeSession: metronome', () => {
+  it('the first count-in click is scheduled synchronously by start(), resume() and the loop restart', () => {
+    const r = rig(SRC_2BARS, { metronome: true }, { clicks: true });
+    r.session.start();
+    // Before any update(): the click at the anchor, scheduled with the full 0.1 s lead.
+    expect(r.clicks!.scheduled.length).toBe(1);
+    expect(r.clicks!.scheduled[0]).toEqual({ t: expect.closeTo(0.1, 9), accent: true, at: 0 });
+
+    r.drive.advanceTo(wall(5.6));
+    r.session.pause();
+    const n = r.clicks!.scheduled.length;
+    r.session.resume();
+    expect(r.clicks!.scheduled.length).toBe(n + 1);
+    const first = r.clicks!.scheduled[n];
+    expect(first.at).toBeCloseTo(wall(5.6), 9);
+    expect(first.t - first.at).toBeCloseTo(0.1, 9);
+    expect(first.accent).toBe(true);
+
+    const r2 = rig(SRC_2BARS, { metronome: true }, { clicks: true });
+    r2.session.setLoop({ fromBar: 0, toBar: 1 });
+    r2.session.start();
+    r2.drive.advanceTo(6.1 + LOOP_HOLD_SEC + 0.05);
+    const st = r2.session.getState();
+    expect(st.pass).toBe(2);
+    const anchor = r2.session.wallSec(st.countInStartBeat);
+    const click = r2.clicks!.scheduled.find((c) => Math.abs(c.t - anchor) < 1e-9)!;
+    expect(click).toBeDefined();
+    expect(click.t - click.at).toBeCloseTo(0.1, 9);
+  });
+
   it('schedules every integer beat up to 0.5 s ahead, accented on the count-in and bar downbeats', () => {
     const r = rig(SRC_2BARS, { metronome: true }, { clicks: true });
     r.session.start();

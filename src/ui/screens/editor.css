@@ -215,6 +215,131 @@
   color: var(--text);
 }
 
+/* ------------------------------------------------------------------ "Pista de audio" panel */
+
+.editor [hidden] {
+  display: none !important;
+}
+
+.editor .audio-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.editor .audio-empty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.editor .audio-track {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.editor .audio-info {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+
+.editor .audio-icon {
+  color: var(--accent);
+  font-size: 18px;
+}
+
+.editor .audio-name {
+  font-weight: 600;
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor .audio-wave {
+  position: relative;
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+  background: #12151c;
+}
+
+.editor .audio-wave-canvas {
+  display: block;
+  width: 100%;
+  height: 150px;
+}
+
+.editor .audio-wave-hint {
+  font-size: 12px;
+}
+
+.editor .audio-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.editor .audio-btn-group {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.editor .audio-offset-label,
+.editor .audio-volume-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.editor .audio-offset-input {
+  width: 7.5em;
+  min-height: 36px;
+  padding: 6px 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.editor .audio-volume {
+  width: 140px;
+  min-height: 36px;
+}
+
+.editor .audio-volume-value {
+  min-width: 3.5em;
+  font-variant-numeric: tabular-nums;
+}
+
+.editor .audio-detect-result {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.editor .audio-status {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.editor .audio-status.is-error {
+  color: var(--bad);
+}
+
+.editor .audio-warn {
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(250, 204, 21, 0.4);
+  background: rgba(250, 204, 21, 0.1);
+  color: var(--warn);
+  font-size: 13px;
+}
+
 @media (max-width: 900px) {
   .editor .editor-body {
     grid-template-columns: minmax(0, 1fr);
@@ -222,5 +347,9 @@
 
   .editor .editor-source {
     min-height: 45vh;
+  }
+
+  .editor .audio-wave-canvas {
+    height: 120px;
   }
 }

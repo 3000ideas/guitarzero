@@ -47,6 +47,14 @@ export const MIC_CAPTURE_INTERVAL_MS = 40;
 
 export type MicFrameCallback = (frame: Float32Array, timeSec: number) => void;
 
+export interface MicStartOptions {
+  /**
+   * Ask the browser for echo cancellation (default false: the raw signal is best for chord
+   * detection). Useful when the backing track plays through speakers (settings.echoCancellation).
+   */
+  echoCancellation?: boolean;
+}
+
 /** AnalyserNode accepts powers of two in this range. */
 const MIN_FFT_SIZE = 32;
 const MAX_FFT_SIZE = 32768;
@@ -62,6 +70,8 @@ export class MicInput {
   private starting: Promise<void> | null = null;
   /** Bumped by stop(): a start() that was awaiting getUserMedia when stop() ran discards its stream. */
   private generation = 0;
+  /** echoCancellation the running stream was requested with (to restart when it changes). */
+  private echoCancellation = false;
   private readonly onTrackEnded = (): void => this.stop();
 
   constructor(fftSize = 8192) {
@@ -79,29 +89,32 @@ export class MicInput {
   /**
    * Requests the microphone and starts the capture loop. `deviceId` is passed as an "ideal"
    * (bare) constraint, so an unknown id falls back to the default device instead of failing.
-   * Rejects with a MicError. Calling it while already running with the same device is a no-op;
-   * with a different device the input is restarted on the new one.
+   * `opts.echoCancellation` (default false) is passed to getUserMedia as is. Rejects with a
+   * MicError. Calling it while already running with the same device and options is a no-op;
+   * with a different device or echoCancellation the input is restarted.
    */
-  start(deviceId?: string): Promise<void> {
+  start(deviceId?: string, opts: MicStartOptions = {}): Promise<void> {
+    const echoCancellation = opts.echoCancellation ?? false;
     if (this.starting) return this.starting;
     if (this.isRunning()) {
       const current = this.getTrackSettings()?.deviceId;
-      if (!deviceId || deviceId === current) return Promise.resolve();
+      const sameDevice = !deviceId || deviceId === current;
+      if (sameDevice && echoCancellation === this.echoCancellation) return Promise.resolve();
       this.stop();
     }
-    this.starting = this.doStart(deviceId).finally(() => {
+    this.starting = this.doStart(deviceId, echoCancellation).finally(() => {
       this.starting = null;
     });
     return this.starting;
   }
 
-  private async doStart(deviceId?: string): Promise<void> {
+  private async doStart(deviceId: string | undefined, echoCancellation: boolean): Promise<void> {
     if (typeof window !== 'undefined' && !window.isSecureContext) throw new MicError('insecure');
     const mediaDevices = typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined;
     if (!mediaDevices || typeof mediaDevices.getUserMedia !== 'function') throw new MicError('unsupported');
 
     const audio: MediaTrackConstraints = {
-      echoCancellation: false,
+      echoCancellation,
       noiseSuppression: false,
       autoGainControl: false,
     };
@@ -138,6 +151,7 @@ export class MicInput {
     this.stream = stream;
     this.sourceNode = sourceNode;
     this.analyser = analyser;
+    this.echoCancellation = echoCancellation;
     for (const track of stream.getAudioTracks()) track.addEventListener('ended', this.onTrackEnded);
     this.timer = setInterval(() => this.capture(), MIC_CAPTURE_INTERVAL_MS);
   }

@@ -1,5 +1,5 @@
 /**
- * Editor screen (`#/edit/:id`, SPEC.md section 8).
+ * Editor screen (`#/edit/:id`, SPEC.md section 8 + section 11 "Pista de audio").
  *
  * A big monospace textarea plus a side panel with: errors and warnings (line + message,
  * click moves the caret to that line), the chords used with mini diagrams (yellow
@@ -8,27 +8,52 @@
  * Autosave: saveSong debounced 500 ms, flushed on unmount. A collapsible <details> "Formato"
  * summarises the song grammar. `#/edit/ex:*` (read-only examples) redirects to the library.
  *
- * `analyzeSource`, `lineRange`, `lineOfOffset` and the help data are pure (testable in Node).
+ * Under the textarea, the "Pista de audio" panel attaches a backing track to the song: the
+ * file goes to IndexedDB (song/audioStore.ts), its metadata (`StoredSong.audio`) to the song.
+ * A WaveformView shows the audio with the beat grid of the current text; the start of bar 1
+ * (`offsetSec`) is adjusted by dragging the marker, with the numeric field and step buttons,
+ * "Marcar inicio" or "Detectar tempo e inicio" (dsp/tempoEstimate.ts, whose "Aplicar tempo"
+ * rewrites the `tempo:` header). A test listen plays the track with metronome clicks on the
+ * grid. Offset and gain changes are saved with a 300 ms debounce.
+ *
+ * `analyzeSource`, `lineRange`, `lineOfOffset`, `rewriteTempoHeader`, `formatTempoEstimate`,
+ * `previewClickTimes` and the help data are pure (testable in Node).
  */
 import './editor.css';
-import type { ChordShape, ParseError, Screen, Song } from '../../types';
+import type { AudioTrackInfo, ChordShape, ParseError, Screen, Song, StoredSong, TempoEstimate } from '../../types';
 import { clear, fmtSeconds, h } from '../dom';
 import { drawChordDiagram } from '../chordDiagram';
+import { WaveformView } from '../waveform';
 import { getChordShape } from '../../music/chords';
 import { parseSong } from '../../song/parser';
 import { songDurationSec } from '../../song/tempo';
 import { isExampleId } from '../../song/examples';
 import { getSong, saveSong } from '../../song/storage';
+import { deleteTrack, getTrack, hasIndexedDb, putTrack } from '../../song/audioStore';
+import { getAudioContext } from '../../audio/context';
+import { BackingTrack } from '../../audio/backing';
+import { Metronome } from '../../audio/metronome';
+import { estimateTempo } from '../../dsp/tempoEstimate';
 
 // ---------------------------------------------------------------- constants
 
 /** Debounce of the autosave after the last keystroke. */
 export const AUTOSAVE_DELAY_MS = 500;
+/** Debounce of the save after an offset / gain change of the backing track. */
+export const AUDIO_SAVE_DELAY_MS = 300;
 /** How long the "Guardado" feedback stays highlighted after pressing Guardar. */
 export const SAVED_FLASH_MS = 1500;
 /** CSS size of a mini chord diagram in the side panel. */
 export const MINI_DIAGRAM_W = 96;
 export const MINI_DIAGRAM_H = 112;
+/** Linear gain of a freshly loaded backing track. */
+export const DEFAULT_TRACK_GAIN = 0.8;
+/** Bars with metronome clicks in "Escuchar con metrónomo" (after the one-bar lead-in). */
+export const PREVIEW_BARS = 8;
+/** Seconds between the click and the start of a test listen. */
+export const PREVIEW_LEAD_SEC = 0.1;
+/** Fine offset steps of the sync row, in seconds. */
+export const OFFSET_STEPS_SEC: readonly number[] = [-0.1, -0.01, 0.01, 0.1];
 
 // ---------------------------------------------------------------- pure helpers
 
@@ -104,6 +129,100 @@ export function issuesSummary(errorCount: number, warningCount: number): string 
   return parts.join(' · ');
 }
 
+/** "96" or "96.5": bpm rounded to a tenth, without a trailing ".0". */
+export function formatBpm(bpm: number): string {
+  const r = Math.round(bpm * 10) / 10;
+  return Number.isInteger(r) ? String(r) : r.toFixed(1);
+}
+
+const TEMPO_HEADER_LINE_RE = /^([ \t]*tempo[ \t]*:[ \t]*)([^\s#]*)(.*)$/i;
+const OTHER_HEADER_LINE_RE = /^[ \t]*(title|artist|time|strum|capo)[ \t]*:/i;
+/** Lines that are not bars: blank, comment, section header, lyric. */
+const NON_BAR_LINE_RE = /^\s*(#|\[|>|$)/;
+
+/**
+ * Returns `source` with its initial `tempo:` header set to `bpm`: the first `tempo:` line
+ * found before the first bar line is rewritten in place (comments and `bpm` suffixes are
+ * kept); when there is none, `tempo: N` is inserted after the leading headers (or at the
+ * top). Later `tempo:` changes between bars are left untouched. Line endings are preserved.
+ * Used by "Aplicar tempo" (SPEC section 11); `applyTempoHeader` is an alias.
+ */
+export function rewriteTempoHeader(source: string, bpm: number): string {
+  const eol = source.includes('\r\n') ? '\r\n' : '\n';
+  const lines = source.split(/\r?\n/);
+  const value = formatBpm(bpm);
+  let insertAt = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const m = TEMPO_HEADER_LINE_RE.exec(line);
+    if (m) {
+      lines[i] = `${m[1]}${value}${m[3]}`;
+      return lines.join(eol);
+    }
+    if (OTHER_HEADER_LINE_RE.test(line)) {
+      insertAt = i + 1;
+      continue;
+    }
+    if (NON_BAR_LINE_RE.test(line)) continue;
+    break; // first bar line: the header block is over
+  }
+  lines.splice(insertAt, 0, `tempo: ${value}`);
+  return lines.join(eol);
+}
+
+/** Alias of `rewriteTempoHeader` (the "Aplicar tempo" action). */
+export const applyTempoHeader = rewriteTempoHeader;
+
+export type ConfidenceLabel = 'alta' | 'media' | 'baja';
+
+/** ≥ 0.6 alta, ≥ 0.3 media, otherwise baja. */
+export function confidenceLabel(confidence: number): ConfidenceLabel {
+  if (confidence >= 0.6) return 'alta';
+  if (confidence >= 0.3) return 'media';
+  return 'baja';
+}
+
+/** "≈ 96 BPM (confianza alta), inicio 1.32 s". */
+export function formatTempoEstimate(e: Pick<TempoEstimate, 'bpm' | 'confidence' | 'firstBeatSec'>): string {
+  return `≈ ${formatBpm(e.bpm)} BPM (confianza ${confidenceLabel(e.confidence)}), inicio ${e.firstBeatSec.toFixed(2)} s`;
+}
+
+/** "3.4 MB" (always in MB, one decimal). */
+export function formatMegabytes(bytes: number): string {
+  const mb = Math.max(0, bytes) / 1048576;
+  return `${mb.toFixed(1)} MB`;
+}
+
+/** Start of the test listen: one bar before the offset when that is ≥ 0, otherwise 0. */
+export function previewStartSec(offsetSec: number, bpm: number, beatsPerBar: number): number {
+  if (!(bpm > 0) || !(beatsPerBar > 0)) return Math.max(0, offsetSec);
+  const start = offsetSec - (beatsPerBar * 60) / bpm;
+  return start >= 0 ? start : 0;
+}
+
+export interface PreviewClick {
+  /** Audio time of the click. */
+  sec: number;
+  /** First beat of a bar. */
+  accent: boolean;
+}
+
+/**
+ * Metronome clicks of a test listen that starts at `fromSec`: every grid beat from the lead-in
+ * bar (beat -beatsPerBar) to the end of bar `bars`, keeping only those at or after `fromSec`.
+ */
+export function previewClickTimes(offsetSec: number, bpm: number, beatsPerBar: number, fromSec: number, bars: number = PREVIEW_BARS): PreviewClick[] {
+  const out: PreviewClick[] = [];
+  if (!(bpm > 0) || !(beatsPerBar > 0) || !(bars > 0)) return out;
+  const beatSec = 60 / bpm;
+  for (let k = -beatsPerBar; k < bars * beatsPerBar; k++) {
+    const sec = offsetSec + k * beatSec;
+    if (sec < fromSec - 1e-6) continue;
+    out.push({ sec, accent: ((k % beatsPerBar) + beatsPerBar) % beatsPerBar === 0 });
+  }
+  return out;
+}
+
 /** Short example shown inside the "Formato" help. */
 export const FORMAT_EXAMPLE = `title: Mi canción
 artist: Yo
@@ -147,6 +266,17 @@ export const FORMAT_HELP_ROWS: ReadonlyArray<readonly [string, string]> = [
 ];
 
 // ---------------------------------------------------------------- DOM helpers
+
+const noop = (): void => {};
+
+function clamp(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
+function errorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message.trim() !== '') return err.message;
+  return fallback;
+}
 
 function drawMini(canvas: HTMLCanvasElement, entry: ChordEntry): void {
   const dpr = Math.max(1, window.devicePixelRatio || 1);
@@ -206,10 +336,18 @@ function formatHelp(): HTMLElement {
 
 type SaveStatus = 'saved' | 'dirty' | 'flash';
 
+type PreviewMode = 'metronome' | 'free';
+
+interface Preview {
+  mode: PreviewMode;
+  /** AudioContext time at which `fromSec` of the audio starts playing. */
+  whenWall: number;
+  fromSec: number;
+}
+
 export const editorScreen: Screen = {
   mount(root: HTMLElement, params: Record<string, string>): () => void {
     const id = params.id ?? '';
-    const noop = (): void => {};
     if (id === '' || isExampleId(id)) {
       location.replace('#/');
       return noop;
@@ -226,6 +364,20 @@ export const editorScreen: Screen = {
     let saveTimer: number | null = null;
     let flashTimer: number | null = null;
     let lastChordKey = '';
+    let unmounted = false;
+
+    // Backing track state (metadata lives in the song; the blob in IndexedDB).
+    let audio: AudioTrackInfo | null = stored.audio ?? null;
+    let audioDirty = false;
+    let audioSaveTimer: number | null = null;
+    let backing: BackingTrack | null = null;
+    let sampleRate = 0;
+    let lastSeekSec = 0;
+    let preview: Preview | null = null;
+    let previewRaf = 0;
+    let estimate: TempoEstimate | null = null;
+    let busy = false;
+    let metronome: Metronome | null = null;
 
     // ------------------------------------------------------------ elements
     const textarea = h('textarea', {
@@ -254,6 +406,108 @@ export const editorScreen: Screen = {
     const issuesList = h('div.issues');
     const chordsHeading = h('div.card-title', null, 'Acordes');
     const chordGrid = h('div.chord-grid');
+
+    // Audio panel elements
+    const fileInput = h('input', { type: 'file', accept: 'audio/*', hidden: true, 'aria-label': 'Archivo de audio', onchange: () => void onFileChosen() });
+    const loadBtn = h('button.btn.btn-primary', { type: 'button', onclick: () => fileInput.click() }, 'Cargar audio…') as HTMLButtonElement;
+    const emptyView = h(
+      'div.audio-empty',
+      null,
+      loadBtn,
+      h('p.muted.small', null, 'MP3, WAV, OGG, M4A. Se guarda en este navegador, no se sube a ningún sitio.'),
+    );
+
+    const trackName = h('span.audio-name');
+    const trackMeta = h('span.audio-meta.muted.small');
+    const replaceBtn = h('button.btn.btn-sm', { type: 'button', title: 'Sustituir el archivo de audio', onclick: () => fileInput.click() }, 'Cambiar…') as HTMLButtonElement;
+    const removeBtn = h('button.btn.btn-sm.btn-danger', { type: 'button', title: 'Quitar la pista de esta canción', onclick: () => void removeTrack() }, 'Quitar') as HTMLButtonElement;
+    const trackInfo = h('div.audio-info', null, h('span.audio-icon', null, '♪'), trackName, trackMeta, h('span.spacer'), replaceBtn, removeBtn);
+
+    const waveCanvas = h('canvas', { class: 'audio-wave-canvas', 'aria-label': 'Forma de onda de la pista' });
+    const waveWrap = h('div.audio-wave', null, waveCanvas);
+    const waveHint = h(
+      'div.audio-wave-hint.muted.small',
+      null,
+      'Clic: situar el cursor · Mayús+clic o arrastrar la marca: fijar el inicio · Rueda: zoom · Alt+arrastrar: desplazar',
+    );
+
+    const offsetInput = h('input', { type: 'number', step: '0.01', class: 'audio-offset-input', 'aria-label': 'Inicio del compás 1 (s)', inputMode: 'decimal' });
+    offsetInput.addEventListener('change', () => {
+      const v = Number(offsetInput.value.replace(',', '.'));
+      if (Number.isFinite(v)) setOffset(v);
+      else if (audio) offsetInput.value = audio.offsetSec.toFixed(2);
+    });
+    const stepButtons = OFFSET_STEPS_SEC.map(
+      (d) =>
+        h(
+          'button.btn.btn-sm',
+          { type: 'button', title: `${d > 0 ? 'Retrasar' : 'Adelantar'} el inicio ${Math.abs(d)} s`, onclick: () => nudgeOffset(d) },
+          `${d > 0 ? '+' : '−'}${Math.abs(d)}`,
+        ) as HTMLButtonElement,
+    );
+    const minusBeatBtn = h('button.btn.btn-sm', { type: 'button', title: 'Un pulso antes (60 / tempo)', onclick: () => nudgeOffset(-beatSec()) }, '−1 pulso') as HTMLButtonElement;
+    const plusBeatBtn = h('button.btn.btn-sm', { type: 'button', title: 'Un pulso después (60 / tempo)', onclick: () => nudgeOffset(beatSec()) }, '+1 pulso') as HTMLButtonElement;
+    const markBtn = h(
+      'button.btn.btn-sm',
+      { type: 'button', title: 'Fija el inicio en la posición actual (mientras suena) o en la del último clic en la forma de onda', onclick: () => markStart() },
+      'Marcar inicio',
+    ) as HTMLButtonElement;
+    const syncRow = h(
+      'div.audio-row',
+      null,
+      h('label.audio-offset-label', null, 'Inicio del compás 1 (s)', offsetInput),
+      h('div.audio-btn-group', null, ...stepButtons),
+      h('div.audio-btn-group', null, minusBeatBtn, plusBeatBtn),
+      markBtn,
+    );
+
+    const detectBtn = h('button.btn.btn-sm', { type: 'button', onclick: () => void detect() }, 'Detectar tempo e inicio') as HTMLButtonElement;
+    const detectResult = h('span.audio-detect-result');
+    const applyTempoBtn = h(
+      'button.btn.btn-sm',
+      { type: 'button', hidden: true, title: 'Reescribe (o inserta) la cabecera tempo: del texto', onclick: () => applyTempo() },
+      'Aplicar tempo',
+    ) as HTMLButtonElement;
+    const applyStartBtn = h(
+      'button.btn.btn-sm',
+      { type: 'button', hidden: true, title: 'Fija el inicio del compás 1 en el primer pulso detectado', onclick: () => applyStart() },
+      'Aplicar inicio',
+    ) as HTMLButtonElement;
+    const detectRow = h('div.audio-row', null, detectBtn, detectResult, applyTempoBtn, applyStartBtn);
+    const constantTempoWarn = h('div.audio-warn', { hidden: true }, 'La pista solo se sincroniza con tempo constante: el texto cambia de tempo entre compases.');
+
+    const playMetroBtn = h(
+      'button.btn.btn-sm',
+      { type: 'button', title: 'Reproduce desde un compás antes del inicio con clics en cada pulso', onclick: () => startPreview('metronome') },
+      '▶ Escuchar con metrónomo',
+    ) as HTMLButtonElement;
+    const playHereBtn = h(
+      'button.btn.btn-sm',
+      { type: 'button', title: 'Reproduce desde el último clic en la forma de onda, sin clics', onclick: () => startPreview('free') },
+      '▶ Desde aquí',
+    ) as HTMLButtonElement;
+    const stopBtn = h('button.btn.btn-sm', { type: 'button', disabled: true, onclick: () => stopPreview() }, '■ Parar') as HTMLButtonElement;
+    const volumeInput = h('input', { type: 'range', min: '0', max: '100', step: '1', class: 'audio-volume', 'aria-label': 'Volumen de la pista' });
+    const volumeValue = h('span.audio-volume-value.muted.small', null, '80 %');
+    volumeInput.addEventListener('input', () => onVolumeInput());
+    const previewRow = h(
+      'div.audio-row',
+      null,
+      playMetroBtn,
+      playHereBtn,
+      stopBtn,
+      h('label.audio-volume-label', null, 'Volumen', volumeInput, volumeValue),
+    );
+
+    const audioStatus = h('div.audio-status', { hidden: true });
+    const storageNote = h('div.audio-warn', { hidden: true });
+    const trackView = h('div.audio-track', { hidden: true }, trackInfo, waveWrap, waveHint, syncRow, detectRow, constantTempoWarn, previewRow);
+    const audioPanel = h('section.card.audio-panel', null, h('div.card-title', null, 'Pista de audio'), fileInput, emptyView, trackView, audioStatus, storageNote);
+
+    const waveform = new WaveformView(waveCanvas, {
+      onOffsetChange: (sec) => setOffset(sec),
+      onSeek: (sec) => onSeek(sec),
+    });
 
     // ------------------------------------------------------------ helpers
     function displayTitle(title: string): string {
@@ -338,16 +592,26 @@ export const editorScreen: Screen = {
       renderChords();
     }
 
-    /** Persists pending changes now. Returns true when something was written. */
+    /** The song as it should be persisted right now (text + backing track metadata). */
+    function currentStored(): StoredSong {
+      const { song } = analysis;
+      return { id, title: song.title, artist: song.artist, source: textarea.value, updatedAt: 0, audio };
+    }
+
+    /** Persists pending changes (text and/or audio metadata) now. Returns true when something was written. */
     function flush(): boolean {
       if (saveTimer !== null) {
         clearTimeout(saveTimer);
         saveTimer = null;
       }
-      if (!dirty) return false;
-      const { song } = analysis;
-      saveSong({ id, title: song.title, artist: song.artist, source: textarea.value, updatedAt: 0 });
+      if (audioSaveTimer !== null) {
+        clearTimeout(audioSaveTimer);
+        audioSaveTimer = null;
+      }
+      if (!dirty && !audioDirty) return false;
+      saveSong(currentStored());
       dirty = false;
+      audioDirty = false;
       setStatus('saved');
       return true;
     }
@@ -357,16 +621,28 @@ export const editorScreen: Screen = {
       saveTimer = window.setTimeout(() => {
         saveTimer = null;
         flush();
+        syncGrid();
       }, AUTOSAVE_DELAY_MS);
+    }
+
+    function scheduleAudioSave(): void {
+      audioDirty = true;
+      setStatus('dirty');
+      if (audioSaveTimer !== null) clearTimeout(audioSaveTimer);
+      audioSaveTimer = window.setTimeout(() => {
+        audioSaveTimer = null;
+        flush();
+      }, AUDIO_SAVE_DELAY_MS);
     }
 
     function saveWithFeedback(): void {
       flush();
+      syncGrid();
       setStatus('flash');
       if (flashTimer !== null) clearTimeout(flashTimer);
       flashTimer = window.setTimeout(() => {
         flashTimer = null;
-        if (!dirty) setStatus('saved');
+        if (!dirty && !audioDirty) setStatus('saved');
       }, SAVED_FLASH_MS);
     }
 
@@ -391,6 +667,336 @@ export const editorScreen: Screen = {
     const onVisibility = (): void => {
       if (document.visibilityState === 'hidden') flush();
     };
+
+    // ------------------------------------------------------------ audio panel
+
+    function bpm(): number {
+      return analysis.song.tempo;
+    }
+
+    function beatsPerBar(): number {
+      return analysis.song.timeSignature.beatsPerBar;
+    }
+
+    function beatSec(): number {
+      const b = bpm();
+      return b > 0 ? 60 / b : 0;
+    }
+
+    function setAudioStatus(text: string, isError = false): void {
+      audioStatus.textContent = text;
+      audioStatus.hidden = text === '';
+      audioStatus.classList.toggle('is-error', isError);
+    }
+
+    /** Beat grid of the current text over the waveform; also toggles the constant-tempo warning. */
+    function syncGrid(): void {
+      if (!audio) {
+        waveform.setGrid(null);
+        constantTempoWarn.hidden = true;
+        return;
+      }
+      waveform.setGrid({ bpm: bpm(), beatsPerBar: beatsPerBar(), offsetSec: audio.offsetSec, totalBeats: analysis.song.totalBeats });
+      constantTempoWarn.hidden = analysis.song.tempoSegments.length <= 1;
+    }
+
+    function renderTrackInfo(): void {
+      const has = audio !== null;
+      emptyView.hidden = has;
+      trackView.hidden = !has;
+      if (!audio) return;
+      trackName.textContent = audio.name || 'audio';
+      trackName.title = audio.name;
+      trackMeta.textContent = `${fmtSeconds(audio.durationSec)} · ${formatMegabytes(audio.size)}`;
+      offsetInput.value = audio.offsetSec.toFixed(2);
+      const pct = Math.round(clamp(audio.gain, 0, 1) * 100);
+      volumeInput.value = String(pct);
+      volumeValue.textContent = `${pct} %`;
+    }
+
+    function updateButtons(): void {
+      const ready = backing !== null && !busy;
+      loadBtn.disabled = busy;
+      replaceBtn.disabled = busy;
+      removeBtn.disabled = busy;
+      for (const b of [playMetroBtn, playHereBtn, detectBtn, markBtn, minusBeatBtn, plusBeatBtn, ...stepButtons]) b.disabled = !ready;
+      stopBtn.disabled = preview === null;
+      applyTempoBtn.disabled = busy;
+      applyStartBtn.disabled = busy;
+    }
+
+    function hideEstimate(): void {
+      estimate = null;
+      detectResult.textContent = '';
+      applyTempoBtn.hidden = true;
+      applyStartBtn.hidden = true;
+    }
+
+    function setOffset(sec: number): void {
+      if (!audio) return;
+      const limit = Math.max(audio.durationSec, 0);
+      const v = Math.round(clamp(sec, -limit, limit) * 1000) / 1000;
+      offsetInput.value = v.toFixed(2);
+      if (v === audio.offsetSec) return;
+      audio = { ...audio, offsetSec: v };
+      syncGrid();
+      scheduleAudioSave();
+    }
+
+    function nudgeOffset(deltaSec: number): void {
+      if (!audio || !Number.isFinite(deltaSec)) return;
+      setOffset(audio.offsetSec + deltaSec);
+    }
+
+    function currentPreviewSec(): number | null {
+      if (!preview) return null;
+      const ctx = getAudioContext();
+      return Math.max(preview.fromSec, preview.fromSec + (ctx.currentTime - preview.whenWall));
+    }
+
+    function markStart(): void {
+      if (!audio) return;
+      const sec = currentPreviewSec();
+      setOffset(sec === null ? lastSeekSec : sec);
+    }
+
+    function onSeek(sec: number): void {
+      lastSeekSec = sec;
+      if (preview) startPreview('free');
+      else waveform.setPlayhead(sec);
+    }
+
+    function onVolumeInput(): void {
+      if (!audio) return;
+      const pct = clamp(Math.round(Number(volumeInput.value)), 0, 100);
+      if (!Number.isFinite(pct)) return;
+      volumeValue.textContent = `${pct} %`;
+      const gain = pct / 100;
+      if (gain === audio.gain) return;
+      audio = { ...audio, gain };
+      backing?.setGain(gain);
+      scheduleAudioSave();
+    }
+
+    /** Decodes `blob` into a new BackingTrack (the caller commits or disposes it). */
+    async function decode(blob: Blob): Promise<{ track: BackingTrack; durationSec: number; sampleRate: number }> {
+      const track = new BackingTrack(getAudioContext());
+      try {
+        const info = await track.load(blob);
+        return { track, durationSec: info.durationSec, sampleRate: info.sampleRate };
+      } catch (err) {
+        track.dispose();
+        throw err;
+      }
+    }
+
+    function commitTrack(track: BackingTrack, rate: number): void {
+      stopPreview();
+      backing?.dispose();
+      backing = track;
+      sampleRate = rate;
+      track.setGain(audio ? audio.gain : DEFAULT_TRACK_GAIN);
+      waveform.setAudio(track.monoSamples(), rate);
+      lastSeekSec = 0;
+      waveform.setPlayhead(null);
+    }
+
+    async function loadStoredTrack(): Promise<void> {
+      if (!audio) return;
+      busy = true;
+      updateButtons();
+      setAudioStatus('Cargando pista…');
+      try {
+        const blob = await getTrack(id);
+        if (unmounted) return;
+        if (!blob) {
+          setAudioStatus('No se encontró el archivo de audio en este navegador (¿otro navegador o datos borrados?). Vuelve a cargarlo con «Cambiar…» o quita la pista.', true);
+          return;
+        }
+        const { track, durationSec, sampleRate: rate } = await decode(blob);
+        if (unmounted) {
+          track.dispose();
+          return;
+        }
+        commitTrack(track, rate);
+        if (Math.abs(durationSec - audio.durationSec) > 0.01) {
+          audio = { ...audio, durationSec };
+          scheduleAudioSave();
+        }
+        renderTrackInfo();
+        syncGrid();
+        setAudioStatus('');
+      } catch (err) {
+        if (!unmounted) setAudioStatus(errorMessage(err, 'No se pudo cargar la pista de audio'), true);
+      } finally {
+        busy = false;
+        if (!unmounted) updateButtons();
+      }
+    }
+
+    async function onFileChosen(): Promise<void> {
+      const file = fileInput.files && fileInput.files[0];
+      fileInput.value = '';
+      if (!file || busy) return;
+      busy = true;
+      updateButtons();
+      setAudioStatus(`Cargando «${file.name}»…`);
+      let decoded: { track: BackingTrack; durationSec: number; sampleRate: number } | null = null;
+      try {
+        try {
+          decoded = await decode(file);
+        } catch {
+          throw new Error('Formato de audio no soportado o archivo dañado (prueba con MP3, WAV, OGG o M4A)');
+        }
+        if (unmounted) return;
+        try {
+          await putTrack(id, file, { name: file.name, type: file.type, size: file.size });
+        } catch (err) {
+          throw new Error(errorMessage(err, 'No se pudo guardar el audio en este navegador (¿sin espacio?)'));
+        }
+        if (unmounted) return;
+        const previous = audio;
+        audio = {
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          durationSec: decoded.durationSec,
+          offsetSec: previous ? clamp(previous.offsetSec, -decoded.durationSec, decoded.durationSec) : 0,
+          gain: previous ? previous.gain : DEFAULT_TRACK_GAIN,
+        };
+        commitTrack(decoded.track, decoded.sampleRate);
+        decoded = null;
+        hideEstimate();
+        audioDirty = true;
+        flush();
+        renderTrackInfo();
+        syncGrid();
+        setAudioStatus(hasIndexedDb() ? '' : 'Este navegador no permite guardar archivos: la pista se perderá al recargar la página.', !hasIndexedDb());
+      } catch (err) {
+        if (!unmounted) setAudioStatus(errorMessage(err, 'No se pudo cargar el archivo'), true);
+      } finally {
+        decoded?.track.dispose();
+        busy = false;
+        if (!unmounted) updateButtons();
+      }
+    }
+
+    async function removeTrack(): Promise<void> {
+      if (!audio || busy) return;
+      if (!confirm('¿Quitar la pista de audio de esta canción? El archivo se borrará de este navegador.')) return;
+      stopPreview();
+      busy = true;
+      updateButtons();
+      try {
+        await deleteTrack(id);
+      } catch (err) {
+        console.warn('No se pudo borrar la pista de IndexedDB', err);
+      }
+      if (unmounted) return;
+      audio = null;
+      backing?.dispose();
+      backing = null;
+      sampleRate = 0;
+      waveform.setAudio(new Float32Array(0), 44100);
+      hideEstimate();
+      audioDirty = true;
+      flush();
+      renderTrackInfo();
+      syncGrid();
+      setAudioStatus('');
+      busy = false;
+      updateButtons();
+    }
+
+    async function detect(): Promise<void> {
+      if (!backing || busy) return;
+      busy = true;
+      updateButtons();
+      applyTempoBtn.hidden = true;
+      applyStartBtn.hidden = true;
+      detectResult.textContent = 'Analizando…';
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      try {
+        if (unmounted || !backing) return;
+        estimate = estimateTempo(backing.monoSamples(), sampleRate);
+        detectResult.textContent = formatTempoEstimate(estimate);
+        applyTempoBtn.hidden = false;
+        applyStartBtn.hidden = false;
+      } catch (err) {
+        estimate = null;
+        detectResult.textContent = errorMessage(err, 'No se pudo analizar la pista');
+      } finally {
+        busy = false;
+        if (!unmounted) updateButtons();
+      }
+    }
+
+    function applyTempo(): void {
+      if (!estimate) return;
+      const next = rewriteTempoHeader(textarea.value, estimate.bpm);
+      if (next !== textarea.value) {
+        textarea.value = next;
+        onInput();
+      }
+      syncGrid();
+    }
+
+    function applyStart(): void {
+      if (!estimate) return;
+      setOffset(estimate.firstBeatSec);
+    }
+
+    function ensureMetronome(): Metronome {
+      if (!metronome) metronome = new Metronome(getAudioContext());
+      return metronome;
+    }
+
+    function startPreview(mode: PreviewMode): void {
+      if (!audio || !backing) return;
+      const ctx = getAudioContext();
+      void ctx.resume().catch(noop); // synchronously, inside the click handler (iOS)
+      stopPreview();
+      const fromSec = mode === 'metronome' ? previewStartSec(audio.offsetSec, bpm(), beatsPerBar()) : clamp(lastSeekSec, 0, audio.durationSec);
+      if (fromSec >= audio.durationSec) return;
+      const whenWall = ctx.currentTime + PREVIEW_LEAD_SEC;
+      backing.setGain(audio.gain);
+      backing.start(whenWall, fromSec, 1);
+      if (mode === 'metronome') {
+        const clicks = ensureMetronome();
+        for (const c of previewClickTimes(audio.offsetSec, bpm(), beatsPerBar(), fromSec, PREVIEW_BARS)) {
+          clicks.scheduleClick(whenWall + (c.sec - fromSec), c.accent);
+        }
+      }
+      preview = { mode, whenWall, fromSec };
+      updateButtons();
+      const durationSec = audio.durationSec;
+      const track = backing;
+      const tick = (): void => {
+        previewRaf = 0;
+        if (!preview || unmounted) return;
+        const sec = preview.fromSec + (ctx.currentTime - preview.whenWall);
+        if (sec >= durationSec || (sec > preview.fromSec + 0.5 && !track.isPlaying())) {
+          stopPreview();
+          return;
+        }
+        waveform.setPlayhead(Math.max(preview.fromSec, sec));
+        previewRaf = requestAnimationFrame(tick);
+      };
+      previewRaf = requestAnimationFrame(tick);
+    }
+
+    function stopPreview(): void {
+      if (previewRaf) {
+        cancelAnimationFrame(previewRaf);
+        previewRaf = 0;
+      }
+      if (!preview) return;
+      preview = null;
+      backing?.stop();
+      metronome?.clear();
+      waveform.setPlayhead(null);
+      updateButtons();
+    }
 
     // ------------------------------------------------------------ layout
     const header = h(
@@ -419,6 +1025,7 @@ export const editorScreen: Screen = {
       null,
       textarea,
       h('div.editor-hint', null, caretEl, h('span', null, 'Ctrl+S guarda al instante'), h('span', null, 'Pulsa en un error para ir a su línea')),
+      audioPanel,
     );
 
     const panel = h(
@@ -441,13 +1048,28 @@ export const editorScreen: Screen = {
     window.addEventListener('pagehide', flushOnHide);
     document.addEventListener('visibilitychange', onVisibility);
 
+    const onWaveResize = (): void => waveform.resize();
+    const waveObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(onWaveResize) : null;
+    if (waveObserver) waveObserver.observe(waveWrap);
+    else window.addEventListener('resize', onWaveResize);
+
     renderStats();
     renderIssues();
     renderChords();
     setStatus('saved');
     updateCaret();
+    renderTrackInfo();
+    syncGrid();
+    updateButtons();
+    if (!hasIndexedDb()) {
+      storageNote.textContent = 'Este navegador no permite guardar archivos (IndexedDB no disponible): una pista cargada se perderá al recargar la página.';
+      storageNote.hidden = false;
+    }
+    if (audio) void loadStoredTrack();
 
     return () => {
+      unmounted = true;
+      stopPreview();
       flush();
       if (flashTimer !== null) {
         clearTimeout(flashTimer);
@@ -460,6 +1082,12 @@ export const editorScreen: Screen = {
       textarea.removeEventListener('select', updateCaret);
       window.removeEventListener('pagehide', flushOnHide);
       document.removeEventListener('visibilitychange', onVisibility);
+      if (waveObserver) waveObserver.disconnect();
+      else window.removeEventListener('resize', onWaveResize);
+      waveform.dispose();
+      backing?.dispose();
+      backing = null;
+      metronome?.clear();
     };
   },
 };

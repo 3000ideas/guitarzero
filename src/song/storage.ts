@@ -10,9 +10,14 @@
  * Every localStorage access is wrapped in try/catch. An in-memory copy mirrors what is written;
  * it becomes the store when localStorage is unavailable (Node, some privacy modes) or throws
  * (quota exceeded, storage disabled). Bundled examples (`ex:*`, builtin) are never persisted.
+ *
+ * A song's backing-track metadata (`StoredSong.audio`, SPEC section 11) is stored with the song;
+ * the audio file itself lives in IndexedDB (song/audioStore.ts) and follows the song when it is
+ * duplicated or deleted (fire-and-forget: those copies / deletions are not awaited).
  */
 import { DEFAULT_SETTINGS } from '../types';
-import type { Settings, StoredSong } from '../types';
+import type { AudioTrackInfo, Settings, StoredSong } from '../types';
+import { copyTrack, deleteTrack } from './audioStore';
 import { EXAMPLE_SONGS, isExampleId } from './examples';
 import { parseSong } from './parser';
 
@@ -159,8 +164,49 @@ function isStoredSong(v: unknown): v is StoredSong {
   );
 }
 
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v);
+}
+
+function isAudioInfo(v: unknown): v is AudioTrackInfo {
+  return (
+    isRecord(v) &&
+    typeof v.name === 'string' &&
+    typeof v.type === 'string' &&
+    isFiniteNumber(v.size) &&
+    isFiniteNumber(v.durationSec) &&
+    isFiniteNumber(v.offsetSec) &&
+    isFiniteNumber(v.gain)
+  );
+}
+
+/**
+ * `audio` as it must be stored: a clean copy of a valid AudioTrackInfo, `null` (the track was
+ * removed) or `undefined` (never set / malformed -> the key is omitted).
+ */
+function cleanAudio(audio: unknown): AudioTrackInfo | null | undefined {
+  if (audio === null) return null;
+  if (!isAudioInfo(audio)) return undefined;
+  return {
+    name: audio.name,
+    type: audio.type,
+    size: audio.size,
+    durationSec: audio.durationSec,
+    offsetSec: audio.offsetSec,
+    gain: audio.gain,
+  };
+}
+
 function cleanSong(s: StoredSong): StoredSong {
-  return { id: s.id, title: s.title, artist: s.artist, source: s.source, updatedAt: s.updatedAt };
+  const clean: StoredSong = { id: s.id, title: s.title, artist: s.artist, source: s.source, updatedAt: s.updatedAt };
+  const audio = cleanAudio(s.audio);
+  if (audio !== undefined) clean.audio = audio;
+  return clean;
+}
+
+/** Logs a failed background copy / deletion of a track (never surfaces to the caller). */
+function reportTrackError(what: string): (err: unknown) => void {
+  return (err) => console.warn(`No se pudo ${what} la pista de audio`, err);
 }
 
 /** User songs as stored (unsorted). Malformed entries and example ids are dropped. */
@@ -198,7 +244,10 @@ export function getSong(id: string): StoredSong | null {
 
 /**
  * Inserts or replaces a user song, stamping `updatedAt = Date.now()`. Bundled examples
- * (`builtin` or an `ex:` id) are ignored and returned unchanged. Returns the stored record.
+ * (`builtin` or an `ex:` id) are ignored and returned unchanged. `audio` is kept as given
+ * (a copy of the metadata, or `null` to drop the track). When the caller omits `audio`
+ * (undefined — e.g. the editor autosave, which only knows the text) the track metadata already
+ * stored for that song is preserved. Returns the stored record.
  */
 export function saveSong(song: StoredSong): StoredSong {
   if (song.builtin || isExampleId(song.id)) return song;
@@ -211,19 +260,25 @@ export function saveSong(song: StoredSong): StoredSong {
   };
   const songs = readUserSongs();
   const at = songs.findIndex((s) => s.id === stored.id);
+  const audio = song.audio === undefined ? (at >= 0 ? songs[at].audio : undefined) : cleanAudio(song.audio);
+  if (audio !== undefined) stored.audio = audio;
   if (at >= 0) songs[at] = stored;
   else songs.push(stored);
   writeUserSongs(songs);
   return stored;
 }
 
-/** Removes a user song. Returns false when the id is unknown or belongs to an example. */
+/**
+ * Removes a user song and (in the background) its audio track. Returns false when the id is
+ * unknown or belongs to an example.
+ */
 export function deleteSong(id: string): boolean {
   if (isExampleId(id)) return false;
   const songs = readUserSongs();
   const remaining = songs.filter((s) => s.id !== id);
   if (remaining.length === songs.length) return false;
   writeUserSongs(remaining);
+  void deleteTrack(id).catch(reportTrackError('eliminar'));
   return true;
 }
 
@@ -237,19 +292,23 @@ export function withSourceTitle(source: string, title: string): string {
 
 /**
  * Copies a song (example or user) under a new id with the title suffixed " (copia)"; the copy's
- * `title:` header is updated too, so the editor keeps the new title. Throws for unknown ids.
+ * `title:` header is updated too, so the editor keeps the new title. The audio metadata is
+ * copied and the audio file is copied in the background (copyTrack). Throws for unknown ids.
  */
 export function duplicateSong(id: string): StoredSong {
   const original = getSong(id);
   if (!original) throw new Error(`No existe la canción "${id}"`);
   const title = `${original.title.trim() || 'Sin título'} (copia)`;
-  return saveSong({
+  const copy = saveSong({
     id: newId(),
     title,
     artist: original.artist,
     source: withSourceTitle(original.source, title),
     updatedAt: 0,
+    audio: original.audio,
   });
+  void copyTrack(id, copy.id).catch(reportTrackError('copiar'));
+  return copy;
 }
 
 /** Creates and persists a new user song from `template` (default: NEW_SONG_TEMPLATE). */

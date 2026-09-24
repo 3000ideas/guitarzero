@@ -14,8 +14,22 @@ export const NOISE_RING_FRAMES = 75;
 export const NOISE_PERCENTILE = 0.1;
 /** Seconds of frames needed before the first noise-floor estimate. */
 export const NOISE_INIT_SEC = 0.5;
-/** The floor is only updated when no onset was accepted during this many seconds. */
+/**
+ * The floor is only updated when nothing was struck during this many seconds. "Struck" is any
+ * frame whose spectral flux crossed the onset threshold, accepted as an onset or not: an attack
+ * that the gate swallowed must still hold the estimate, otherwise a floor that has climbed too
+ * high keeps every following strum gated and never sees an onset again (a self-locking gate).
+ */
 export const NOISE_HOLD_SEC = 1.0;
+/**
+ * The floor may only RISE when two attack-free rings a ring apart (>= 3 s) read the same level
+ * within this many dB: a stationary background. Drops apply at once. The decaying ring of a
+ * strummed chord (its level falls 8.7 dB per decay constant; even a 3.75 s constant loses
+ * 7 dB in 3 s) never passes, so sparse strums (one per bar, or half notes on a guitar that
+ * sustains for seconds) cannot lift the floor to the level of the ringing chord and gate the
+ * next attack. A level that has been flat for two rings is noise, not a chord.
+ */
+export const NOISE_RISE_FLAT_DB = 2;
 /** Gate = max(gateDb, noiseFloor + NOISE_GATE_MARGIN_DB). */
 export const NOISE_GATE_MARGIN_DB = 10;
 /** Level of digital silence in dBFS (and the noise floor before initialisation). */
@@ -28,6 +42,14 @@ export const REFINE_MIN_RISE_DB = 6;
 /** Once a rise is confirmed, the onset block is the first one this far above the reference. */
 export const REFINE_WALK_DB = 3;
 
+/**
+ * Defaults are calibrated for 48 kHz / 8192 (a 171 ms Hann window, 5.9 Hz bins); the app pins
+ * its AudioContext to 48 kHz (src/audio/context.ts) so the DSP sees that resolution on every
+ * device. Should a browser refuse the pin and run at 96 kHz, the same fftSize gives an 85 ms
+ * window with 11.7 Hz bins: chroma peaks 2-3 bins apart merge (see chroma.ts) and the onset
+ * eps, which scales with the bin count, halves while the metronome click's leakage does not.
+ * Derive fftSize from the sample rate (16384 above 64 kHz) if that path ever becomes reachable.
+ */
 const DEFAULTS: Required<DetectorOpts> = {
   fftSize: 8192,
   a4: 440,
@@ -122,7 +144,13 @@ export class ChordDetector {
   private noiseFloorDb = SILENCE_DB;
   private firstTimeSec: number | null = null;
   private lastTimeSec: number | null = null;
-  private lastOnsetTimeSec = -Infinity;
+  /** Last frame whose flux crossed the onset threshold (onset accepted or not). */
+  private lastActivitySec = -Infinity;
+  /** Frames since the last digital-silence frame (Infinity until one is seen). */
+  private framesSinceSilence = Infinity;
+  /** Floor candidate read from an attack-free ring, kept for a ring's duration (rise reference). */
+  private quietRefDb: number | null = null;
+  private quietRefSec = -Infinity;
 
   constructor(sampleRate: number, opts: DetectorOpts = {}) {
     if (!(sampleRate > 0)) throw new Error(`invalid sampleRate ${sampleRate}`);
@@ -163,6 +191,11 @@ export class ChordDetector {
     return this.noiseFloorDb;
   }
 
+  /** Wall time of the last frame whose flux crossed the onset threshold, or -Infinity. */
+  getLastActivitySec(): number {
+    return this.lastActivitySec;
+  }
+
   /** Effective silence gate = max(gateDb, noiseFloor + 10). */
   getGateDb(): number {
     return Math.max(this.opts.gateDb, this.noiseFloorDb + NOISE_GATE_MARGIN_DB);
@@ -187,10 +220,10 @@ export class ChordDetector {
     this.ring[this.ringPos] = rmsDb;
     this.ringPos = (this.ringPos + 1) % NOISE_RING_FRAMES;
     if (this.ringCount < NOISE_RING_FRAMES) this.ringCount++;
+    if (rmsDb <= SILENCE_DB) this.framesSinceSilence = 0;
+    else this.framesSinceSilence++;
     if (this.firstTimeSec === null) this.firstTimeSec = timeSec;
-    if (timeSec - this.firstTimeSec >= NOISE_INIT_SEC && timeSec - this.lastOnsetTimeSec >= NOISE_HOLD_SEC) {
-      this.noiseFloorDb = percentile(this.ring, this.ringCount, NOISE_PERCENTILE);
-    }
+    this.updateNoiseFloor(timeSec);
     const gate = this.getGateDb();
     const open = rmsDb >= gate;
     const hop =
@@ -215,13 +248,53 @@ export class ChordDetector {
       onset = true;
       const sample = refineOnsetSample(x, this.sampleRate);
       onsetTimeSec = sample >= 0 ? timeSec - (this.fftSize - sample) / this.sampleRate : timeSec - hop;
-      this.lastOnsetTimeSec = timeSec;
     }
+    // Any flux crossing, gated or not, counts as activity for the noise-floor hold.
+    if (this.onsetDetector.lastAbove) this.lastActivitySec = timeSec;
     this.lastTimeSec = timeSec;
 
     const out: DetectorFrame = { timeSec, rmsDb, onset, energyChroma, chroma, bestChord };
     if (onset && onsetTimeSec !== undefined) out.onsetTimeSec = onsetTimeSec;
     return out;
+  }
+
+  /**
+   * Noise-floor estimate from the ring (10th percentile of the last 75 rmsDb). Nothing changes
+   * within NOISE_HOLD_SEC of a flux crossing. Otherwise the candidate is taken at once while the
+   * floor is provisional (still SILENCE_DB, or the ring still holds a digital-silence frame: no
+   * complete ring of real audio yet, e.g. the analyser's zeros before the AudioContext runs, so
+   * the estimate must be free to settle on the first clean ring) or when it is lower (drops are
+   * always safe). A provisional adoption is only taken from an attack-free ring, or of a level
+   * the user's own gate already treats as silence (candidate <= gateDb): audio that starts with
+   * strums straight after the zeros must not enshrine the ringing chord as the floor. A rise
+   * only goes through when the whole ring is attack-free and a previous attack-free ring, read
+   * at least a ring earlier, gave the same level within NOISE_RISE_FLAT_DB: stationary noise,
+   * never the decaying ring of a chord.
+   */
+  private updateNoiseFloor(timeSec: number): void {
+    if (this.firstTimeSec === null || timeSec - this.firstTimeSec < NOISE_INIT_SEC) return;
+    const sinceActivity = timeSec - this.lastActivitySec;
+    if (sinceActivity < NOISE_HOLD_SEC) return;
+    const ringSec = NOISE_RING_FRAMES * this.opts.hopSeconds;
+    const ringQuiet = sinceActivity >= ringSec;
+    const candidate = percentile(this.ring, this.ringCount, NOISE_PERCENTILE);
+    const provisional = this.noiseFloorDb === SILENCE_DB || this.framesSinceSilence <= NOISE_RING_FRAMES;
+    if ((provisional && (ringQuiet || candidate <= this.opts.gateDb)) || candidate <= this.noiseFloorDb) {
+      this.noiseFloorDb = candidate;
+    } else if (
+      ringQuiet &&
+      this.quietRefDb !== null &&
+      timeSec - this.quietRefSec >= ringSec &&
+      Math.abs(candidate - this.quietRefDb) <= NOISE_RISE_FLAT_DB
+    ) {
+      this.noiseFloorDb = candidate;
+    }
+    if (!ringQuiet) {
+      this.quietRefDb = null;
+    } else if (this.quietRefDb === null || timeSec - this.quietRefSec >= ringSec) {
+      this.quietRefDb = candidate;
+      this.quietRefSec = timeSec;
+    }
   }
 
   private asFrame(frame: Float32Array): Float32Array {
