@@ -552,3 +552,208 @@ export function synthStrummedProgression(
   const signal = mix(parts, sampleRate, totalSec);
   return { signal, periodSec, barSec, beatsPerBar, charsPerBeat, pattern, barTimes, barChords, strums };
 }
+
+// ---------------------------------------------------------------- click tracks with a tempo map (SPEC section 15)
+
+/**
+ * Percussive click: a short burst of white noise with a 1 ms linear attack and an exponential
+ * decay (tau), peak at `dbfs`. A drum hit is broadband, unlike synthClick (a sine).
+ */
+export function noiseBurst(
+  sampleRate: number,
+  rng: () => number,
+  opts: { durSec?: number; tau?: number; dbfs?: number } = {},
+): Float32Array {
+  const durSec = opts.durSec ?? 0.04;
+  const tau = opts.tau ?? 0.008;
+  const amp = dbToLin(opts.dbfs ?? -12);
+  const n = Math.round(durSec * sampleRate);
+  const out = new Float32Array(n);
+  for (let t = 0; t < n; t++) {
+    const s = t / sampleRate;
+    const env = Math.min(1, s / 0.001) * Math.exp(-s / tau);
+    out[t] = amp * env * (2 * rng() - 1);
+  }
+  return out;
+}
+
+/**
+ * Beat times of a tempo ramp: the tempo goes linearly from `bpmFrom` (at `fromSec`) to `bpmTo`
+ * (at `toSec`); every beat lasts 60 / bpm(t) seconds at the tempo in force when it starts.
+ */
+export function rampBeatTimes(bpmFrom: number, bpmTo: number, fromSec: number, toSec: number): number[] {
+  const times: number[] = [];
+  const span = Math.max(1e-9, toSec - fromSec);
+  for (let t = fromSec; t < toSec; ) {
+    times.push(t);
+    const bpm = bpmFrom + ((bpmTo - bpmFrom) * (t - fromSec)) / span;
+    t += 60 / bpm;
+  }
+  return times;
+}
+
+/**
+ * Beat times of a tempo jump: `bpmA` from `fromSec`, then `bpmB` from the first beat at or after
+ * `jumpSec` (the phase is continuous: the beat period changes, the grid does not restart).
+ */
+export function jumpBeatTimes(bpmA: number, bpmB: number, fromSec: number, jumpSec: number, toSec: number): number[] {
+  const times: number[] = [];
+  for (let t = fromSec; t < toSec; ) {
+    times.push(t);
+    t += 60 / (t >= jumpSec ? bpmB : bpmA);
+  }
+  return times;
+}
+
+export interface ClickTrackOpts {
+  /** Level of the clicks in dBFS (default -12), each varied by +-`jitterDb`. */
+  dbfs?: number;
+  /** Random level variation of every click in dB (default 3). */
+  jitterDb?: number;
+  /** RMS of the noise floor in dBFS, or null for none (default -40). */
+  noiseDb?: number | null;
+  seed?: number;
+}
+
+/** Percussive clicks (noiseBurst) at `beatTimes` over a white-noise floor; `seconds` long. */
+export function synthClickTrack(beatTimes: number[], sampleRate: number, seconds: number, opts: ClickTrackOpts = {}): Float32Array {
+  const seed = opts.seed ?? 11;
+  const rng = makeRng(seed);
+  const jitter = opts.jitterDb ?? 3;
+  const parts: MixPart[] = [];
+  const noiseDb = opts.noiseDb === undefined ? -40 : opts.noiseDb;
+  if (noiseDb !== null) parts.push({ signal: whiteNoise(sampleRate, seconds, noiseDb, seed + 100), atSec: 0 });
+  for (const t of beatTimes) {
+    if (t < 0 || t >= seconds) continue;
+    const dbfs = (opts.dbfs ?? -12) + jitter * (2 * rng() - 1);
+    parts.push({ signal: noiseBurst(sampleRate, rng, { dbfs }), atSec: t });
+  }
+  return mix(parts, sampleRate, seconds);
+}
+
+// ---------------------------------------------------------------- structured songs (SPEC section 15)
+
+export interface SongSectionSpec {
+  /** Chord names of the progression, one per `barsPerChord` bars. */
+  chords: string[];
+  /** Bars each chord lasts (default 1). */
+  barsPerChord?: number;
+  /** Times the progression is played in this section (default 1). */
+  rounds?: number;
+  /** Peak level of the strums of this section in dBFS (default: the song's `dbfs`, -20). */
+  dbfs?: number;
+}
+
+export interface StructuredSongOpts {
+  /** Tempo in BPM (default 100). */
+  bpm?: number;
+  /** Beats per bar (default 4); one strum per beat. */
+  beatsPerBar?: number;
+  /** Silence before the first bar, seconds (default 0). */
+  leadSec?: number;
+  /** Extra seconds after the last bar where the last chord keeps ringing (default 0). */
+  tailSec?: number;
+  /** RMS of a white-noise floor in dBFS, or null for none (default -40). */
+  noiseDb?: number | null;
+  /** Default peak level of a strum in dBFS (default -20). */
+  dbfs?: number;
+  /** Seed of the first strum (strum i uses seed + i); the noise uses seed + 1000 (default 1). */
+  seed?: number;
+  /** MIDI notes per chord name; names missing here use the CHORD_LIBRARY voicing. */
+  voicings?: Record<string, number[]>;
+  /** Passed to synthStrumSequence. */
+  dampSec?: number;
+  spreadSec?: number;
+  decayScale?: number;
+  harmonics?: number;
+}
+
+export interface StructuredSong {
+  signal: Float32Array;
+  bpm: number;
+  periodSec: number;
+  barSec: number;
+  beatsPerBar: number;
+  /** Start time of every beat (= strum), seconds. */
+  beatTimes: number[];
+  /** Chord name sounding at every beat. */
+  beatChords: string[];
+  /** Start time of every bar, seconds. */
+  barTimes: number[];
+  /** Chord name of every bar. */
+  barChords: string[];
+  /** Index of the section every bar belongs to. */
+  barSection: number[];
+  /** Bar index where every section starts, and its length in bars. */
+  sectionStarts: number[];
+  sectionBars: number[];
+}
+
+/**
+ * A song made of consecutive sections, each a chord progression strummed once per beat at
+ * `bpm`, `rounds` times, at its own level (a louder chorus, a quieter intro). Every strum is a
+ * fresh chord attack (synthStrumSequence: the previous chord is damped right before it) and the
+ * whole thing sits on a seeded white-noise floor. Returns the signal with the beat / bar grids,
+ * the expected chord per beat and bar and the section boundaries in bars.
+ */
+export function synthStructuredSong(sections: SongSectionSpec[], sampleRate: number, opts: StructuredSongOpts = {}): StructuredSong {
+  const bpm = opts.bpm ?? 100;
+  const beatsPerBar = opts.beatsPerBar ?? 4;
+  const periodSec = 60 / bpm;
+  const barSec = periodSec * beatsPerBar;
+  const leadSec = opts.leadSec ?? 0;
+  const tailSec = opts.tailSec ?? 0;
+  const seed = opts.seed ?? 1;
+  const defaultDb = opts.dbfs ?? -20;
+
+  const barChords: string[] = [];
+  const barSection: number[] = [];
+  const sectionStarts: number[] = [];
+  const sectionBars: number[] = [];
+  const barLevels: number[] = [];
+  sections.forEach((sec, si) => {
+    const barsPerChord = sec.barsPerChord ?? 1;
+    const rounds = sec.rounds ?? 1;
+    sectionStarts.push(barChords.length);
+    for (let r = 0; r < rounds; r++) {
+      for (const name of sec.chords) {
+        for (let b = 0; b < barsPerChord; b++) {
+          barChords.push(name);
+          barSection.push(si);
+          barLevels.push(sec.dbfs ?? defaultDb);
+        }
+      }
+    }
+    sectionBars.push(barChords.length - sectionStarts[si]);
+  });
+  const barTimes = barChords.map((_, i) => leadSec + i * barSec);
+  const beatChords: string[] = [];
+  const beatLevels: number[] = [];
+  barChords.forEach((name, i) => {
+    for (let b = 0; b < beatsPerBar; b++) {
+      beatChords.push(name);
+      beatLevels.push(barLevels[i]);
+    }
+  });
+  const beatTimes = beatChords.map((_, i) => leadSec + i * periodSec);
+  const totalSec = leadSec + beatChords.length * periodSec + tailSec;
+  const notes = beatChords.map((name) => opts.voicings?.[name] ?? libraryVoicing(name));
+  const seqOpts: StrumSequenceOpts = { dbfs: beatLevels, seed };
+  if (opts.dampSec !== undefined) seqOpts.dampSec = opts.dampSec;
+  if (opts.spreadSec !== undefined) seqOpts.spreadSec = opts.spreadSec;
+  if (opts.decayScale !== undefined) seqOpts.decayScale = opts.decayScale;
+  if (opts.harmonics !== undefined) seqOpts.harmonics = opts.harmonics;
+  let signal = beatChords.length > 0 ? synthStrumSequence(notes, sampleRate, beatTimes, totalSec, seqOpts) : silence(sampleRate, totalSec);
+  const noiseDb = opts.noiseDb === undefined ? -40 : opts.noiseDb;
+  if (noiseDb !== null) {
+    signal = mix(
+      [
+        { signal, atSec: 0 },
+        { signal: whiteNoise(sampleRate, totalSec, noiseDb, seed + 1000), atSec: 0 },
+      ],
+      sampleRate,
+      totalSec,
+    );
+  }
+  return { signal, bpm, periodSec, barSec, beatsPerBar, beatTimes, beatChords, barTimes, barChords, barSection, sectionStarts, sectionBars };
+}

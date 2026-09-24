@@ -3,7 +3,7 @@ import type { ChordTranscription, TranscribedBar } from '../../src/types';
 import { chartFromTranscription, defaultChartStrum, replaceChart } from '../../src/song/chartFromTranscription';
 import { transcribeChords } from '../../src/dsp/chordTranscribe';
 import { parseSong } from '../../src/song/parser';
-import { synthProgression } from '../helpers/synth';
+import { synthProgression, synthStructuredSong } from '../helpers/synth';
 
 function transcription(bars: TranscribedBar[], patch: Partial<ChordTranscription> = {}): ChordTranscription {
   const beatsPerBar = patch.beatsPerBar ?? 4;
@@ -133,6 +133,202 @@ describe('chartFromTranscription', () => {
     expect(bars).toEqual(t.bars.map((b) => b.chords.map((c) => [c.chord, c.beats])));
     expect(bars).toEqual([[['C', 4]], [['G', 4]], [['Am', 4]], [['F', 4]]]);
   });
+});
+
+describe('chartFromTranscription tempo map and sections (SPEC 15)', () => {
+  /** 16 bars of one chord each, cycling C G Am F. */
+  const SIXTEEN: TranscribedBar[] = Array.from({ length: 16 }, (_, i) => ({
+    startBeat: 4 * i,
+    chords: [{ chord: ['C', 'G', 'Am', 'F'][i % 4], beats: 4 }],
+  }));
+
+  it('barTempos [100 x 8, 104 x 8] -> one "tempo: 104" line before bar 9 and two tempo segments', () => {
+    const t = transcription(SIXTEEN, { bpm: 100, barTempos: [...Array(8).fill(100), ...Array(8).fill(104)] });
+    const text = chartFromTranscription(t, { title: 'Cambio' });
+    const lines = text.split('\n');
+    const tempoLines = lines.map((l, i) => [l, i] as [string, number]).filter(([l]) => /^tempo:/.test(l));
+    expect(tempoLines.map(([l]) => l)).toEqual(['tempo: 100', 'tempo: 104']);
+    // The change line sits right after the second bar line (bars 5-8) and before the third (bars 9-12).
+    const barLines = lines.map((l, i) => [l, i] as [string, number]).filter(([l]) => /\|\s*$/.test(l));
+    expect(barLines).toHaveLength(4);
+    expect(tempoLines[1][1]).toBe(barLines[1][1] + 1);
+    expect(tempoLines[1][1]).toBe(barLines[2][1] - 1);
+    const { song, errors, bars } = parsedBars(text);
+    expect(errors).toEqual([]);
+    expect(song.tempo).toBe(100);
+    expect(song.tempoSegments).toEqual([
+      { fromBeat: 0, bpm: 100 },
+      { fromBeat: 32, bpm: 104 },
+    ]);
+    expect(bars).toHaveLength(16);
+    expect(song.bars[8].startBeat).toBe(32);
+  });
+
+  it('without tempo changes there is no extra tempo line; below 1.5 % or not sustained is ignored', () => {
+    const flat = chartFromTranscription(transcription(SIXTEEN, { bpm: 100, barTempos: Array(16).fill(100) }), { title: 'Plano' });
+    expect(flat.match(/^tempo:/gm)).toHaveLength(1);
+    expect(parseSong(flat).song.tempoSegments).toHaveLength(1);
+    // 1 % away: nothing.
+    const small = chartFromTranscription(transcription(SIXTEEN, { bpm: 100, barTempos: [...Array(8).fill(100), ...Array(8).fill(101)] }), { title: 'Poco' });
+    expect(small.match(/^tempo:/gm)).toHaveLength(1);
+    // A single fast bar (glitch) in the middle: nothing.
+    const glitch = Array(16).fill(100);
+    glitch[7] = 110;
+    const g = chartFromTranscription(transcription(SIXTEEN, { bpm: 100, barTempos: glitch }), { title: 'Glitch' });
+    expect(g.match(/^tempo:/gm)).toHaveLength(1);
+    // A change only on the last two bars: never on the last bar, and the sustained rule needs a following bar.
+    const tail = Array(16).fill(100);
+    tail[15] = 110;
+    const tl = chartFromTranscription(transcription(SIXTEEN, { bpm: 100, barTempos: tail }), { title: 'Cola' });
+    expect(tl.match(/^tempo:/gm)).toHaveLength(1);
+    // No barTempos at all (constant grid): unchanged output.
+    expect(chartFromTranscription(transcription(SIXTEEN, { bpm: 100 }), { title: 'Plano' })).toBe(flat);
+  });
+
+  it('a ramp writes at most one tempo line every 2 bars, with one decimal, and the parser follows it', () => {
+    // 96 -> 104 over 16 bars (0.5 BPM per bar): sustained drift, a new line every few bars.
+    const ramp = Array.from({ length: 16 }, (_, i) => Math.round((96 + 0.5 * i) * 10) / 10);
+    const t = transcription(SIXTEEN, { bpm: 100, barTempos: ramp });
+    const text = chartFromTranscription(t, { title: 'Rampa' });
+    const lines = text.split('\n');
+    const changeBars: number[] = [];
+    let bar = 0;
+    for (const l of lines) {
+      if (/^tempo:/.test(l) && bar > 0) changeBars.push(bar);
+      if (/\|\s*$/.test(l)) bar += l.split('|').filter((s) => s.trim() !== '').length;
+    }
+    expect(changeBars.length).toBeGreaterThanOrEqual(2);
+    for (let i = 1; i < changeBars.length; i++) expect(changeBars[i] - changeBars[i - 1]).toBeGreaterThanOrEqual(2);
+    expect(changeBars[changeBars.length - 1]).toBeLessThan(15);
+    const { song, errors } = parsedBars(text);
+    expect(errors).toEqual([]);
+    expect(song.tempoSegments.length).toBe(changeBars.length + 1);
+    // Every segment's tempo is within 1.5 % of the bar tempo where it starts.
+    for (const seg of song.tempoSegments.slice(1)) {
+      const b = seg.fromBeat / 4;
+      expect(Math.abs(seg.bpm - ramp[b]) / ramp[b]).toBeLessThanOrEqual(0.015);
+      expect(String(seg.bpm)).toMatch(/^\d+(\.\d)?$/);
+    }
+    // A change on the very first bar (bar 0 far from the median) sets the initial tempo.
+    const start = transcription(SIXTEEN, { bpm: 100, barTempos: [...Array(4).fill(90), ...Array(12).fill(100)] });
+    const s = parseSong(chartFromTranscription(start, { title: 'Arranque' }));
+    expect(s.errors).toEqual([]);
+    expect(s.song.tempo).toBe(90);
+    expect(s.song.tempoSegments).toEqual([
+      { fromBeat: 0, bpm: 90 },
+      { fromBeat: 16, bpm: 100 },
+    ]);
+  });
+
+  it('sections become [Etiqueta] lines with 4 bars per line and song.bars[i].section is right; the strum stays global', () => {
+    const sections: ChordTranscription['sections'] = [
+      { startBar: 0, endBar: 1, label: 'Intro', letter: 'A' },
+      { startBar: 2, endBar: 7, label: 'Estrofa', letter: 'B' },
+      { startBar: 8, endBar: 11, label: 'Estribillo', letter: 'C' },
+      { startBar: 12, endBar: 15, label: 'Estrofa', letter: 'B' },
+    ];
+    const text = chartFromTranscription(transcription(SIXTEEN, { bpm: 100, sections }), { title: 'Partes', strum: 'D-DU-UDU' });
+    const lines = text.split('\n');
+    expect(lines.filter((l) => /^\[/.test(l))).toEqual(['[Intro]', '[Estrofa]', '[Estribillo]', '[Estrofa]']);
+    expect(lines.filter((l) => /^strum:/.test(l))).toEqual(['strum: D-DU-UDU']);
+    const i0 = lines.indexOf('[Intro]');
+    expect(lines[i0 + 1]).toBe('C . . . | G . . . |');
+    expect(lines[i0 + 2]).toBe('[Estrofa]');
+    expect(lines[i0 + 3]).toBe('Am . . . | F . . . | C . . . | G . . . |');
+    expect(lines[i0 + 4]).toBe('Am . . . | F . . . |');
+    expect(lines[i0 + 5]).toBe('[Estribillo]');
+    const { song, errors, bars } = parsedBars(text);
+    expect(errors).toEqual([]);
+    expect(bars).toHaveLength(16);
+    expect(song.bars.map((b) => b.section)).toEqual([
+      ...Array(2).fill('Intro'),
+      ...Array(6).fill('Estrofa'),
+      ...Array(4).fill('Estribillo'),
+      ...Array(4).fill('Estrofa'),
+    ]);
+    expect(song.events.every((e) => ['down', 'up'].includes(e.direction))).toBe(true);
+    // The repeated [Estrofa] is written out (redefined), not recalled: its bars are the transcribed ones.
+    expect(bars.slice(12)).toEqual([[['C', 4]], [['G', 4]], [['Am', 4]], [['F', 4]]]);
+  });
+
+  it('tempo lines inside sections break the bar lines and keep the phrase alignment; odd sections are tolerated', () => {
+    const sections: ChordTranscription['sections'] = [
+      { startBar: 0, endBar: 7, label: 'Estrofa [x2]', letter: 'A' },
+      { startBar: 8, endBar: 15, label: 'Estribillo', letter: 'B' },
+    ];
+    const barTempos = [...Array(6).fill(100), ...Array(10).fill(104)];
+    const text = chartFromTranscription(transcription(SIXTEEN, { bpm: 100, sections, barTempos }), { title: 'Mixto' });
+    const lines = text.split('\n');
+    const i0 = lines.findIndex((l) => l.startsWith('['));
+    expect(lines[i0]).toBe('[Estrofa x2]');
+    expect(lines.slice(i0 + 1, i0 + 7)).toEqual([
+      'C . . . | G . . . | Am . . . | F . . . |',
+      'C . . . | G . . . |',
+      'tempo: 104',
+      'Am . . . | F . . . |',
+      '[Estribillo]',
+      'C . . . | G . . . | Am . . . | F . . . |',
+    ]);
+    const { song, errors } = parsedBars(text);
+    expect(errors).toEqual([]);
+    expect(song.tempoSegments).toEqual([
+      { fromBeat: 0, bpm: 100 },
+      { fromBeat: 24, bpm: 104 },
+    ]);
+    expect(song.bars[7].section).toBe('Estrofa x2');
+    expect(song.bars[8].section).toBe('Estribillo');
+    // Sections that do not cover every bar, overlap or come unsorted still give a clean chart:
+    // the first section covering a bar wins, an empty label writes no line, and (song grammar)
+    // a label runs until the next one, so uncovered bars after a label stay in that section.
+    const messy: ChordTranscription['sections'] = [
+      { startBar: 10, endBar: 13, label: 'Puente', letter: 'C' },
+      { startBar: 0, endBar: 3, label: '', letter: 'A' },
+      { startBar: 2, endBar: 5, label: 'Estrofa', letter: 'B' },
+    ];
+    const messyText = chartFromTranscription(transcription(SIXTEEN, { bpm: 100, sections: messy }), { title: 'Raro' });
+    expect(messyText.split('\n').filter((l) => l.startsWith('['))).toEqual(['[Estrofa]', '[Puente]']);
+    const m = parsedBars(messyText);
+    expect(m.errors).toEqual([]);
+    expect(m.bars).toHaveLength(16);
+    expect(m.song.bars.map((b) => b.section)).toEqual([
+      ...Array(4).fill(null),
+      ...Array(6).fill('Estrofa'),
+      ...Array(6).fill('Puente'),
+    ]);
+    // An empty section list behaves like none.
+    expect(chartFromTranscription(transcription(SIXTEEN, { bpm: 100, sections: [] }), { title: 'X' })).toBe(
+      chartFromTranscription(transcription(SIXTEEN, { bpm: 100 }), { title: 'X' }),
+    );
+  });
+
+  it('round trip from audio: a structured song gives section labels that parseSong reproduces', () => {
+    const song = synthStructuredSong(
+      [
+        { chords: ['C', 'C', 'G', 'G'], dbfs: -26 },
+        { chords: ['C', 'G', 'Am', 'F'], rounds: 2, dbfs: -20 },
+        { chords: ['F', 'G', 'C', 'C'], rounds: 2, dbfs: -14 },
+        { chords: ['C', 'G', 'Am', 'F'], rounds: 2, dbfs: -20 },
+        { chords: ['F', 'G', 'C', 'C'], rounds: 2, dbfs: -14 },
+        { chords: ['Em', 'Em', 'Am', 'Am'], dbfs: -22 },
+      ],
+      44100,
+      { bpm: 100, seed: 3 },
+    );
+    const t = transcribeChords(song.signal, 44100);
+    expect(t.sections).toBeDefined();
+    const text = chartFromTranscription(t, { title: 'Estructura' });
+    const { song: parsed, errors } = parsedBars(text);
+    expect(errors).toEqual([]);
+    expect(parsed.bars).toHaveLength(t.bars.length);
+    for (const s of t.sections as NonNullable<ChordTranscription['sections']>) {
+      for (let i = s.startBar; i <= s.endBar; i++) expect(parsed.bars[i].section).toBe(s.label);
+    }
+    expect(text).toContain('[Intro]\n');
+    expect(text).toContain('[Estribillo]\n');
+    expect(text).toContain('[Final]\n');
+    expect(parsed.tempoSegments).toHaveLength(1);
+    expect(parsed.tempo).toBe(100);
+  }, 60000);
 });
 
 describe('replaceChart', () => {

@@ -1,8 +1,16 @@
 /**
  * Chord transcription -> song text (docs/SPEC.md section 2 grammar) and replacement of the chart
  * inside an existing song text. Pure functions, no DOM.
+ *
+ * Besides the headers and the bars (4 per line) the chart carries the tempo map and the
+ * structure of the transcription (SPEC section 15): a `tempo: <bpm>` line before a bar whose
+ * tracked tempo differs from the tempo in force by TEMPO_CHANGE_FRACTION or more in a sustained
+ * way (the median of the next two bars differs too), at most one every TEMPO_CHANGE_MIN_BARS
+ * bars and never on the last bar; and a `[Etiqueta]` line at the start of every section, whose
+ * bars then go 4 per line (a repeated section is written out every time: the parser redefines
+ * it). The strum pattern stays global.
  */
-import type { ChordTranscription, TranscribedBar } from '../types';
+import type { ChordTranscription, TranscribedBar, TranscribedSection } from '../types';
 
 /** Header lines of an existing song that `replaceChart` keeps. */
 const KEPT_HEADER_RE = /^\s*(title|artist|capo)\s*:/i;
@@ -11,6 +19,12 @@ const BARS_PER_LINE = 4;
 /** Tempo range accepted by the parser (song/parser.ts). */
 const MIN_TEMPO = 20;
 const MAX_TEMPO = 400;
+/** A bar tempo this far (relative) from the tempo in force starts a new tempo segment ... */
+export const TEMPO_CHANGE_FRACTION = 0.015;
+/** ... when the median of the next TEMPO_CHANGE_LOOKAHEAD_BARS bars differs too ... */
+const TEMPO_CHANGE_LOOKAHEAD_BARS = 2;
+/** ... and at most once every this many bars. */
+const TEMPO_CHANGE_MIN_BARS = 2;
 
 export interface ChartOpts {
   title: string;
@@ -44,10 +58,87 @@ function barText(bar: TranscribedBar, beatsPerBar: number): string {
   return parts.join(' ');
 }
 
+function median(values: number[]): number {
+  const s = values.slice().sort((a, b) => a - b);
+  const n = s.length;
+  if (n === 0) return Number.NaN;
+  const mid = n >> 1;
+  return n % 2 === 1 ? s[mid] : 0.5 * (s[mid - 1] + s[mid]);
+}
+
+/** Tempo value as written in a `tempo:` line: clamped to the parser's range, at most one decimal. */
+function tempoText(bpm: number): string {
+  const v = Math.min(MAX_TEMPO, Math.max(MIN_TEMPO, Math.round(bpm * 10) / 10));
+  return String(v);
+}
+
+/**
+ * Bars before which a `tempo:` line goes, with the bpm to write: the tracked bar tempo differs
+ * from the tempo in force by TEMPO_CHANGE_FRACTION or more and so does the median of the next
+ * TEMPO_CHANGE_LOOKAHEAD_BARS bars (a sustained change, not a glitch); the written value is the
+ * median of the bar and those next bars. Never on the last bar, at most one every
+ * TEMPO_CHANGE_MIN_BARS bars. A change on bar 0 is allowed: the parser then takes it as the
+ * initial tempo (the header keeps the song's median tempo).
+ */
+export function tempoChanges(t: ChordTranscription, initialTempo: number): Map<number, string> {
+  const out = new Map<number, string>();
+  const bt = t.barTempos;
+  if (!bt || bt.length < 2) return out;
+  const n = Math.min(bt.length, t.bars.length);
+  let current = initialTempo;
+  let lastChange = Number.NEGATIVE_INFINITY;
+  for (let i = 0; i < n - 1; i++) {
+    const v = bt[i];
+    if (!Number.isFinite(v) || v <= 0) continue;
+    if (i - lastChange < TEMPO_CHANGE_MIN_BARS) continue;
+    if (Math.abs(v - current) < TEMPO_CHANGE_FRACTION * current) continue;
+    const next: number[] = [];
+    for (let j = i + 1; j <= i + TEMPO_CHANGE_LOOKAHEAD_BARS && j < n; j++) {
+      if (Number.isFinite(bt[j]) && bt[j] > 0) next.push(bt[j]);
+    }
+    if (next.length === 0) continue;
+    if (Math.abs(median(next) - current) < TEMPO_CHANGE_FRACTION * current) continue;
+    const value = median([v, ...next]);
+    out.set(i, tempoText(value));
+    current = parseFloat(tempoText(value));
+    lastChange = i;
+  }
+  return out;
+}
+
+/** Section label as written between brackets: one line, no brackets; null when nothing is left. */
+function labelText(label: string): string | null {
+  const s = singleLine(label.replace(/[[\]]/g, ' '));
+  return s === '' ? null : s;
+}
+
+/**
+ * Contiguous bar groups with the label to write before each: the sections of the transcription
+ * (sorted, clamped to the bars, gaps and overlaps resolved by the first section that covers a
+ * bar), or a single unlabelled group when there are none.
+ */
+function barGroups(sections: TranscribedSection[] | undefined, bars: number): Array<{ start: number; end: number; label: string | null }> {
+  const groups: Array<{ start: number; end: number; label: string | null }> = [];
+  if (bars === 0) return groups;
+  const sorted = (sections ?? []).filter((s) => Number.isFinite(s.startBar) && Number.isFinite(s.endBar)).slice().sort((a, b) => a.startBar - b.startBar);
+  let currentSection: TranscribedSection | null | undefined;
+  for (let i = 0; i < bars; i++) {
+    const section = sorted.find((s) => i >= Math.floor(s.startBar) && i <= Math.floor(s.endBar)) ?? null;
+    if (groups.length === 0 || section !== currentSection) {
+      groups.push({ start: i, end: i, label: section ? labelText(section.label) : null });
+      currentSection = section;
+    } else {
+      groups[groups.length - 1].end = i;
+    }
+  }
+  return groups;
+}
+
 /**
  * Song text for a transcription: `title`, `artist` (when given), `tempo` (rounded), `time`,
  * `strum`, a comment line with the key, then the bars four per line, e.g.
- * `C . . . | G . Am . | N.C. . . . | F#m . . D |`.
+ * `C . . . | G . Am . | N.C. . . . | F#m . . D |`, with `tempo:` lines where the tracked tempo
+ * changes (see tempoChanges) and `[Etiqueta]` lines at the start of every section.
  */
 export function chartFromTranscription(t: ChordTranscription, opts: ChartOpts): string {
   const beatsPerBar = Math.max(1, Math.round(t.beatsPerBar));
@@ -60,9 +151,25 @@ export function chartFromTranscription(t: ChordTranscription, opts: ChartOpts): 
   lines.push(`time: ${beatsPerBar}/4`);
   lines.push(`strum: ${opts.strum !== undefined && opts.strum.trim() !== '' ? opts.strum.trim() : defaultChartStrum(beatsPerBar)}`);
   lines.push(`# Acordes detectados automáticamente: revisa y corrige. Tonalidad: ${t.key.name}`);
-  for (let i = 0; i < t.bars.length; i += BARS_PER_LINE) {
-    const group = t.bars.slice(i, i + BARS_PER_LINE);
-    lines.push(group.map((bar) => barText(bar, beatsPerBar)).join(' | ') + ' |');
+  const changes = tempoChanges(t, tempo);
+  for (const group of barGroups(t.sections, t.bars.length)) {
+    if (group.label !== null) lines.push(`[${group.label}]`);
+    let line: string[] = [];
+    const flush = (): void => {
+      if (line.length > 0) lines.push(line.join(' | ') + ' |');
+      line = [];
+    };
+    for (let i = group.start; i <= group.end; i++) {
+      const change = changes.get(i);
+      if (change !== undefined) {
+        flush();
+        lines.push(`tempo: ${change}`);
+      }
+      line.push(barText(t.bars[i], beatsPerBar));
+      // Lines break every BARS_PER_LINE bars of the group (phrase aligned, whatever the tempo lines).
+      if ((i - group.start + 1) % BARS_PER_LINE === 0) flush();
+    }
+    flush();
   }
   return lines.join('\n') + '\n';
 }

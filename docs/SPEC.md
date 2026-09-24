@@ -949,3 +949,81 @@ compás llevan un ataque en el audio y se deduce el patrón `strum:` real de la 
 - Importación **"Desde audio…"** y **"Detectar acordes"** → tras transcribir, `detectStrumPattern`
   con la rejilla de la transcripción y el patrón se pasa a `chartFromTranscription` como
   `opts.strum` (si `confidence ≥ 0.3`; si no, una por pulso).
+
+## 15. Seguimiento de pulsos, mapa de tempo y estructura (secciones)
+
+Objetivo: que la autopista y la pista sigan **pegadas a la grabación de principio a fin**
+aunque el tempo no sea perfectamente constante, y que la tablatura generada venga separada en
+partes (`[Intro]`, `[Estrofa]`, `[Estribillo]`, `[Puente]`, `[Final]`) para poder practicar
+cada una en bucle. Tipos (ya en `types.ts`): `TranscribedSection`,
+`ChordTranscription.barTempos?`, `ChordTranscription.sections?`.
+
+### dsp/beatTrack.ts (puro)
+- `trackBeats(samples: Float32Array, sampleRate: number, opts: { bpm: number; firstBeatSec?: number; maxSeconds?: number; tightness?: number /* 100 */ }): { beatTimes: number[]; bpm: number }`.
+- Seguidor de pulsos por programación dinámica (Ellis 2007) sobre la envolvente de ataques de
+  `tempoEstimate.ts` (`onsetEnvelope` + `decimateForTempo`, hop 256 @ ≈ 11025 Hz ≈ 23 ms):
+  `τ = 60/bpm` en frames; para cada frame `t`: `score[t] = env[t] + max_{p ∈ [t − 2τ, t − τ/2]}
+  (score[p] − tightness · (log(( t − p)/τ))²)`; `backlink[t] = argmax`. Se parte del último
+  máximo local de `score` y se retrocede por `backlink` → tiempos de pulso; se descartan los
+  pulsos anteriores al primer ataque significativo. Si se da `firstBeatSec`, el pulso más
+  cercano se usa como referencia y se ajusta la fase (los pulsos no cambian, solo la
+  numeración). `bpm` devuelto = 60 / mediana de los intervalos. Interpolación parabólica del
+  instante en la envolvente para precisión sub-frame.
+- Tests (`tests/dsp/beatTrack.test.ts`): clics a 100 BPM constantes → intervalos 0.6 ± 0.02 s;
+  **rampa** de 96 → 104 BPM a lo largo de 40 s → cada pulso detectado a ±35 ms del sintetizado
+  (≥ 95 % de los pulsos) y `bpm` ≈ 100 ± 2; **salto** 100 → 110 BPM en el segundo 20 → tras 2
+  s del salto los intervalos son 0.545 ± 0.02; progresión rasgueada `D-DU-UDU` (helper
+  existente) → pulsos en los tiempos, no en los contratiempos (≥ 90 %); rendimiento: 4 min
+  en < 1.5 s.
+
+### Integración en `dsp/chordTranscribe.ts`
+- Nueva opción `opts.trackBeats?: boolean` (por defecto `true`). Con ella, la rejilla de pulsos
+  es `trackBeats(...)` (con `bpm`/`firstBeatSec` de `estimateTempo` o de `opts`) en lugar de
+  la rejilla constante; el resto (chroma por pulso, tonalidad, Viterbi por fases, compases) no
+  cambia. `beats[k].timeSec` = tiempo real del pulso. `barTempos[i]` = `60 · beatsPerBar /
+  (t_{inicio del compás i+1} − t_{inicio del compás i})` (último compás: el anterior),
+  redondeado a 0.1. `bpm` = mediana de `barTempos`. Con `trackBeats: false` se mantiene el
+  comportamiento actual (sin `barTempos`).
+- **Estructura** (`opts.detectSections?: boolean`, por defecto `true`; función pura exportada
+  `segmentStructure(barChroma: Float32Array[], barEnergy: number[], barChords: (string|null)[][], beatsPerBar: number): TranscribedSection[]`):
+  1. Características por compás: chroma medio (L2) y energía media (dB relativo al máximo).
+  2. Matriz de autosimilitud `S[i][j]` = coseno de chroma × (1 si las secuencias de acordes de
+     los compases coinciden, 0.7 si no).
+  3. Novedad: kernel de tablero de ajedrez de tamaño 4 compases sobre la diagonal; picos por
+     encima de `media + 0.5·σ` y separados ≥ 4 compases → límites; cada límite se ajusta al
+     múltiplo de 4 compases más cercano si está a ≤ 1 compás (los primeros compases pueden
+     formar una sección corta de 1–3 compases: intro/anacrusa).
+  4. Etiquetado por repetición: dos segmentos comparten letra si la correlación media de
+     `S` entre sus compases alineados (misma longitud, o el más corto contra el prefijo del más
+     largo) ≥ 0.75; letras A, B, C… por orden de aparición.
+  5. Nombres: la letra que más veces aparece con mayor energía media → `Estribillo`; la otra
+     letra más repetida → `Estrofa`; un segmento único al principio (antes del primer
+     repetido) → `Intro`; único en el medio → `Puente`; único al final → `Final`; el resto →
+     `Parte <letra>`. Si solo hay una sección → `sections` ausente.
+  6. Tests (`tests/dsp/structure.test.ts`): sintético con estructura Intro(4) A(8) B(8) A(8) B(8)
+     Final(4) con progresiones distintas (A: C G Am F; B: F G C C con más energía) →
+     6 secciones con límites en 4, 12, 20, 28, 36 (±1 compás), etiquetas Intro, Estrofa,
+     Estribillo, Estrofa, Estribillo, Final; con una sola progresión constante → `undefined`.
+
+### `song/chartFromTranscription.ts`
+- Cabeceras y compases como hasta ahora, más: (a) `tempo:` inicial = `t.bpm`; entre compases,
+  cuando `barTempos[i]` difiere del tempo vigente en ≥ 1.5 % **de forma sostenida** (mediana
+  de los 2 compases siguientes también difiere), se emite una línea `tempo: <bpm>` antes de
+  ese compás (nunca más de una por 2 compases; sin cambios en el último compás); (b) si
+  `sections` existe, cada sección empieza con `[Etiqueta]` en su propia línea y sus compases
+  van en líneas de 4 (una sección repetida se escribe entera cada vez: el parser la
+  redefine); (c) el patrón `strum:` sigue siendo global.
+- Tests: chart con `barTempos` [100×8, 104×8] → una línea `tempo: 104` antes del compás 9 y
+  `parseSong` da `tempoSegments` de 2 tramos; con secciones → etiquetas en el texto y
+  `song.bars[i].section` correcto; sin cambios de tempo → ninguna línea `tempo:` extra.
+
+### UI
+- `WaveformView.setGrid` acepta `segments?: TempoSegment[]` (de `song.tempoSegments`) y
+  dibuja los pulsos con `beatToSec(segments, beat)`; el editor los pasa en `syncGrid()`. El
+  aviso "La pista solo se sincroniza con tempo constante" se elimina (el motor y la pista ya
+  siguen el mapa de tempo).
+- Editor, tras "Detectar acordes": el resumen añade "N secciones: Intro · Estrofa · Estribillo…"
+  y "tempo variable (96–104 BPM)" cuando `barTempos` varía.
+- "Desde audio…" usa `trackBeats` y `detectSections` por defecto.
+- Practicar: sin cambios (el desplegable "Sección" ya muestra los tramos y el bucle por
+  sección ya existe).

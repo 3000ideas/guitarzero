@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { StrumDetection } from '../../src/types';
 import { detectStrumPattern } from '../../src/dsp/strumDetect';
-import { mix, silence, synthStrummedProgression, tileSignal, whiteNoise } from '../helpers/synth';
+import { mix, rampBeatTimes, silence, synthClickTrack, synthStrummedProgression, tileSignal, whiteNoise } from '../helpers/synth';
 
 const SR = 44100;
 
@@ -232,5 +232,28 @@ describe('detectStrumPattern', () => {
     expect(d.bars).toBe(75);
     expect(d.pattern, describeDetection(d)).toBe('D-DU-UDU');
     expect(d.confidence).toBeGreaterThanOrEqual(0.8);
+  });
+});
+
+describe('detectStrumPattern with tracked beat times', () => {
+  it('follows a tempo ramp when the beat times are given (a constant grid drifts)', () => {
+    const beats = rampBeatTimes(92, 108, 0.3, 40);
+    const signal = synthClickTrack(beats, SR, 41, { noiseDb: -45, seed: 3 });
+    const tracked = detectStrumPattern(signal, SR, { bpm: 100, firstDownbeatSec: beats[0], beatsPerBar: 4, beatTimes: beats });
+    expect(tracked.pattern).toBe('D-D-D-D-');
+    expect(tracked.charsPerBeat).toBe(2);
+    expect(tracked.confidence).toBeGreaterThanOrEqual(0.8);
+    expect(tracked.bars).toBeGreaterThanOrEqual(16);
+    const constant = detectStrumPattern(signal, SR, { bpm: 100, firstDownbeatSec: beats[0], beatsPerBar: 4 });
+    expect(tracked.confidence).toBeGreaterThanOrEqual(constant.confidence);
+  });
+
+  it('interpolates sixteenth slots between tracked beats for a strummed pattern', () => {
+    const p = synthStrummedProgression(['C', 'G', 'Am', 'F'], SR, { pattern: 'D-DU-UDU', bpm: 100, rounds: 2, seed: 4 });
+    const beatTimes: number[] = [];
+    for (let b = 0; b * p.periodSec < p.barTimes[p.barTimes.length - 1] + p.barSec; b++) beatTimes.push(p.barTimes[0] + b * p.periodSec);
+    const r = detectStrumPattern(p.signal, SR, { bpm: 100, firstDownbeatSec: p.barTimes[0], beatsPerBar: 4, beatTimes });
+    expect(r.pattern).toBe('D-DU-UDU');
+    expect(r.confidence).toBeGreaterThanOrEqual(0.8);
   });
 });

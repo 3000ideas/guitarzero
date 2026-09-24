@@ -115,14 +115,23 @@ describe('transcribeChords', () => {
     for (const b of beatsLabelled(t, p, 'C')) expect(b.chord, describeBeats(t)).toBe('C');
   });
 
-  it('honours opts.bpm / firstBeatSec and skips the tempo estimation', () => {
+  it('honours opts.bpm / firstBeatSec and skips the tempo estimation (constant grid with trackBeats: false)', () => {
     const p = synthProgression(['D', 'A', 'Bm', 'G'], SR, { bpm: 120, rounds: 1, leadSec: 0.8, seed: 9 });
-    const t = transcribeChords(p.signal, SR, { bpm: 120, firstBeatSec: 0.8 });
+    const t = transcribeChords(p.signal, SR, { bpm: 120, firstBeatSec: 0.8, trackBeats: false });
     expect(t.bpm).toBe(120);
     expect(t.firstDownbeatSec).toBeCloseTo(0.8, 6);
     expect(t.beats[1].timeSec).toBeCloseTo(1.3, 6);
+    expect(t.barTempos).toBeUndefined();
     expect(accuracy(t, p), describeBeats(t)).toBeGreaterThanOrEqual(0.9);
     expect(barChords(t)).toEqual([[['D', 4]], [['A', 4]], [['Bm', 4]], [['G', 4]]]);
+    // With the (default) tracked grid the options seed the tracker: the beats land on the
+    // strums (within a frame or two) and bpm is the median bar tempo.
+    const tracked = transcribeChords(p.signal, SR, { bpm: 120, firstBeatSec: 0.8 });
+    expect(Math.abs(tracked.bpm - 120)).toBeLessThanOrEqual(1);
+    expect(Math.abs(tracked.firstDownbeatSec - 0.8)).toBeLessThanOrEqual(0.06);
+    expect(tracked.beats).toHaveLength(16);
+    for (let i = 0; i < 16; i++) expect(Math.abs(tracked.beats[i].timeSec - (0.8 + i * 0.5)), describeBeats(tracked)).toBeLessThanOrEqual(0.06);
+    expect(barChords(tracked)).toEqual([[['D', 4]], [['A', 4]], [['Bm', 4]], [['G', 4]]]);
   });
 
   it('a silent gap inside the song becomes N.C. beats / bars; trailing silence longer than 2 bars is cut', () => {

@@ -12,10 +12,17 @@
  * `setStrum(pattern, charsPerBeat)` (SPEC section 14) draws small ↓ / ↑ glyphs at the bottom of
  * the wave area under the strum slots of every visible bar (same colours as the highway: ↓ blue,
  * ↑ pink, x grey), so the pattern can be checked against the hits of the recording at a glance.
+ * The grid may carry the song's tempo map (`WaveformGrid.segments`, SPEC section 15): beat and
+ * bar times are then `offsetSec + beatToSec(segments, beat)` (song/tempo.ts), so a chart with
+ * `tempo:` changes between bars stays on the recording from start to end; the strum marks use
+ * the same beat times. Without segments the grid is the constant `bpm`.
  * DPR-correct; the owner calls `resize()` from its ResizeObserver. The pure helpers
- * (`computePeaks`, `clampViewport`, `zoomViewport`, `gridBeatSec`, `rulerStepSec`, `strumMarks`)
- * are testable in Node; nothing here touches `window` at import time.
+ * (`computePeaks`, `clampViewport`, `zoomViewport`, `gridBeatSec`, `gridSecToBeat`,
+ * `gridMinBeatSec`, `rulerStepSec`, `strumMarks`) are testable in Node; nothing here touches
+ * `window` at import time.
  */
+import type { TempoSegment } from '../types';
+import { beatToSec, secToBeat } from '../song/tempo';
 
 export interface WaveformGrid {
   bpm: number;
@@ -23,6 +30,13 @@ export interface WaveformGrid {
   /** Seconds into the audio where beat 0 (start of bar 1) falls; may be negative. */
   offsetSec: number;
   totalBeats: number;
+  /**
+   * Tempo map of the chart (`song.tempoSegments`; parser invariants: non-empty, sorted by
+   * `fromBeat`, `[0].fromBeat === 0`). When present, beat `k` falls at
+   * `offsetSec + beatToSec(segments, k)` and `bpm` is only the initial tempo; when absent or
+   * empty, the beats are spaced at the constant `bpm`.
+   */
+  segments?: TempoSegment[];
 }
 
 export interface WaveformViewOpts {
@@ -150,9 +164,45 @@ export function zoomViewport(view: Viewport, factor: number, aroundSec: number, 
   return clampViewport(aroundSec - frac * span, span, durationSec);
 }
 
-/** Audio time of beat `k` of the grid (k may be negative or fractional). */
-export function gridBeatSec(grid: Pick<WaveformGrid, 'bpm' | 'offsetSec'>, k: number): number {
+/** The tempo map of a grid when it carries a non-empty one, else null (constant `bpm`). */
+function gridSegments(grid: Pick<WaveformGrid, 'segments'>): TempoSegment[] | null {
+  const segs = grid.segments;
+  return segs !== undefined && segs.length > 0 ? segs : null;
+}
+
+/**
+ * Audio time of beat `k` of the grid (k may be negative or fractional): through the tempo map
+ * when the grid has one (`offsetSec + beatToSec(segments, k)`), else at the constant `bpm`.
+ */
+export function gridBeatSec(grid: Pick<WaveformGrid, 'bpm' | 'offsetSec' | 'segments'>, k: number): number {
+  const segs = gridSegments(grid);
+  if (segs) return grid.offsetSec + beatToSec(segs, k);
   return grid.offsetSec + (k * 60) / grid.bpm;
+}
+
+/** Inverse of gridBeatSec: (fractional, possibly negative) beat of the grid at audio time `sec`. */
+export function gridSecToBeat(grid: Pick<WaveformGrid, 'bpm' | 'offsetSec' | 'segments'>, sec: number): number {
+  const segs = gridSegments(grid);
+  if (segs) return secToBeat(segs, sec - grid.offsetSec);
+  return ((sec - grid.offsetSec) * grid.bpm) / 60;
+}
+
+/**
+ * Shortest beat of the grid in seconds: 60 / the fastest tempo of the map (or 60 / `bpm`).
+ * The drawing thresholds use it so a fast passage never gets denser marks than it can show.
+ */
+export function gridMinBeatSec(grid: Pick<WaveformGrid, 'bpm' | 'segments'>): number {
+  let fastest = grid.bpm;
+  const segs = gridSegments(grid);
+  if (segs) for (const s of segs) if (s.bpm > fastest) fastest = s.bpm;
+  return fastest > 0 ? 60 / fastest : 0;
+}
+
+/** Copy of a grid whose segments array is never shared with the caller. */
+function cloneGrid(grid: WaveformGrid): WaveformGrid {
+  const copy: WaveformGrid = { bpm: grid.bpm, beatsPerBar: grid.beatsPerBar, offsetSec: grid.offsetSec, totalBeats: grid.totalBeats };
+  if (grid.segments) copy.segments = grid.segments.map((s) => ({ fromBeat: s.fromBeat, bpm: s.bpm }));
+  return copy;
 }
 
 /** Ruler tick spacing (seconds) so that labels are at least `minPx` apart. */
@@ -172,12 +222,13 @@ function strumMarkKind(ch: string): StrumMarkKind | null {
 
 /**
  * The strum slots of `pattern` (D/U/x/- characters, `charsPerBeat` per beat) repeated over every
- * bar of the grid, as audio times, keeping the slots that fall in `[startSec, endSec]` and inside
- * the chart (`totalBeats`). `-` slots produce no mark. Empty when the grid, the pattern or
- * `charsPerBeat` is unusable.
+ * bar of the grid, as audio times (through the grid's tempo map when it has one, like the beat
+ * lines), keeping the slots that fall in `[startSec, endSec]` and inside the chart
+ * (`totalBeats`). `-` slots produce no mark. Empty when the grid, the pattern or `charsPerBeat`
+ * is unusable.
  */
 export function strumMarks(
-  grid: Pick<WaveformGrid, 'bpm' | 'beatsPerBar' | 'offsetSec' | 'totalBeats'>,
+  grid: Pick<WaveformGrid, 'bpm' | 'beatsPerBar' | 'offsetSec' | 'totalBeats' | 'segments'>,
   pattern: string,
   charsPerBeat: number,
   startSec: number,
@@ -186,11 +237,9 @@ export function strumMarks(
   const out: StrumMark[] = [];
   if (!(grid.bpm > 0) || !(grid.beatsPerBar > 0) || !(grid.totalBeats > 0) || !(charsPerBeat > 0) || pattern.length === 0) return out;
   if (!Number.isFinite(startSec) || !Number.isFinite(endSec) || endSec < startSec) return out;
-  const beatSec = 60 / grid.bpm;
-  const barSec = beatSec * grid.beatsPerBar;
   const barCount = Math.ceil(grid.totalBeats / grid.beatsPerBar);
-  const bFirst = Math.max(0, Math.floor((startSec - grid.offsetSec) / barSec));
-  const bLast = Math.min(barCount - 1, Math.floor((endSec - grid.offsetSec) / barSec));
+  const bFirst = Math.max(0, Math.floor(gridSecToBeat(grid, startSec) / grid.beatsPerBar));
+  const bLast = Math.min(barCount - 1, Math.floor(gridSecToBeat(grid, endSec) / grid.beatsPerBar));
   for (let b = bFirst; b <= bLast; b++) {
     for (let k = 0; k < pattern.length; k++) {
       const kind = strumMarkKind(pattern[k]);
@@ -275,9 +324,18 @@ export class WaveformView {
     this.requestRender();
   }
 
+  /**
+   * Beat grid of the chart over the audio, or null to hide it. With `grid.segments` (the song's
+   * tempo map) the beat lines, bar numbers and strum marks follow the `tempo:` changes of the
+   * chart instead of a constant `bpm`.
+   */
   setGrid(grid: WaveformGrid | null): void {
-    this.grid = grid ? { ...grid } : null;
+    this.grid = grid ? cloneGrid(grid) : null;
     this.requestRender();
+  }
+
+  getGrid(): WaveformGrid | null {
+    return this.grid ? cloneGrid(this.grid) : null;
   }
 
   /**
@@ -448,16 +506,16 @@ export class WaveformView {
   private drawGrid(ctx: CanvasRenderingContext2D, waveH: number, pxPerSec: number): void {
     const grid = this.grid;
     if (!grid || !(grid.bpm > 0) || !(grid.beatsPerBar > 0) || !(grid.totalBeats > 0)) return;
-    const beatSec = 60 / grid.bpm;
-    const pxPerBeat = beatSec * pxPerSec;
+    // Thresholds from the shortest beat of the tempo map: never denser than the fastest passage allows.
+    const pxPerBeat = gridMinBeatSec(grid) * pxPerSec;
     const pxPerBar = pxPerBeat * grid.beatsPerBar;
     const drawBeats = pxPerBeat >= 6;
     const drawBars = pxPerBar >= 3;
     const drawLabels = pxPerBar >= 26;
     if (!drawBeats && !drawBars) return;
     const { startSec, seconds } = this.view;
-    const kFirst = Math.max(0, Math.floor((startSec - grid.offsetSec) / beatSec));
-    const kLast = Math.min(grid.totalBeats, Math.ceil((startSec + seconds - grid.offsetSec) / beatSec));
+    const kFirst = Math.max(0, Math.floor(gridSecToBeat(grid, startSec)));
+    const kLast = Math.min(grid.totalBeats, Math.ceil(gridSecToBeat(grid, startSec + seconds)));
     ctx.font = '11px system-ui, sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
@@ -480,7 +538,7 @@ export class WaveformView {
     const grid = this.grid;
     const strum = this.strum;
     if (!grid || !strum || !(grid.bpm > 0) || !(grid.beatsPerBar > 0)) return;
-    const pxPerSlot = (60 / grid.bpm) * pxPerSec / strum.charsPerBeat;
+    const pxPerSlot = (gridMinBeatSec(grid) * pxPerSec) / strum.charsPerBeat;
     if (pxPerSlot < MIN_STRUM_SLOT_PX) return;
     const { startSec, seconds } = this.view;
     const marks = strumMarks(grid, strum.pattern, strum.charsPerBeat, startSec - 1 / pxPerSec, startSec + seconds + 1 / pxPerSec);

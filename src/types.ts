@@ -171,6 +171,16 @@ export interface TranscribedBar {
   chords: Array<{ chord: string | null; beats: number }>;
 }
 
+export interface TranscribedSection {
+  /** Inclusive bar range (bar indices into the transcription). */
+  startBar: number;
+  endBar: number;
+  /** Spanish label: 'Intro' | 'Estrofa' | 'Estribillo' | 'Puente' | 'Final' | 'Parte A'... */
+  label: string;
+  /** Structural letter (A, B, C...) shared by repeated sections. */
+  letter: string;
+}
+
 export interface ChordTranscription {
   bpm: number;
   beatsPerBar: number;
@@ -181,6 +191,10 @@ export interface ChordTranscription {
   bars: TranscribedBar[];
   /** Mean over beats of (best - second best emission score), clamped 0..1. */
   confidence: number;
+  /** Tempo (bpm) of each bar from the tracked beats; absent when the grid was constant. */
+  barTempos?: number[];
+  /** Detected structure; absent when segmentation was not run or found a single section. */
+  sections?: TranscribedSection[];
 }
 
 /** Result of dsp/strumDetect.ts: the strumming pattern heard in the audio. */

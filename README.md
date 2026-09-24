@@ -112,6 +112,11 @@ En la **Biblioteca**, pulsa **"Desde audio…"** y elige el archivo de la canci�
    golpe y escribe la línea `strum:` con ↓ en los tiempos y ↑ en los contratiempos. En el editor
    puedes repetirlo con "Detectar rasgueo del audio" y ver las flechas sobre la forma de onda.
 
+5. Sigue el **pulso real** de la grabación (si la canción acelera o frena, el texto lleva
+   cambios de `tempo:`) y separa la **estructura** en secciones (`[Intro]`, `[Estrofa]`,
+   `[Estribillo]`, `[Puente]`, `[Final]`) por repetición y energía, para practicar cada parte
+   en bucle desde el desplegable "Sección".
+
 Es un **borrador**: con voz, batería y bajo mezclados, la detección acierta la mayoría de los
 acordes, pero conviene repasarlos en el editor (pulsa "Escuchar con metrónomo" y corrige lo
 que no cuadre). En el panel "Pista de audio" del editor también puedes volver a lanzar

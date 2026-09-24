@@ -11,7 +11,9 @@
  * "Desde audio…" (SPEC section 12) creates a song from an audio file: the file is decoded with
  * BackingTrack (shared AudioContext, no resume needed), stored in IndexedDB (putTrack), its
  * tempo and chords are transcribed (dsp/tempoEstimate.ts + dsp/chordTranscribe.ts, 4/4, basic
- * vocabulary) with an inline "Analizando «archivo»… N %" status, the strum pattern is detected
+ * vocabulary, with beat tracking and section detection — SPEC section 15 — so the chart carries
+ * the recording's `tempo:` changes and its `[Intro]` / `[Estrofa]` / `[Estribillo]`… blocks)
+ * with an inline "Analizando «archivo»… N %" status, the strum pattern is detected
  * on the transcription's grid (dsp/strumDetect.ts, SPEC section 14; used when its confidence
  * ≥ 0.3, else one down-strum per beat), the chart text is generated
  * (song/chartFromTranscription.ts) and saved with the audio metadata (`offsetSec` = first
@@ -280,6 +282,9 @@ export const libraryScreen: Screen = {
             firstBeatSec: tempo.firstBeatSec,
             beatsPerBar: 4,
             vocabulary: 'basic',
+            // SPEC section 15: follow the recording's beats (tempo map) and split the chart into sections.
+            trackBeats: true,
+            detectSections: true,
             onProgress: (p) => {
               if (!unmounted) showImport(importStatusText(file.name, p), p);
             },
@@ -300,6 +305,7 @@ export const libraryScreen: Screen = {
             bpm: transcription.bpm,
             firstDownbeatSec: transcription.firstDownbeatSec,
             beatsPerBar: transcription.beatsPerBar,
+            beatTimes: transcription.beats.map((b) => b.timeSec),
           });
           strum = chartStrumFrom(detected);
         } catch (err) {

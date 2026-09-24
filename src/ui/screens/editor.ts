@@ -40,15 +40,35 @@
  * `syncGrid`). "Detectar acordes" also runs the strum detection on the transcription's grid and
  * "Sustituir acordes" passes the pattern to chartFromTranscription when its confidence ≥ 0.3.
  *
+ * Tempo map and structure (SPEC section 15): `syncGrid` hands the text's `tempoSegments` to the
+ * waveform (`WaveformGrid.segments`), so the beat grid, the strum marks and the clicks of the
+ * test listen follow the `tempo:` changes of the chart (the former "tempo constante" warning is
+ * gone: the engine and the track already follow the tempo map). The "Detectar acordes" summary
+ * appends "N secciones: Intro · Estrofa · Estribillo…" and "tempo variable (96–104 BPM)" when
+ * the transcription carries `sections` / a varying `barTempos`.
+ *
  * `analyzeSource`, `lineRange`, `lineOfOffset`, `rewriteTempoHeader`, `formatTempoEstimate`,
  * `previewClickTimes`, the transcription formatters (`formatTranscriptionSummary`,
- * `transcriptionBarLines`, `appendBarLines`), the simplify helpers (`simplifyPreviewRows`,
+ * `sectionsSummaryText`, `variableTempoText`, `transcriptionBarLines`, `appendBarLines`), the
+ * simplify helpers (`simplifyPreviewRows`,
  * `remainingHardChords`, `chordChipInfo`, `substituteChordEverywhere`, `UndoStack`...), the strum
  * helpers (`formatStrumDetection`, `chartStrumFrom`, `firstDownbeatInAudio`, `waveformStrum`)
  * and the help data are pure (testable in Node).
  */
 import './editor.css';
-import type { AudioTrackInfo, ChordShape, ChordTranscription, ParseError, Screen, Song, StoredSong, StrumDetection, TempoEstimate } from '../../types';
+import type {
+  AudioTrackInfo,
+  ChordShape,
+  ChordTranscription,
+  ParseError,
+  Screen,
+  Song,
+  StoredSong,
+  StrumDetection,
+  TempoEstimate,
+  TempoSegment,
+  TranscribedSection,
+} from '../../types';
 import { clear, fmtSeconds, h } from '../dom';
 import { drawChordDiagram } from '../chordDiagram';
 import { WaveformView } from '../waveform';
@@ -70,7 +90,7 @@ import {
   type WeightedChord,
 } from '../../music/simplify';
 import { parseSong } from '../../song/parser';
-import { songDurationSec } from '../../song/tempo';
+import { beatToSec, songDurationSec } from '../../song/tempo';
 import { isExampleId } from '../../song/examples';
 import { getSong, saveSong } from '../../song/storage';
 import { deleteTrack, getTrack, hasIndexedDb, putTrack } from '../../song/audioStore';
@@ -120,6 +140,10 @@ export const SIMPLIFY_MAX_CHORD_OPTIONS: ReadonlyArray<{ value: string; label: s
 export const UNDO_LIMIT = 20;
 /** Label of the link shown in the detection summary (SPEC section 13). */
 export const SIMPLIFY_FOR_BEGINNERS_LABEL = 'Simplificar para principiantes';
+/** Distinct section labels listed in the "Detectar acordes" summary before an ellipsis (SPEC section 15). */
+export const SUMMARY_MAX_SECTION_LABELS = 6;
+/** `barTempos` whose spread (max − min, relative to the slowest bar) reaches this fraction is reported as "tempo variable". */
+export const VARIABLE_TEMPO_THRESHOLD = 0.015;
 
 // ---------------------------------------------------------------- pure helpers
 
@@ -406,13 +430,24 @@ export interface PreviewClick {
 /**
  * Metronome clicks of a test listen that starts at `fromSec`: every grid beat from the lead-in
  * bar (beat -beatsPerBar) to the end of bar `bars`, keeping only those at or after `fromSec`.
+ * With `segments` (the song's tempo map) the beats follow the `tempo:` changes of the text
+ * (`offsetSec + beatToSec(segments, k)`, like the waveform grid); otherwise they are spaced at
+ * the constant `bpm`.
  */
-export function previewClickTimes(offsetSec: number, bpm: number, beatsPerBar: number, fromSec: number, bars: number = PREVIEW_BARS): PreviewClick[] {
+export function previewClickTimes(
+  offsetSec: number,
+  bpm: number,
+  beatsPerBar: number,
+  fromSec: number,
+  bars: number = PREVIEW_BARS,
+  segments?: TempoSegment[],
+): PreviewClick[] {
   const out: PreviewClick[] = [];
   if (!(bpm > 0) || !(beatsPerBar > 0) || !(bars > 0)) return out;
   const beatSec = 60 / bpm;
+  const segs = segments !== undefined && segments.length > 0 ? segments : null;
   for (let k = -beatsPerBar; k < bars * beatsPerBar; k++) {
-    const sec = offsetSec + k * beatSec;
+    const sec = segs ? offsetSec + beatToSec(segs, k) : offsetSec + k * beatSec;
     if (sec < fromSec - 1e-6) continue;
     out.push({ sec, accent: ((k % beatsPerBar) + beatsPerBar) % beatsPerBar === 0 });
   }
@@ -436,16 +471,66 @@ export function transcriptionChordNames(t: Pick<ChordTranscription, 'bars'>): st
   return names;
 }
 
-/** "Tonalidad Sol mayor · 96 BPM · 48 compases · G D Em C". */
-export function formatTranscriptionSummary(t: Pick<ChordTranscription, 'bars' | 'bpm' | 'key'>): string {
+/** Distinct section labels of a transcription in order of first appearance. */
+export function transcriptionSectionLabels(sections: ReadonlyArray<Pick<TranscribedSection, 'label'>>): string[] {
+  const labels: string[] = [];
+  for (const s of sections) if (!labels.includes(s.label)) labels.push(s.label);
+  return labels;
+}
+
+/**
+ * "6 secciones: Intro · Estrofa · Estribillo · Final" — the distinct labels in order of
+ * appearance, at most SUMMARY_MAX_SECTION_LABELS of them followed by "…". Null without sections.
+ */
+export function sectionsSummaryText(sections: ReadonlyArray<Pick<TranscribedSection, 'label'>> | undefined): string | null {
+  if (!sections || sections.length === 0) return null;
+  const labels = transcriptionSectionLabels(sections);
+  const shown = labels.slice(0, SUMMARY_MAX_SECTION_LABELS).join(' · ') + (labels.length > SUMMARY_MAX_SECTION_LABELS ? '…' : '');
+  return `${sections.length === 1 ? '1 sección' : `${sections.length} secciones`}: ${shown}`;
+}
+
+/** Slowest and fastest of the finite, positive values of `barTempos`, or null when there are none. */
+export function tempoRange(barTempos: readonly number[] | undefined): { min: number; max: number } | null {
+  if (!barTempos) return null;
+  let min = Infinity;
+  let max = -Infinity;
+  for (const v of barTempos) {
+    if (!Number.isFinite(v) || v <= 0) continue;
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+  return min <= max ? { min, max } : null;
+}
+
+/**
+ * "tempo variable (96–104 BPM)" when the bar tempos of a transcription spread by at least
+ * VARIABLE_TEMPO_THRESHOLD of the slowest bar; null otherwise (constant grid or steady tempo).
+ */
+export function variableTempoText(barTempos: readonly number[] | undefined): string | null {
+  const range = tempoRange(barTempos);
+  if (!range || range.max - range.min < VARIABLE_TEMPO_THRESHOLD * range.min) return null;
+  return `tempo variable (${formatBpm(range.min)}–${formatBpm(range.max)} BPM)`;
+}
+
+/**
+ * "Tonalidad Sol mayor · 96 BPM · 48 compases · G D Em C", plus " · 6 secciones: Intro ·
+ * Estrofa · Estribillo…" when the transcription has sections and " · tempo variable (96–104
+ * BPM)" when its bar tempos vary (SPEC section 15).
+ */
+export function formatTranscriptionSummary(t: Pick<ChordTranscription, 'bars' | 'bpm' | 'key' | 'sections' | 'barTempos'>): string {
   const bars = t.bars.length;
   const names = transcriptionChordNames(t);
-  return [
+  const parts = [
     `Tonalidad ${t.key.name}`,
     `${formatBpm(t.bpm)} BPM`,
     bars === 1 ? '1 compás' : `${bars} compases`,
     names.length > 0 ? names.join(' ') : 'sin acordes',
-  ].join(' · ');
+  ];
+  const sections = sectionsSummaryText(t.sections);
+  if (sections !== null) parts.push(sections);
+  const tempo = variableTempoText(t.barTempos);
+  if (tempo !== null) parts.push(tempo);
+  return parts.join(' · ');
 }
 
 /**
@@ -842,7 +927,6 @@ export const editorScreen: Screen = {
       'Aplicar inicio',
     ) as HTMLButtonElement;
     const detectRow = h('div.audio-row', null, detectBtn, detectResult, applyTempoBtn, applyStartBtn);
-    const constantTempoWarn = h('div.audio-warn', { hidden: true }, 'La pista solo se sincroniza con tempo constante: el texto cambia de tempo entre compases.');
 
     // Chord transcription (SPEC section 12)
     const chordsBtn = h(
@@ -930,7 +1014,6 @@ export const editorScreen: Screen = {
       waveHint,
       syncRow,
       detectRow,
-      constantTempoWarn,
       chordsRow,
       chordResultRow,
       lowConfidenceWarn,
@@ -1204,17 +1287,24 @@ export const editorScreen: Screen = {
       audioStatus.classList.toggle('is-error', isError);
     }
 
-    /** Beat grid of the current text over the waveform; also toggles the constant-tempo warning. */
+    /**
+     * Beat grid of the current text over the waveform, with the text's tempo map so the beats
+     * (and the strum marks, which share them) follow its `tempo:` changes (SPEC section 15).
+     */
     function syncGrid(): void {
       if (!audio) {
         waveform.setGrid(null);
-        constantTempoWarn.hidden = true;
         return;
       }
-      waveform.setGrid({ bpm: bpm(), beatsPerBar: beatsPerBar(), offsetSec: audio.offsetSec, totalBeats: analysis.song.totalBeats });
+      waveform.setGrid({
+        bpm: bpm(),
+        beatsPerBar: beatsPerBar(),
+        offsetSec: audio.offsetSec,
+        totalBeats: analysis.song.totalBeats,
+        segments: analysis.song.tempoSegments,
+      });
       const strum = waveformStrum(textarea.value, beatsPerBar());
       waveform.setStrum(strum.pattern, strum.charsPerBeat);
-      constantTempoWarn.hidden = analysis.song.tempoSegments.length <= 1;
     }
 
     function renderTrackInfo(): void {
@@ -1295,7 +1385,12 @@ export const editorScreen: Screen = {
     /** Strum heard on the grid of a transcription (never throws: null when the detection fails). */
     function detectTranscriptionStrum(samples: Float32Array, t: ChordTranscription): StrumDetection | null {
       try {
-        return detectStrumPattern(samples, sampleRate, { bpm: t.bpm, firstDownbeatSec: t.firstDownbeatSec, beatsPerBar: t.beatsPerBar });
+        return detectStrumPattern(samples, sampleRate, {
+          bpm: t.bpm,
+          firstDownbeatSec: t.firstDownbeatSec,
+          beatsPerBar: t.beatsPerBar,
+          beatTimes: t.beats.map((b) => b.timeSec),
+        });
       } catch (err) {
         console.warn('No se pudo detectar el rasgueo de la transcripción', err);
         return null;
@@ -1390,7 +1485,12 @@ export const editorScreen: Screen = {
       updateButtons();
       strumDetectStatus.classList.remove('is-error');
       strumDetectStatus.textContent = STRUM_ANALYZING_TEXT;
-      const opts = { bpm: bpm(), beatsPerBar: beatsPerBar(), firstDownbeatSec: firstDownbeatInAudio(audio.offsetSec, bpm(), beatsPerBar()) };
+      const segs = analysis.song.tempoSegments;
+      const totalBeats = Math.max(0, Math.floor(analysis.song.totalBeats));
+      const offset = audio.offsetSec;
+      // Beat times from the text's tempo map so a song with tempo changes keeps its bars aligned.
+      const beatTimes = totalBeats >= beatsPerBar() * 2 ? Array.from({ length: totalBeats + 1 }, (_, k) => offset + beatToSec(segs, k)) : undefined;
+      const opts = { bpm: bpm(), beatsPerBar: beatsPerBar(), firstDownbeatSec: firstDownbeatInAudio(audio.offsetSec, bpm(), beatsPerBar()), beatTimes };
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
       try {
         if (unmounted || !backing) return;
@@ -1811,7 +1911,7 @@ export const editorScreen: Screen = {
       backing.start(whenWall, fromSec, 1);
       if (mode === 'metronome') {
         const clicks = ensureMetronome();
-        for (const c of previewClickTimes(audio.offsetSec, bpm(), beatsPerBar(), fromSec, PREVIEW_BARS)) {
+        for (const c of previewClickTimes(audio.offsetSec, bpm(), beatsPerBar(), fromSec, PREVIEW_BARS, analysis.song.tempoSegments)) {
           clicks.scheduleClick(whenWall + (c.sec - fromSec), c.accent);
         }
       }

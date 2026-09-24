@@ -33,8 +33,65 @@ export interface StrumDetectOpts {
   beatsPerBar: number;
   /** Only the first `maxSeconds` of audio are analysed (default 120). */
   maxSeconds?: number;
+  /**
+   * Tracked beat times in seconds (beat 0 = first downbeat, one entry per beat). When given,
+   * bars and slots follow these times (so a song that speeds up or slows down stays aligned)
+   * instead of the constant `bpm` / `firstDownbeatSec` grid.
+   */
+  beatTimes?: number[];
   /** Accepted for symmetry with the other analysers; the onset envelope is pitch-agnostic, so it is unused. */
   a4?: number;
+}
+
+/** One analysed bar: its span and the audio time of each of its sixteenth slots. */
+interface BarGrid {
+  start: number;
+  end: number;
+  slots: number[];
+  /** Local sixteenth duration (window sizing). */
+  slotSec: number;
+}
+
+/**
+ * Bars covering the analysed audio. With `opts.beatTimes` every slot is interpolated between
+ * consecutive tracked beats (beats past the last one are extrapolated with the last interval);
+ * otherwise a constant grid from `firstDownbeatSec` at `bpm`. Bars that end after the audio
+ * (beyond a small slack) are dropped.
+ */
+function buildBarGrid(opts: StrumDetectOpts, beatsPerBar: number, beatSec: number, nSlots16: number, durationSec: number): BarGrid[] {
+  const grid: BarGrid[] = [];
+  const bt = opts.beatTimes;
+  if (bt && bt.length > beatsPerBar) {
+    const lastInterval = bt.length >= 2 ? Math.max(1e-3, bt[bt.length - 1] - bt[bt.length - 2]) : beatSec;
+    const beatAt = (j: number): number => (j < bt.length ? bt[j] : bt[bt.length - 1] + (j - (bt.length - 1)) * lastInterval);
+    for (let first = 0; first + beatsPerBar <= bt.length; first += beatsPerBar) {
+      const start = beatAt(first);
+      const end = beatAt(first + beatsPerBar);
+      if (!(end > start)) break;
+      const slotSec = (end - start) / nSlots16;
+      if (end > durationSec + BAR_END_SLACK * slotSec) break;
+      const slots: number[] = [];
+      for (let k = 0; k < nSlots16; k++) {
+        const j = first + (k >> 2);
+        const a = beatAt(j);
+        const b = beatAt(j + 1);
+        slots.push(a + ((k & 3) / 4) * (b - a));
+      }
+      grid.push({ start, end, slots, slotSec });
+    }
+    return grid;
+  }
+  const slotSec = beatSec / 4;
+  const barSec = beatSec * beatsPerBar;
+  const firstBar = opts.firstDownbeatSec >= 0 ? 0 : Math.ceil(-opts.firstDownbeatSec / barSec);
+  for (let b = firstBar; ; b++) {
+    const start = opts.firstDownbeatSec + b * barSec;
+    if (start + barSec > durationSec + BAR_END_SLACK * slotSec) break;
+    const slots: number[] = [];
+    for (let k = 0; k < nSlots16; k++) slots.push(start + k * slotSec);
+    grid.push({ start, end: start + barSec, slots, slotSec });
+  }
+  return grid;
 }
 
 /** Below this RMS the signal counts as silence (same gate as tempoEstimate.ts). */
@@ -199,35 +256,27 @@ export function detectStrumPattern(samples: Float32Array, sampleRate: number, op
     return m;
   };
 
-  // (2) bar grid over the analysed audio
+  // (2) bar grid over the analysed audio: tracked beat times when given, else a constant grid
   const beatSec = 60 / opts.bpm;
-  const slotSec = beatSec / 4;
   const nSlots16 = 4 * beatsPerBar;
-  const barSec = beatSec * beatsPerBar;
   const durationSec = data.length / rate;
-  const firstBar = opts.firstDownbeatSec >= 0 ? 0 : Math.ceil(-opts.firstDownbeatSec / barSec);
-  const barStarts: number[] = [];
-  for (let b = firstBar; ; b++) {
-    const start = opts.firstDownbeatSec + b * barSec;
-    if (start + barSec > durationSec + BAR_END_SLACK * slotSec) break;
-    barStarts.push(start);
-  }
-  const nBars = barStarts.length;
+  const grid = buildBarGrid(opts, beatsPerBar, beatSec, nSlots16, durationSec);
+  const nBars = grid.length;
   if (nBars === 0) return silentDetection(beatsPerBar);
 
   // (3) sixteenth slot strengths per bar, bar energies
-  const half = SLOT_HALF_WIDTH * slotSec;
-  const lookahead = Math.min(SLOT_LOOKAHEAD_SEC, 0.5 * slotSec);
   const strengths = new Float64Array(nBars * nSlots16);
   const energy = new Float64Array(nBars);
   for (let b = 0; b < nBars; b++) {
-    const start = barStarts[b];
+    const bar = grid[b];
+    const half = SLOT_HALF_WIDTH * bar.slotSec;
+    const lookahead = Math.min(SLOT_LOOKAHEAD_SEC, 0.5 * bar.slotSec);
     for (let k = 0; k < nSlots16; k++) {
-      const t = start + k * slotSec;
+      const t = bar.slots[k];
       strengths[b * nSlots16 + k] = maxEnvIn(t - half, t + half + lookahead);
     }
-    const n0 = frameOf(start, Math.ceil);
-    const n1 = frameOf(start + barSec, Math.ceil);
+    const n0 = frameOf(bar.start, Math.ceil);
+    const n1 = frameOf(bar.end, Math.ceil);
     energy[b] = cum[n1] - cum[n0];
   }
   const sorted = Array.from(energy).sort((x, y) => x - y);
