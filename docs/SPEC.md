@@ -895,3 +895,57 @@ opción de limitarse a N acordes (p. ej. 4) para tocar la canción entera con el
   flecha sustituye ese acorde en todo el texto (mismo mecanismo de reescritura por tokens).
 - Tras "Detectar acordes" (sección 12) o "Desde audio…", el resumen incluye el enlace "Simplificar
   para principiantes" que abre la tarjeta con los valores por defecto.
+
+## 14. Detección del rasgueo desde el audio
+
+Objetivo: que las flechas ↓/↑ de la autopista **coincidan con la grabación**. A partir de la
+rejilla de pulsos (tempo, inicio del compás 1 y compás) se mide qué subdivisiones de cada
+compás llevan un ataque en el audio y se deduce el patrón `strum:` real de la canción. Tipo
+(ya en `types.ts`): `StrumDetection`.
+
+### dsp/strumDetect.ts (puro, testeable)
+- `detectStrumPattern(samples: Float32Array, sampleRate: number, opts: { bpm: number; firstDownbeatSec: number; beatsPerBar: number; maxSeconds?: 120; a4?: number }): StrumDetection`.
+- Algoritmo:
+  1. Envolvente de ataques como en `tempoEstimate.ts` (decimación a ≈ 11025 Hz, STFT 1024/256,
+     flujo de media onda sobre `log(1+mag)`, resta de media móvil 0.5 s, rectificado). Reutilizar
+     la función existente si está exportada; si no, exportarla desde `tempoEstimate.ts`
+     (cambio aditivo) en vez de duplicarla.
+  2. Rejilla: pulso `T = 60/bpm`; compases desde `firstDownbeatSec` hasta el final del audio
+     (o `maxSeconds`); descartar compases con energía total < 10 % de la mediana (silencios).
+  3. Fuerza por slot: para semicorcheas (4 slots por pulso) `s[k]` = máximo de la envolvente en
+     `[t_k − 0.12·T/4, t_k + 0.12·T/4 + 0.03 s]` (el ataque puede llegar unos ms tarde);
+     acumular la media por slot del compás sobre todos los compases; normalizar al máximo →
+     `slot16[]` (`4·beatsPerBar` valores).
+  4. Subdivisión: si la suma de los slots impares de semicorchea (posiciones 1 y 3 de cada
+     pulso) supera el 35 % de la suma de los slots de corchea → `charsPerBeat = 4`; si no, 2;
+     si además los contratiempos de corchea no superan el 25 % de los tiempos → 1.
+     `slotStrength` es el vector reducido a esa resolución (media de los slots agrupados).
+  5. Umbral: un slot es rasgueo si `slotStrength ≥ 0.4` (el primer slot del compás siempre lo
+     es). Dirección: slots que caen en tiempo (o en la primera mitad del pulso a resolución 4:
+     posiciones 0 y 1) → `D`; contratiempos (posición 1 a resolución 2; posiciones 2 y 3 a
+     resolución 4) → `U`; resto `-`. Si todos los slots activos fueran tiempos → todo `D`.
+  6. `confidence`: fracción de compases en los que el conjunto de slots activos (con el mismo
+     umbral aplicado al compás individual) coincide con el patrón en ≥ 75 % de las posiciones.
+- Tests (`tests/dsp/strumDetect.test.ts`) con un helper nuevo en `tests/helpers/synth.ts`:
+  `synthStrummedProgression(chords, sampleRate, { bpm, pattern, rounds, noiseDb })` que toca la
+  progresión rasgueando solo en los slots del patrón (cada rasgueo = ataque de 10 ms con las
+  cuerdas escalonadas 8 ms, acentuado en `D`). Casos: `D-DU-UDU` a 100 BPM → mismo patrón,
+  `charsPerBeat 2`, `confidence ≥ 0.8`; `D-D-D-D-` → `D-D-D-D-`; `DUDUDUDU` → mismo; `D---D---`
+  → mismo; 3/4 `D-DUDU` → mismo; semicorcheas `D-DUD-DUD-DUD-DU` (16 chars) → `charsPerBeat 4`
+  y patrón igual en ≥ 14 de 16 posiciones; silencio → `pattern` = `'D-'.repeat(beatsPerBar)`,
+  `confidence 0`. Rendimiento: 3 min en < 1.5 s.
+
+### UI
+- Editor, tarjeta **Rasgueo**: botón **"Detectar rasgueo del audio"** (activo con pista cargada;
+  usa `bpm` y `beatsPerBar` del texto y `offsetSec` de la pista) → escribe el patrón detectado
+  en el campo de letras, selecciona el preset correspondiente o "Personalizado", y muestra
+  "Detectado en N compases (confianza alta/media/baja)"; "Aplicar" lo escribe en `strum:`.
+  Junto al botón, la nota: "Las flechas se calculan con los golpes del audio: ↓ en los tiempos,
+  ↑ en los contratiempos".
+- Forma de onda: `WaveformView.setStrum(pattern: string | null, charsPerBeat)` dibuja bajo cada
+  compás visible pequeñas marcas ↓/↑ en los slots del patrón (mismos colores que la
+  autopista: ↓ azul, ↑ rosa) para comprobar a simple vista que caen sobre los golpes. El
+  editor la llama con el patrón vigente del texto en cada `syncGrid()`.
+- Importación **"Desde audio…"** y **"Detectar acordes"** → tras transcribir, `detectStrumPattern`
+  con la rejilla de la transcripción y el patrón se pasa a `chartFromTranscription` como
+  `opts.strum` (si `confidence ≥ 0.3`; si no, una por pulso).

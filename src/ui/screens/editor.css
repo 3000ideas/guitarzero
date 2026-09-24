@@ -490,3 +490,25 @@
   letter-spacing: 0.08em;
   margin-left: 6px;
 }
+
+/* ---------------------------------------------------------------- Strum detection (SPEC section 14) */
+.editor .strum-detect-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 10px;
+}
+
+.editor .strum-detect-status.is-error {
+  color: var(--bad);
+}
+
+.editor .strum-note {
+  margin: 6px 0 0;
+}
+
+.editor .audio-chord-strum {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.04em;
+}

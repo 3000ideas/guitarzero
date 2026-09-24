@@ -408,3 +408,147 @@ export function tileSignal(signal: Float32Array, times: number): Float32Array {
   for (let i = 0; i < times; i++) out.set(signal, i * signal.length);
   return out;
 }
+
+// ---------------------------------------------------------------- strummed progressions (SPEC section 14)
+
+/** A strum character of the song grammar that produces an attack ('-' is a rest). */
+export type StrumChar = 'D' | 'U' | 'x';
+
+export interface StrummedProgressionOpts {
+  /** Strum pattern in the song grammar ([DUx-]), `beatsPerBar` x 1, 2 or 4 characters long. */
+  pattern: string;
+  /** Tempo in BPM (default 100). */
+  bpm?: number;
+  /** Beats per bar (default 4); with `pattern.length` it fixes the characters per beat. */
+  beatsPerBar?: number;
+  /** Bars each chord lasts (default 1). */
+  barsPerChord?: number;
+  /** Times the whole progression is played (default 1). */
+  rounds?: number;
+  /** Silence before the first bar, seconds (default 0). */
+  leadSec?: number;
+  /** Extra seconds after the last bar where the last strum keeps ringing (default 0). */
+  tailSec?: number;
+  /** RMS of a white-noise floor in dBFS, or null for none (default -40). */
+  noiseDb?: number | null;
+  /** Peak level of a down-strum in dBFS (default -20). */
+  dbfs?: number;
+  /** Up-strums are this many dB quieter than down-strums (default 3). */
+  accentDb?: number;
+  /** Delay between consecutive strings of one strum, seconds (default 0.008). */
+  staggerSec?: number;
+  /** Seed of the first strum (strum i uses seed + i); the noise uses seed + 1000 (default 1). */
+  seed?: number;
+  /** MIDI notes per chord name; names missing here use the CHORD_LIBRARY voicing. */
+  voicings?: Record<string, number[]>;
+  /** Fade-out of the ringing chord right before the next attack, seconds (default 0.015). */
+  dampSec?: number;
+  /** Passed to synthChord (default 1; muted 'x' strums always use 0.03). */
+  decayScale?: number;
+  harmonics?: number;
+}
+
+export interface StrummedStrum {
+  /** Time of the first string attack, seconds. */
+  timeSec: number;
+  dir: StrumChar;
+  chord: string;
+  /** Bar index (0-based) and slot index within the pattern. */
+  bar: number;
+  slot: number;
+}
+
+export interface StrummedProgression {
+  signal: Float32Array;
+  /** Beat period in seconds (60 / bpm). */
+  periodSec: number;
+  /** Bar length in seconds. */
+  barSec: number;
+  beatsPerBar: number;
+  charsPerBeat: number;
+  pattern: string;
+  /** Start time of every bar (= its first slot), seconds. */
+  barTimes: number[];
+  /** Chord name of every bar. */
+  barChords: string[];
+  /** Every strum in time order. */
+  strums: StrummedStrum[];
+}
+
+/**
+ * A chord progression strummed with a fixed pattern: every chord of `chords` lasts
+ * `barsPerChord` bars and the bar is strummed ONLY on the D/U/x slots of `pattern` (each slot =
+ * 1 / charsPerBeat beat). Every strum is a fresh chord attack (10 ms pick noise) with the six
+ * strings staggered `staggerSec` (8 ms) apart: down-strums sweep from the low strings, up-strums
+ * from the high ones and are `accentDb` (3 dB) quieter; 'x' is a heavily damped (muted) strum.
+ * The chord rings until the next strum (damped over `dampSec` right before it) and the whole
+ * thing sits on a seeded white-noise floor. Returns the signal with the bar grid and the strums.
+ */
+export function synthStrummedProgression(
+  chords: string[],
+  sampleRate: number,
+  opts: StrummedProgressionOpts,
+): StrummedProgression {
+  const pattern = opts.pattern;
+  const beatsPerBar = opts.beatsPerBar ?? 4;
+  if (!/^[DUx-]+$/.test(pattern)) throw new Error(`invalid strum pattern "${pattern}"`);
+  const charsPerBeat = pattern.length / beatsPerBar;
+  if (charsPerBeat !== 1 && charsPerBeat !== 2 && charsPerBeat !== 4) {
+    throw new Error(`pattern of ${pattern.length} chars does not fit ${beatsPerBar} beats per bar`);
+  }
+  const bpm = opts.bpm ?? 100;
+  const periodSec = 60 / bpm;
+  const barSec = periodSec * beatsPerBar;
+  const slotSec = periodSec / charsPerBeat;
+  const barsPerChord = opts.barsPerChord ?? 1;
+  const rounds = opts.rounds ?? 1;
+  const leadSec = opts.leadSec ?? 0;
+  const tailSec = opts.tailSec ?? 0;
+  const seed = opts.seed ?? 1;
+  const dbfs = opts.dbfs ?? -20;
+  const accentDb = opts.accentDb ?? 3;
+  const staggerSec = opts.staggerSec ?? 0.008;
+  const dampSec = opts.dampSec ?? 0.015;
+
+  const barChords: string[] = [];
+  for (let r = 0; r < rounds; r++) {
+    for (const name of chords) for (let b = 0; b < barsPerChord; b++) barChords.push(name);
+  }
+  const barTimes = barChords.map((_, i) => leadSec + i * barSec);
+  const totalSec = leadSec + barChords.length * barSec + tailSec;
+
+  const strums: StrummedStrum[] = [];
+  barChords.forEach((chord, bar) => {
+    for (let slot = 0; slot < pattern.length; slot++) {
+      const c = pattern[slot];
+      if (c === '-') continue;
+      strums.push({ timeSec: barTimes[bar] + slot * slotSec, dir: c as StrumChar, chord, bar, slot });
+    }
+  });
+
+  const parts: MixPart[] = [];
+  strums.forEach((s, i) => {
+    const end = i + 1 < strums.length ? strums[i + 1].timeSec : totalSec;
+    const len = Math.max(0, end - s.timeSec);
+    const notes = opts.voicings?.[s.chord] ?? libraryVoicing(s.chord);
+    // Down-strums sweep from the low strings, up-strums from the high ones.
+    const order = s.dir === 'U' ? [...notes].reverse() : notes;
+    const chordOpts: ChordSynthOpts = {
+      dbfs: s.dir === 'U' ? dbfs - accentDb : dbfs,
+      seed: seed + i,
+      offsets: order.map((_, j) => j * staggerSec),
+      decayScale: s.dir === 'x' ? 0.03 : (opts.decayScale ?? 1),
+    };
+    if (opts.harmonics !== undefined) chordOpts.harmonics = opts.harmonics;
+    const sig = synthChord(order, sampleRate, len, chordOpts);
+    if (i + 1 < strums.length && dampSec > 0) {
+      const damp = Math.min(sig.length, Math.round(dampSec * sampleRate));
+      for (let k = 0; k < damp; k++) sig[sig.length - 1 - k] *= k / damp;
+    }
+    parts.push({ signal: sig, atSec: s.timeSec });
+  });
+  const noiseDb = opts.noiseDb === undefined ? -40 : opts.noiseDb;
+  if (noiseDb !== null) parts.push({ signal: whiteNoise(sampleRate, totalSec, noiseDb, seed + 1000), atSec: 0 });
+  const signal = mix(parts, sampleRate, totalSec);
+  return { signal, periodSec, barSec, beatsPerBar, charsPerBeat, pattern, barTimes, barChords, strums };
+}

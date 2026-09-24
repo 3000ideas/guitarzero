@@ -9,9 +9,12 @@
  *  - drag the marker  -> onOffsetChange during the drag and on release
  *  - wheel            -> zoom around the cursor (Shift + wheel / horizontal wheel -> scroll)
  *  - middle button or Alt + drag -> scroll
+ * `setStrum(pattern, charsPerBeat)` (SPEC section 14) draws small ↓ / ↑ glyphs at the bottom of
+ * the wave area under the strum slots of every visible bar (same colours as the highway: ↓ blue,
+ * ↑ pink, x grey), so the pattern can be checked against the hits of the recording at a glance.
  * DPR-correct; the owner calls `resize()` from its ResizeObserver. The pure helpers
- * (`computePeaks`, `clampViewport`, `zoomViewport`, `gridBeatSec`, `rulerStepSec`) are testable
- * in Node; nothing here touches `window` at import time.
+ * (`computePeaks`, `clampViewport`, `zoomViewport`, `gridBeatSec`, `rulerStepSec`, `strumMarks`)
+ * are testable in Node; nothing here touches `window` at import time.
  */
 
 export interface WaveformGrid {
@@ -68,6 +71,28 @@ export const WAVEFORM_COLORS = {
   rulerText: '#8b93a1',
   empty: '#8b93a1',
 } as const;
+
+/** Colours of the strum marks: the highway's ↓ (neutral) and ↑ (upStrum) colours; x uses the bar-number grey. */
+export const STRUM_MARK_COLORS = {
+  down: '#38bdf8',
+  up: '#f9a8d4',
+  muted: '#aab2c0',
+} as const;
+/** Strum marks are skipped when the slots of the pattern are closer than this (CSS px). */
+export const MIN_STRUM_SLOT_PX = 7;
+/** Height (CSS px) of the strip at the bottom of the wave area where the strum marks are drawn. */
+export const STRUM_MARK_H = 13;
+
+export type StrumMarkKind = 'down' | 'up' | 'muted';
+
+export interface StrumMark {
+  /** Audio time of the slot. */
+  sec: number;
+  kind: StrumMarkKind;
+  /** Bar index (0-based) and slot index within the pattern. */
+  bar: number;
+  slot: number;
+}
 
 const RULER_STEPS_SEC: readonly number[] = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
 
@@ -136,6 +161,50 @@ export function rulerStepSec(pxPerSec: number, minPx = 72): number {
   return RULER_STEPS_SEC[RULER_STEPS_SEC.length - 1];
 }
 
+/** Glyph drawn for a strum mark. */
+export function strumMarkGlyph(kind: StrumMarkKind): '↓' | '↑' | '×' {
+  return kind === 'down' ? '↓' : kind === 'up' ? '↑' : '×';
+}
+
+function strumMarkKind(ch: string): StrumMarkKind | null {
+  return ch === 'D' ? 'down' : ch === 'U' ? 'up' : ch === 'x' ? 'muted' : null;
+}
+
+/**
+ * The strum slots of `pattern` (D/U/x/- characters, `charsPerBeat` per beat) repeated over every
+ * bar of the grid, as audio times, keeping the slots that fall in `[startSec, endSec]` and inside
+ * the chart (`totalBeats`). `-` slots produce no mark. Empty when the grid, the pattern or
+ * `charsPerBeat` is unusable.
+ */
+export function strumMarks(
+  grid: Pick<WaveformGrid, 'bpm' | 'beatsPerBar' | 'offsetSec' | 'totalBeats'>,
+  pattern: string,
+  charsPerBeat: number,
+  startSec: number,
+  endSec: number,
+): StrumMark[] {
+  const out: StrumMark[] = [];
+  if (!(grid.bpm > 0) || !(grid.beatsPerBar > 0) || !(grid.totalBeats > 0) || !(charsPerBeat > 0) || pattern.length === 0) return out;
+  if (!Number.isFinite(startSec) || !Number.isFinite(endSec) || endSec < startSec) return out;
+  const beatSec = 60 / grid.bpm;
+  const barSec = beatSec * grid.beatsPerBar;
+  const barCount = Math.ceil(grid.totalBeats / grid.beatsPerBar);
+  const bFirst = Math.max(0, Math.floor((startSec - grid.offsetSec) / barSec));
+  const bLast = Math.min(barCount - 1, Math.floor((endSec - grid.offsetSec) / barSec));
+  for (let b = bFirst; b <= bLast; b++) {
+    for (let k = 0; k < pattern.length; k++) {
+      const kind = strumMarkKind(pattern[k]);
+      if (kind === null) continue;
+      const beat = b * grid.beatsPerBar + k / charsPerBeat;
+      if (beat >= grid.totalBeats) break;
+      const sec = gridBeatSec(grid, beat);
+      if (sec < startSec || sec > endSec) continue;
+      out.push({ sec, kind, bar: b, slot: k });
+    }
+  }
+  return out;
+}
+
 /** "1:05" for coarse steps, "1:05.25" for sub-second ones. */
 export function formatRulerSec(sec: number, stepSec: number): string {
   const s = Math.max(0, sec);
@@ -168,6 +237,7 @@ export class WaveformView {
   private sampleRate = 0;
   private peaks: Peaks | null = null;
   private grid: WaveformGrid | null = null;
+  private strum: { pattern: string; charsPerBeat: number } | null = null;
   private playheadSec: number | null = null;
   private view: Viewport = { startSec: 0, seconds: MIN_VIEW_SEC };
 
@@ -208,6 +278,23 @@ export class WaveformView {
   setGrid(grid: WaveformGrid | null): void {
     this.grid = grid ? { ...grid } : null;
     this.requestRender();
+  }
+
+  /**
+   * Strum pattern (D/U/x/- characters, `charsPerBeat` per beat) whose slots are marked under
+   * every visible bar of the grid; null hides the marks. Drawn only when a grid is set.
+   */
+  setStrum(pattern: string | null, charsPerBeat: number): void {
+    const next = pattern !== null && pattern !== '' && charsPerBeat > 0 ? { pattern, charsPerBeat } : null;
+    const prev = this.strum;
+    if (prev === null && next === null) return;
+    if (prev && next && prev.pattern === next.pattern && prev.charsPerBeat === next.charsPerBeat) return;
+    this.strum = next;
+    this.requestRender();
+  }
+
+  getStrum(): { pattern: string; charsPerBeat: number } | null {
+    return this.strum ? { ...this.strum } : null;
   }
 
   /** Playhead position in audio seconds (null hides it). Scrolls the view to keep it visible. */
@@ -290,6 +377,7 @@ export class WaveformView {
     const pxPerSec = w / this.view.seconds;
     this.drawWave(ctx, w, mid, mid - 2, pxPerSec);
     this.drawGrid(ctx, waveH, pxPerSec);
+    this.drawStrum(ctx, waveH, pxPerSec);
     this.drawRuler(ctx, w, waveH, pxPerSec);
     this.drawOffsetMarker(ctx, waveH);
     this.drawPlayhead(ctx, waveH);
@@ -384,6 +472,28 @@ export class WaveformView {
         ctx.fillStyle = WAVEFORM_COLORS.barText;
         ctx.fillText(String(k / grid.beatsPerBar + 1), x + 3, 2);
       }
+    }
+  }
+
+  /** ↓ / ↑ / × glyphs under the strum slots of the visible bars (bottom strip of the wave area). */
+  private drawStrum(ctx: CanvasRenderingContext2D, waveH: number, pxPerSec: number): void {
+    const grid = this.grid;
+    const strum = this.strum;
+    if (!grid || !strum || !(grid.bpm > 0) || !(grid.beatsPerBar > 0)) return;
+    const pxPerSlot = (60 / grid.bpm) * pxPerSec / strum.charsPerBeat;
+    if (pxPerSlot < MIN_STRUM_SLOT_PX) return;
+    const { startSec, seconds } = this.view;
+    const marks = strumMarks(grid, strum.pattern, strum.charsPerBeat, startSec - 1 / pxPerSec, startSec + seconds + 1 / pxPerSec);
+    if (marks.length === 0) return;
+    const y = waveH - 1;
+    ctx.font = `bold ${STRUM_MARK_H - 2}px system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    for (const m of marks) {
+      const x = Math.round(this.secToX(m.sec)) + 0.5;
+      if (x < -6 || x > this.width + 6) continue;
+      ctx.fillStyle = STRUM_MARK_COLORS[m.kind];
+      ctx.fillText(strumMarkGlyph(m.kind), x, y);
     }
   }
 

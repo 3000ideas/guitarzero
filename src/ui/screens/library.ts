@@ -11,13 +11,15 @@
  * "Desde audio…" (SPEC section 12) creates a song from an audio file: the file is decoded with
  * BackingTrack (shared AudioContext, no resume needed), stored in IndexedDB (putTrack), its
  * tempo and chords are transcribed (dsp/tempoEstimate.ts + dsp/chordTranscribe.ts, 4/4, basic
- * vocabulary) with an inline "Analizando «archivo»… N %" status, the chart text is generated
+ * vocabulary) with an inline "Analizando «archivo»… N %" status, the strum pattern is detected
+ * on the transcription's grid (dsp/strumDetect.ts, SPEC section 14; used when its confidence
+ * ≥ 0.3, else one down-strum per beat), the chart text is generated
  * (song/chartFromTranscription.ts) and saved with the audio metadata (`offsetSec` = first
  * downbeat, gain 0.8) before opening the editor. On failure the song is deleted and a Spanish
  * message is shown.
  *
- * `songMeta`, `titleFromFileName`, `importStatusText` and the formatting helpers are pure
- * (testable in Node).
+ * `songMeta`, `titleFromFileName`, `importStatusText`, `strumStatusText` and the formatting
+ * helpers are pure (testable in Node).
  */
 import './library.css';
 import type { ChordTranscription, Screen, StoredSong } from '../../types';
@@ -30,7 +32,9 @@ import { getAudioContext } from '../../audio/context';
 import { BackingTrack } from '../../audio/backing';
 import { estimateTempo } from '../../dsp/tempoEstimate';
 import { transcribeChords } from '../../dsp/chordTranscribe';
+import { detectStrumPattern } from '../../dsp/strumDetect';
 import { chartFromTranscription } from '../../song/chartFromTranscription';
+import { chartStrumFrom } from './editor';
 
 // ---------------------------------------------------------------- pure helpers
 
@@ -127,6 +131,11 @@ export function titleFromFileName(fileName: string): string {
 export function importStatusText(fileName: string, progress: number): string {
   const p = Number.isFinite(progress) ? Math.min(1, Math.max(0, progress)) : 0;
   return `Analizando «${fileName}»… ${Math.round(p * 100)} %`;
+}
+
+/** "Detectando el rasgueo de «cancion.mp3»…" (shown while dsp/strumDetect.ts runs after the chords). */
+export function strumStatusText(fileName: string): string {
+  return `Detectando el rasgueo de «${fileName}»…`;
 }
 
 /** Formats `updatedAt` as a short Spanish date, or '' when unknown. */
@@ -280,7 +289,25 @@ export const libraryScreen: Screen = {
         }
         showImport(importStatusText(file.name, 1), 1);
 
-        const source = chartFromTranscription(transcription, { title });
+        // Strum heard on the same samples with the transcription's grid (SPEC section 14). A
+        // failure here only loses the pattern: the chart falls back to one down-strum per beat.
+        showImport(strumStatusText(file.name), 1);
+        await nextTick();
+        if (unmounted) return;
+        let strum: string | undefined;
+        try {
+          const detected = detectStrumPattern(samples, info.sampleRate, {
+            bpm: transcription.bpm,
+            firstDownbeatSec: transcription.firstDownbeatSec,
+            beatsPerBar: transcription.beatsPerBar,
+          });
+          strum = chartStrumFrom(detected);
+        } catch (err) {
+          console.warn('No se pudo detectar el rasgueo del audio', err);
+          strum = undefined;
+        }
+
+        const source = chartFromTranscription(transcription, { title, strum });
         const { song } = parseSong(source, { id: created.id });
         saveSong({
           ...created,

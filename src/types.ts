@@ -183,6 +183,19 @@ export interface ChordTranscription {
   confidence: number;
 }
 
+/** Result of dsp/strumDetect.ts: the strumming pattern heard in the audio. */
+export interface StrumDetection {
+  /** Pattern in the song grammar (D/U/-), charsPerBeat * beatsPerBar characters long. */
+  pattern: string;
+  charsPerBeat: 1 | 2 | 4;
+  /** Mean onset strength per slot of the bar, normalised to the strongest slot (0..1). */
+  slotStrength: number[];
+  /** Fraction of bars whose active slots agree with the pattern, 0..1. */
+  confidence: number;
+  /** Number of bars analysed. */
+  bars: number;
+}
+
 /** Result of dsp/tempoEstimate.ts. */
 export interface TempoEstimate {
   bpm: number;

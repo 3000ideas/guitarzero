@@ -32,14 +32,23 @@
  * carry a difficulty badge (fácil / medio / difícil). After "Detectar acordes" the summary
  * offers "Simplificar para principiantes" (defaults + preview + scroll to the card).
  *
+ * Strum detection (SPEC section 14): the "Rasgueo" card's "Detectar rasgueo del audio" runs
+ * dsp/strumDetect.ts on the loaded track with the text's tempo / meter and the track's offset,
+ * writes the detected pattern into the letters field (preset or "Personalizado") and reports
+ * "Detectado en N compases (confianza alta/media/baja)"; "Aplicar" writes it to `strum:`. The
+ * waveform marks the slots of the current `strum:` header under every bar (`setStrum`, from
+ * `syncGrid`). "Detectar acordes" also runs the strum detection on the transcription's grid and
+ * "Sustituir acordes" passes the pattern to chartFromTranscription when its confidence ≥ 0.3.
+ *
  * `analyzeSource`, `lineRange`, `lineOfOffset`, `rewriteTempoHeader`, `formatTempoEstimate`,
  * `previewClickTimes`, the transcription formatters (`formatTranscriptionSummary`,
  * `transcriptionBarLines`, `appendBarLines`), the simplify helpers (`simplifyPreviewRows`,
- * `remainingHardChords`, `chordChipInfo`, `substituteChordEverywhere`, `UndoStack`...) and the
- * help data are pure (testable in Node).
+ * `remainingHardChords`, `chordChipInfo`, `substituteChordEverywhere`, `UndoStack`...), the strum
+ * helpers (`formatStrumDetection`, `chartStrumFrom`, `firstDownbeatInAudio`, `waveformStrum`)
+ * and the help data are pure (testable in Node).
  */
 import './editor.css';
-import type { AudioTrackInfo, ChordShape, ChordTranscription, ParseError, Screen, Song, StoredSong, TempoEstimate } from '../../types';
+import type { AudioTrackInfo, ChordShape, ChordTranscription, ParseError, Screen, Song, StoredSong, StrumDetection, TempoEstimate } from '../../types';
 import { clear, fmtSeconds, h } from '../dom';
 import { drawChordDiagram } from '../chordDiagram';
 import { WaveformView } from '../waveform';
@@ -70,6 +79,7 @@ import { BackingTrack } from '../../audio/backing';
 import { Metronome } from '../../audio/metronome';
 import { estimateTempo } from '../../dsp/tempoEstimate';
 import { transcribeChords } from '../../dsp/chordTranscribe';
+import { detectStrumPattern } from '../../dsp/strumDetect';
 import { chartFromTranscription, replaceChart } from '../../song/chartFromTranscription';
 
 // ---------------------------------------------------------------- constants
@@ -312,6 +322,60 @@ export function confidenceLabel(confidence: number): ConfidenceLabel {
   if (confidence >= 0.6) return 'alta';
   if (confidence >= 0.3) return 'media';
   return 'baja';
+}
+
+// ---------------------------------------------------------------- strum detection (SPEC section 14)
+
+/** Note shown next to "Detectar rasgueo del audio". */
+export const STRUM_DETECT_NOTE = 'Las flechas se calculan con los golpes del audio: ↓ en los tiempos, ↑ en los contratiempos';
+/** Label of the strum detection button. */
+export const STRUM_DETECT_LABEL = 'Detectar rasgueo del audio';
+/** Status shown while the strum detection runs (after a tick, so it paints). */
+export const STRUM_ANALYZING_TEXT = 'Analizando…';
+/** Below this `StrumDetection.confidence` a generated chart keeps the default one-down-per-beat pattern. */
+export const STRUM_CONFIDENCE_THRESHOLD = 0.3;
+
+/** "Detectado en 12 compases (confianza alta)" — singular "1 compás". */
+export function formatStrumDetection(d: Pick<StrumDetection, 'bars' | 'confidence'>): string {
+  const n = Math.max(0, Math.round(d.bars));
+  return `Detectado en ${n === 1 ? '1 compás' : `${n} compases`} (confianza ${confidenceLabel(d.confidence)})`;
+}
+
+/**
+ * Strum pattern for `chartFromTranscription` (`opts.strum`): the detected pattern when its
+ * confidence reaches STRUM_CONFIDENCE_THRESHOLD, otherwise undefined (one down-strum per beat).
+ */
+export function chartStrumFrom(d: Pick<StrumDetection, 'pattern' | 'confidence'> | null | undefined): string | undefined {
+  if (!d || d.pattern === '' || !(d.confidence >= STRUM_CONFIDENCE_THRESHOLD)) return undefined;
+  return d.pattern;
+}
+
+/**
+ * Start of the first bar that lies inside the audio: `offsetSec` advanced by whole bars while it
+ * is negative (the chart may start before the audio). Returns `offsetSec` unchanged when ≥ 0 or
+ * when the grid is unusable.
+ */
+export function firstDownbeatInAudio(offsetSec: number, bpm: number, beatsPerBar: number): number {
+  if (!(offsetSec < 0) || !(bpm > 0) || !(beatsPerBar > 0)) return offsetSec;
+  const barSec = (60 / bpm) * beatsPerBar;
+  return offsetSec + Math.ceil(-offsetSec / barSec) * barSec;
+}
+
+export interface WaveformStrum {
+  pattern: string;
+  /** pattern.length / beatsPerBar (1, 2 or 4). */
+  charsPerBeat: number;
+}
+
+/**
+ * The pattern the waveform marks for the text: its leading `strum:` header when it fits the
+ * meter (the parser's rule), otherwise the default one-down-per-beat pattern the parser uses.
+ */
+export function waveformStrum(source: string, beatsPerBar: number): WaveformStrum {
+  const n = Math.max(1, Math.round(beatsPerBar));
+  const header = currentStrumHeader(source, n);
+  const pattern = isValidStrumPattern(header, n) ? header : 'D-'.repeat(n);
+  return { pattern, charsPerBeat: pattern.length / n };
 }
 
 /** "≈ 96 BPM (confianza alta), inicio 1.32 s". */
@@ -678,6 +742,8 @@ export const editorScreen: Screen = {
     let previewRaf = 0;
     let estimate: TempoEstimate | null = null;
     let transcription: ChordTranscription | null = null;
+    /** Strum heard on the transcription's grid (with `transcription`); null when it failed or there is none. */
+    let transcriptionStrum: StrumDetection | null = null;
     let busy = false;
     let metronome: Metronome | null = null;
 
@@ -817,6 +883,7 @@ export const editorScreen: Screen = {
     chordsRow.appendChild(halfTempoBtn);
     chordsRow.appendChild(doubleTempoBtn);
     const chordSummary = h('span.audio-detect-result.audio-chord-summary');
+    const chordStrumNote = h('span.audio-detect-result.audio-chord-strum.muted.small');
     const replaceChordsBtn = h(
       'button.btn',
       { type: 'button', title: 'Sustituye los compases del texto por los acordes detectados (conserva título, artista y cejilla) y fija el inicio del compás 1', onclick: () => replaceChords() },
@@ -827,7 +894,7 @@ export const editorScreen: Screen = {
       { type: 'button', title: 'Añade los compases detectados al final del texto', onclick: () => appendChords() },
       'Insertar al final',
     ) as HTMLButtonElement;
-    const chordResultRow = h('div.audio-row.audio-chord-result', { hidden: true }, chordSummary, replaceChordsBtn, appendChordsBtn);
+    const chordResultRow = h('div.audio-row.audio-chord-result', { hidden: true }, chordSummary, chordStrumNote, replaceChordsBtn, appendChordsBtn);
     const lowConfidenceWarn = h('div.audio-warn', { hidden: true }, LOW_CONFIDENCE_WARNING);
 
     const playMetroBtn = h(
@@ -924,6 +991,18 @@ export const editorScreen: Screen = {
     const strumInput = h('input', { type: 'text', class: 'strum-input', 'aria-label': 'Patrón de rasgueo', spellcheck: false, autocapitalize: 'off', oninput: () => onStrumInput() }) as HTMLInputElement;
     const strumApplyBtn = h('button.btn.btn-primary', { type: 'button', onclick: () => applyStrum() }, 'Aplicar') as HTMLButtonElement;
     const strumError = h('div.audio-warn', { hidden: true });
+    // Strum detection from the backing track (SPEC section 14)
+    const strumDetectBtn = h(
+      'button.btn.btn-sm',
+      {
+        type: 'button',
+        disabled: true,
+        title: 'Escucha los golpes de la pista con el tempo y el compás del texto y propone el patrón de rasgueo (con la pista cargada)',
+        onclick: () => void detectStrum(),
+      },
+      STRUM_DETECT_LABEL,
+    ) as HTMLButtonElement;
+    const strumDetectStatus = h('span.strum-detect-status.audio-detect-result', { role: 'status', 'aria-live': 'polite' });
     const strumCard = h(
       'div.card.strum-card',
       null,
@@ -931,6 +1010,8 @@ export const editorScreen: Screen = {
       h('p.muted.small', null, STRUM_LEGEND),
       h('div.simplify-options', null, h('label.simplify-max', null, 'Patrón', strumSelect), h('label.simplify-max', null, 'Letras', strumInput), strumApplyBtn),
       strumError,
+      h('div.strum-detect-row', null, strumDetectBtn, strumDetectStatus),
+      h('p.muted.small.strum-note', null, STRUM_DETECT_NOTE),
     );
 
     const waveform = new WaveformView(waveCanvas, {
@@ -1131,6 +1212,8 @@ export const editorScreen: Screen = {
         return;
       }
       waveform.setGrid({ bpm: bpm(), beatsPerBar: beatsPerBar(), offsetSec: audio.offsetSec, totalBeats: analysis.song.totalBeats });
+      const strum = waveformStrum(textarea.value, beatsPerBar());
+      waveform.setStrum(strum.pattern, strum.charsPerBeat);
       constantTempoWarn.hidden = analysis.song.tempoSegments.length <= 1;
     }
 
@@ -1153,7 +1236,7 @@ export const editorScreen: Screen = {
       loadBtn.disabled = busy;
       replaceBtn.disabled = busy;
       removeBtn.disabled = busy;
-      for (const b of [playMetroBtn, playHereBtn, detectBtn, chordsBtn, markBtn, minusBeatBtn, plusBeatBtn, ...stepButtons]) b.disabled = !ready;
+      for (const b of [playMetroBtn, playHereBtn, detectBtn, chordsBtn, strumDetectBtn, markBtn, minusBeatBtn, plusBeatBtn, ...stepButtons]) b.disabled = !ready;
       stopBtn.disabled = preview === null;
       applyTempoBtn.disabled = busy;
       applyStartBtn.disabled = busy;
@@ -1185,8 +1268,10 @@ export const editorScreen: Screen = {
 
     function hideTranscription(): void {
       transcription = null;
+      transcriptionStrum = null;
       setChordProgress(null);
       chordSummary.textContent = '';
+      chordStrumNote.textContent = '';
       chordResultRow.hidden = true;
       lowConfidenceWarn.hidden = true;
     }
@@ -1198,8 +1283,23 @@ export const editorScreen: Screen = {
       }
       setChordProgress(null);
       chordSummary.textContent = formatTranscriptionSummary(transcription);
+      const strum = chartStrumFrom(transcriptionStrum);
+      chordStrumNote.textContent =
+        strum !== undefined && transcriptionStrum
+          ? `Rasgueo ${strum} (confianza ${confidenceLabel(transcriptionStrum.confidence)})`
+          : 'Rasgueo: una por pulso (no se reconoció un patrón claro)';
       chordResultRow.hidden = false;
       lowConfidenceWarn.hidden = transcription.confidence >= LOW_CONFIDENCE_THRESHOLD;
+    }
+
+    /** Strum heard on the grid of a transcription (never throws: null when the detection fails). */
+    function detectTranscriptionStrum(samples: Float32Array, t: ChordTranscription): StrumDetection | null {
+      try {
+        return detectStrumPattern(samples, sampleRate, { bpm: t.bpm, firstDownbeatSec: t.firstDownbeatSec, beatsPerBar: t.beatsPerBar });
+      } catch (err) {
+        console.warn('No se pudo detectar el rasgueo de la transcripción', err);
+        return null;
+      }
     }
 
     /** "Detectar acordes": transcribes the loaded track after a tick so the progress label paints. */
@@ -1214,7 +1314,8 @@ export const editorScreen: Screen = {
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
       try {
         if (unmounted || !backing) return;
-        transcription = transcribeChords(backing.monoSamples(), sampleRate, {
+        const samples = backing.monoSamples();
+        const t = transcribeChords(samples, sampleRate, {
           beatsPerBar: beatsPerBarOpt,
           vocabulary,
           bpm: bpmOverride,
@@ -1223,6 +1324,9 @@ export const editorScreen: Screen = {
             if (!unmounted) setChordProgress(p);
           },
         });
+        // The strum heard on the same samples with the transcription's grid (SPEC section 14).
+        transcriptionStrum = detectTranscriptionStrum(samples, t);
+        transcription = t;
         renderTranscription();
       } catch (err) {
         hideTranscription();
@@ -1267,6 +1371,42 @@ export const editorScreen: Screen = {
       if (!isValidStrumPattern(pattern, n)) return;
       applyText(rewriteStrumHeader(textarea.value, pattern));
       renderStrum();
+    }
+
+    function hideStrumDetection(): void {
+      strumDetectStatus.textContent = '';
+      strumDetectStatus.classList.remove('is-error');
+    }
+
+    /**
+     * "Detectar rasgueo del audio": runs dsp/strumDetect.ts on the loaded track with the text's
+     * tempo and meter and the track's offset (after a tick so "Analizando…" paints), writes the
+     * pattern into the letters field (preset or "Personalizado", "Aplicar" enabled when it differs
+     * from the text) and reports the analysed bars and the confidence.
+     */
+    async function detectStrum(): Promise<void> {
+      if (!backing || !audio || busy) return;
+      busy = true;
+      updateButtons();
+      strumDetectStatus.classList.remove('is-error');
+      strumDetectStatus.textContent = STRUM_ANALYZING_TEXT;
+      const opts = { bpm: bpm(), beatsPerBar: beatsPerBar(), firstDownbeatSec: firstDownbeatInAudio(audio.offsetSec, bpm(), beatsPerBar()) };
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      try {
+        if (unmounted || !backing) return;
+        const result = detectStrumPattern(backing.monoSamples(), sampleRate, opts);
+        if (unmounted) return;
+        strumInput.value = result.pattern;
+        onStrumInput();
+        strumDetectStatus.textContent = formatStrumDetection(result);
+      } catch (err) {
+        if (unmounted) return;
+        strumDetectStatus.classList.add('is-error');
+        strumDetectStatus.textContent = errorMessage(err, 'No se pudo analizar el rasgueo de la pista');
+      } finally {
+        busy = false;
+        if (!unmounted) updateButtons();
+      }
     }
 
     // ------------------------------------------------------------ simplify (SPEC section 13)
@@ -1402,13 +1542,14 @@ export const editorScreen: Screen = {
 
     /**
      * "Sustituir acordes": replaces every bar of the text with the transcription (title, artist
-     * and capo are kept by replaceChart), sets the tempo header, moves the start of bar 1 to the
-     * first downbeat and saves at once (text + audio metadata).
+     * and capo are kept by replaceChart) using the detected strum when it is confident enough,
+     * sets the tempo header, moves the start of bar 1 to the first downbeat and saves at once
+     * (text + audio metadata).
      */
     function replaceChords(): void {
       if (!transcription || busy) return;
       const t = transcription;
-      const chart = chartFromTranscription(t, { title: chartTitle(), artist: analysis.song.artist.trim() || undefined });
+      const chart = chartFromTranscription(t, { title: chartTitle(), artist: analysis.song.artist.trim() || undefined, strum: chartStrumFrom(transcriptionStrum) });
       const next = rewriteTempoHeader(replaceChart(textarea.value, chart), Math.round(t.bpm));
       if (next !== textarea.value) {
         textarea.value = next;
@@ -1571,6 +1712,7 @@ export const editorScreen: Screen = {
         decoded = null;
         hideEstimate();
         hideTranscription();
+        hideStrumDetection();
         audioDirty = true;
         flush();
         renderTrackInfo();
@@ -1604,6 +1746,7 @@ export const editorScreen: Screen = {
       waveform.setAudio(new Float32Array(0), 44100);
       hideEstimate();
       hideTranscription();
+      hideStrumDetection();
       audioDirty = true;
       flush();
       renderTrackInfo();
