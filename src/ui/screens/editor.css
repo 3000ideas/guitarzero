@@ -391,3 +391,102 @@
     height: 120px;
   }
 }
+
+/* ---------------------------------------------------------------- Simplify card (SPEC section 13) */
+.editor .simplify-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin: 8px 0;
+}
+
+.editor .simplify-options label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  min-height: 32px;
+}
+
+.editor .simplify-max select {
+  margin-left: 6px;
+}
+
+.editor .simplify-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.editor .simplify-preview {
+  margin-top: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.editor .simplify-line {
+  margin: 4px 0;
+}
+
+.editor .simplify-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  margin: 6px 0;
+}
+
+.editor .simplify-table th,
+.editor .simplify-table td {
+  text-align: left;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.editor .chord-chip-badge {
+  display: inline-block;
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.editor .chord-chip-badge.lvl-1 {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.editor .chord-chip-badge.lvl-2 {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.editor .chord-chip-badge.lvl-3 {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+
+.editor .chord-chip-rec {
+  background: none;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 28px;
+}
+
+.editor .chord-chip-rec:hover {
+  background: rgba(34, 211, 238, 0.12);
+}
+
+.editor .strum-input {
+  width: 11ch;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.08em;
+  margin-left: 6px;
+}

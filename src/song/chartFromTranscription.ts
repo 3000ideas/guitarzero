@@ -15,14 +15,12 @@ const MAX_TEMPO = 400;
 export interface ChartOpts {
   title: string;
   artist?: string;
-  /** Strum pattern; defaults to D-DU-UDU in 4/4 and D-DUDU in 3/4 (one down-strum per beat otherwise). */
+  /** Strum pattern; defaults to one down-strum per beat (D-D-D-D- in 4/4). */
   strum?: string;
 }
 
-/** Default strum pattern of the generated chart for a number of beats per bar. */
+/** Default strum pattern of the generated chart: one down-strum per beat (the safest for a transcription; the editor offers presets). */
 export function defaultChartStrum(beatsPerBar: number): string {
-  if (beatsPerBar === 4) return 'D-DU-UDU';
-  if (beatsPerBar === 3) return 'D-DUDU';
   return 'D-'.repeat(Math.max(1, beatsPerBar));
 }
 

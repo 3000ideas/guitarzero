@@ -388,7 +388,7 @@ export const practiceScreen: Screen = {
       h('div.practice-mic', null, h('span.practice-mic-label', null, 'Micrófono:'), micStatusEl, micRetryBtn, levelEl, liveChordEl, noEvalBadge),
       h('label.practice-toggle', { title: 'Atajo: L' }, loopToggle, 'Repetir'),
       sectionSelect ? h('label.practice-field', null, 'Sección', sectionSelect) : null,
-      h('div.practice-hint', null, 'Usa auriculares para que el micrófono no capte el metrónomo'),
+      h('div.practice-hint', null, 'Usa auriculares para que el micrófono no capte el metrónomo · ↓ rasgueo hacia abajo · ↑ hacia arriba'),
       headphonesWarn,
       agcNotice,
     );

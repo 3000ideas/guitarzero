@@ -802,7 +802,7 @@ el usuario lo revisa en el editor. Tipos (ya en `types.ts`): `TranscribedBeat`,
 ### song/chartFromTranscription.ts (puro)
 - `chartFromTranscription(t: ChordTranscription, opts: { title: string; artist?: string; strum?: string }): string`
   — texto de la sección 2: cabeceras `title`, `artist` (si hay), `tempo: <bpm redondeado>`,
-  `time: <beatsPerBar>/4`, `strum:` (`D-DU-UDU` en 4/4, `D-DUDU` en 3/4 salvo `opts.strum`),
+  `time: <beatsPerBar>/4`, `strum:` (una vez por pulso, `D-D-D-D-` en 4/4, salvo `opts.strum`; el editor ofrece presets de rasgueo),
   línea `# Acordes detectados automáticamente: revisa y corrige. Tonalidad: <key.name>`, y los
   compases, 4 por línea: cada acorde `X` seguido de `.` por cada pulso adicional
   (`C . . . | G . Am . |`), `N.C.` para `null`. Nombres con sostenidos tal cual (`F#m`).

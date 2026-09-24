@@ -229,6 +229,82 @@ export function rewriteTempoHeader(source: string, bpm: number): string {
 /** Alias of `rewriteTempoHeader` (the "Aplicar tempo" action). */
 export const applyTempoHeader = rewriteTempoHeader;
 
+// ---------------------------------------------------------------- strum pattern (header rewrite + presets)
+
+export type HeaderKey = 'tempo' | 'time' | 'strum' | 'capo';
+
+/**
+ * Returns `source` with its leading `key:` header set to `value` (rewritten in place, keeping a
+ * trailing comment; inserted after the leading headers when absent). Same rules as
+ * rewriteTempoHeader. Mid-song headers (after the first bar line) are left untouched.
+ */
+export function rewriteHeader(source: string, key: HeaderKey, value: string): string {
+  const eol = source.includes('\r\n') ? '\r\n' : '\n';
+  const lines = source.split(/\r?\n/);
+  const re = new RegExp(`^([ \\t]*${key}[ \\t]*:[ \\t]*)([^\\s#]*)(.*)$`, 'i');
+  let insertAt = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const m = re.exec(line);
+    if (m) {
+      lines[i] = `${m[1]}${value}${m[3]}`;
+      return lines.join(eol);
+    }
+    if (OTHER_HEADER_LINE_RE.test(line) || TEMPO_HEADER_LINE_RE.test(line)) {
+      insertAt = i + 1;
+      continue;
+    }
+    if (NON_BAR_LINE_RE.test(line)) continue;
+    break;
+  }
+  lines.splice(insertAt, 0, `${key}: ${value}`);
+  return lines.join(eol);
+}
+
+export const rewriteStrumHeader = (source: string, pattern: string): string => rewriteHeader(source, 'strum', pattern);
+
+/** Value of the leading `strum:` header of the text, or the default one-down-per-beat pattern. */
+export function currentStrumHeader(source: string, beatsPerBar: number): string {
+  const re = /^[ \t]*strum[ \t]*:[ \t]*([^\s#]*)/i;
+  for (const line of source.split(/\r?\n/)) {
+    if (!(NON_BAR_LINE_RE.test(line) || OTHER_HEADER_LINE_RE.test(line) || TEMPO_HEADER_LINE_RE.test(line))) break;
+    const m = re.exec(line);
+    if (m && m[1] !== '') return m[1];
+  }
+  return 'D-'.repeat(Math.max(1, beatsPerBar));
+}
+
+/** A strum pattern is DUx- characters, 1, 2 or 4 per beat (parser rule). */
+export function isValidStrumPattern(pattern: string, beatsPerBar: number): boolean {
+  if (!/^[DUx-]+$/.test(pattern)) return false;
+  return [1, 2, 4].some((k) => pattern.length === k * beatsPerBar);
+}
+
+export interface StrumPreset {
+  id: string;
+  label: string;
+  /** Pattern for a number of beats per bar (2 chars per beat). */
+  pattern: (beatsPerBar: number) => string;
+}
+
+export const STRUM_PRESETS: readonly StrumPreset[] = [
+  { id: 'one', label: 'Una por pulso (↓ en cada tiempo)', pattern: (n) => 'D-'.repeat(n) },
+  { id: 'downbeat', label: 'Solo el primer tiempo', pattern: (n) => 'D-' + '--'.repeat(Math.max(0, n - 1)) },
+  { id: 'halves', label: 'Tiempos 1 y 3 (↓ ↓)', pattern: (n) => (n === 4 ? 'D---D---' : 'D-'.repeat(n)) },
+  { id: 'pop', label: 'Pop básico (D-DU-UDU)', pattern: (n) => (n === 4 ? 'D-DU-UDU' : n === 3 ? 'D-DUDU' : 'D-'.repeat(n)) },
+  { id: 'ballad', label: 'Balada (D-D-DUDU)', pattern: (n) => (n === 4 ? 'D-D-DUDU' : n === 3 ? 'D-D-DU' : 'D-'.repeat(n)) },
+  { id: 'folk', label: 'Folk (D-DUDUDU)', pattern: (n) => (n === 4 ? 'D-DUDUDU' : n === 3 ? 'D-DUDU' : 'D-'.repeat(n)) },
+  { id: 'eighths', label: 'Corcheas ↓↑ seguidas (DUDUDUDU)', pattern: (n) => 'DU'.repeat(n) },
+];
+
+/** Id of the preset whose pattern equals `pattern` for this meter, or 'custom'. */
+export function presetIdFor(pattern: string, beatsPerBar: number): string {
+  const found = STRUM_PRESETS.find((p) => p.pattern(beatsPerBar) === pattern);
+  return found ? found.id : 'custom';
+}
+
+export const STRUM_LEGEND = 'D = ↓ rasgueo hacia abajo · U = ↑ hacia arriba · x = apagado · - = nada. Dos letras por pulso: 1 & 2 & 3 & 4 &';
+
 export type ConfidenceLabel = 'alta' | 'media' | 'baja';
 
 /** ≥ 0.6 alta, ≥ 0.3 media, otherwise baja. */
@@ -345,6 +421,82 @@ export function appendBarLines(source: string, barLines: string): string {
 }
 
 /** Short example shown inside the "Formato" help. */
+// ---------------------------------------------------------------- simplify helpers (SPEC section 13)
+
+/** Chords of the parsed song with their total duration in beats (rests and N.C. excluded), in order of first appearance. */
+export function weightedChordsOf(song: Pick<Song, 'bars'>): WeightedChord[] {
+  const out: WeightedChord[] = [];
+  const index = new Map<string, number>();
+  for (const bar of song.bars) {
+    for (const c of bar.chords) {
+      if (c.chord.quality === 'nc') continue;
+      const at = index.get(c.chord.name);
+      if (at === undefined) {
+        index.set(c.chord.name, out.length);
+        out.push({ name: c.chord.name, beats: c.beats });
+      } else {
+        out[at].beats += c.beats;
+      }
+    }
+  }
+  return out;
+}
+
+export function formatUnchangedRatio(ratio: number): string {
+  const pct = Math.round(clamp(Number.isFinite(ratio) ? ratio : 0, 0, 1) * 100);
+  return `Tocas el ${pct} % de la canción sin cambios`;
+}
+
+export function formatCapoLine(capo: number): string {
+  return capo > 0 ? `Cejilla propuesta: traste ${capo}` : 'Sin cejilla';
+}
+
+export interface SimplifyPreviewRow {
+  from: string;
+  to: string;
+  beats: number;
+  reason: string;
+  fromLevel: DifficultyLevel;
+  toLevel: DifficultyLevel;
+}
+
+export function simplifyPreviewRows(result: Pick<SimplifyResult, 'substitutions'>): SimplifyPreviewRow[] {
+  return result.substitutions.map((s) => ({ ...s, fromLevel: chordDifficulty(s.from).level, toLevel: chordDifficulty(s.to).level }));
+}
+
+/** Level-3 chords still present after simplification (no easy substitute was found). */
+export function remainingHardChords(result: Pick<SimplifyResult, 'chordsAfter'>): string[] {
+  return result.chordsAfter.filter((n) => chordDifficulty(n).level === 3);
+}
+
+/** Difficulty of a chip plus, for difficult chords, the nearest easy chord (no open sevenths). */
+export function chipRecommendation(name: string, key: KeyHint): { difficulty: ChordDifficulty; rec: NearestChord | null } {
+  const difficulty = chordDifficulty(name);
+  const rec = difficulty.level === 3 ? nearestEasyChord(name, { key, allowSevenths: false }) : null;
+  return { difficulty, rec };
+}
+
+export interface SimplifyUiState {
+  removeExtensions: boolean;
+  substituteHard: boolean;
+  suggestCapo: boolean;
+  allowSevenths: boolean;
+  /** Value of the "Máximo de acordes" select ('' = no limit). */
+  maxChordsValue: string;
+}
+
+export function simplifyOptionsFrom(ui: SimplifyUiState): SimplifyOptions {
+  const opt = SIMPLIFY_MAX_CHORD_OPTIONS.find((o) => o.value === ui.maxChordsValue);
+  return {
+    ...DEFAULT_SIMPLIFY_OPTIONS,
+    removeExtensions: ui.removeExtensions,
+    substituteHard: ui.substituteHard,
+    suggestCapo: ui.suggestCapo,
+    allowSevenths: ui.allowSevenths,
+    maxChords: opt ? opt.max : DEFAULT_SIMPLIFY_OPTIONS.maxChords,
+  };
+}
+
 export const FORMAT_EXAMPLE = `title: Mi canción
 artist: Yo
 tempo: 100
@@ -412,7 +564,32 @@ function drawMini(canvas: HTMLCanvasElement, entry: ChordEntry): void {
   drawChordDiagram(ctx, entry.shape, { x: 0, y: 0, w: MINI_DIAGRAM_W, h: MINI_DIAGRAM_H }, { title: entry.name, showFingers: false });
 }
 
-function chordChip(entry: ChordEntry): HTMLElement {
+interface ChipExtra {
+  difficulty: ChordDifficulty;
+  rec: NearestChord | null;
+  onReplace?: (to: string) => void;
+}
+
+function appendChipExtras(chip: HTMLElement, extra: ChipExtra): void {
+  chip.appendChild(h(`span.chord-chip-badge.lvl-${extra.difficulty.level}`, { title: extra.difficulty.reason }, extra.difficulty.label));
+  const rec = extra.rec;
+  const onReplace = extra.onReplace;
+  if (rec && onReplace) {
+    chip.appendChild(
+      h(
+        'button.chord-chip-rec',
+        {
+          type: 'button',
+          title: `Acorde fácil más cercano: ${rec.name} (comparte ${rec.shared} notas). Clic para sustituirlo en toda la canción`,
+          onclick: () => onReplace(rec.name),
+        },
+        `→ ${rec.name}`,
+      ),
+    );
+  }
+}
+
+function chordChip(entry: ChordEntry, extra?: ChipExtra): HTMLElement {
   const canvas = h('canvas', { width: MINI_DIAGRAM_W, height: MINI_DIAGRAM_H });
   const chip = h(
     'div.chord-chip',
@@ -428,6 +605,7 @@ function chordChip(entry: ChordEntry): HTMLElement {
     entry.shape ? null : h('span.chord-chip-note', null, 'sin digitación'),
   );
   drawMini(canvas, entry);
+  if (extra) appendChipExtras(chip, extra);
   return chip;
 }
 
@@ -626,6 +804,18 @@ export const editorScreen: Screen = {
       chordStatus,
       chordProgress,
     );
+    const halfTempoBtn = h(
+      'button.btn.btn-sm',
+      { type: 'button', title: 'Vuelve a detectar con la mitad del tempo del texto (si los acordes parecen cambiar demasiado rápido o hay el doble de compases)', onclick: () => void detectChords(Math.max(20, analysis.song.tempo / 2)) },
+      'Tempo ÷2',
+    ) as HTMLButtonElement;
+    const doubleTempoBtn = h(
+      'button.btn.btn-sm',
+      { type: 'button', title: 'Vuelve a detectar con el doble del tempo del texto (si los acordes cambian demasiado despacio o faltan compases)', onclick: () => void detectChords(Math.min(400, analysis.song.tempo * 2)) },
+      'Tempo ×2',
+    ) as HTMLButtonElement;
+    chordsRow.appendChild(halfTempoBtn);
+    chordsRow.appendChild(doubleTempoBtn);
     const chordSummary = h('span.audio-detect-result.audio-chord-summary');
     const replaceChordsBtn = h(
       'button.btn',
@@ -680,6 +870,68 @@ export const editorScreen: Screen = {
       previewRow,
     );
     const audioPanel = h('section.card.audio-panel', null, h('div.card-title', null, 'Pista de audio'), fileInput, emptyView, trackView, audioStatus, storageNote);
+
+    // Simplify card (SPEC section 13)
+    const simplifyChecks = {
+      removeExtensions: h('input', { type: 'checkbox', checked: true }),
+      substituteHard: h('input', { type: 'checkbox', checked: true }),
+      suggestCapo: h('input', { type: 'checkbox', checked: true }),
+      allowSevenths: h('input', { type: 'checkbox' }),
+    };
+    const maxChordsSelect = h(
+      'select.simplify-select',
+      { 'aria-label': 'Máximo de acordes' },
+      ...SIMPLIFY_MAX_CHORD_OPTIONS.map((o) => h('option', { value: o.value }, o.label)),
+    ) as HTMLSelectElement;
+    maxChordsSelect.value = String(DEFAULT_SIMPLIFY_OPTIONS.maxChords ?? '');
+    const simplifyBtn = h('button.btn.btn-primary', { type: 'button', title: 'Previsualiza la versión fácil sin cambiar nada todavía', onclick: () => runSimplify() }, 'Simplificar') as HTMLButtonElement;
+    const undoBtn = h('button.btn', { type: 'button', hidden: true, title: 'Vuelve al texto anterior a la última simplificación', onclick: () => undoSimplify() }, 'Deshacer') as HTMLButtonElement;
+    const applySimplifyBtn = h('button.btn.btn-primary', { type: 'button', onclick: () => applySimplified() }, 'Aplicar') as HTMLButtonElement;
+    const cancelSimplifyBtn = h('button.btn', { type: 'button', onclick: () => hideSimplifyPreview() }, 'Cancelar') as HTMLButtonElement;
+    const simplifyPreview = h('div.simplify-preview', { hidden: true });
+    const checkLabel = (input: HTMLInputElement, text: string): HTMLElement => h('label.audio-check-label', null, input, text);
+    const simplifyCard = h(
+      'div.card.simplify-card',
+      null,
+      h('div.card-title', null, 'Simplificar'),
+      h('p.muted.small', null, 'Versión fácil de la canción: sin extensiones, con cejilla si ayuda, y el acorde fácil más cercano en lugar de los difíciles.'),
+      h(
+        'div.simplify-options',
+        null,
+        checkLabel(simplifyChecks.removeExtensions, 'Quitar séptimas y extensiones'),
+        checkLabel(simplifyChecks.substituteHard, 'Sustituir acordes difíciles'),
+        checkLabel(simplifyChecks.suggestCapo, 'Proponer cejilla'),
+        checkLabel(simplifyChecks.allowSevenths, 'Permitir séptimas abiertas (A7, E7…)'),
+        h('label.simplify-max', null, 'Máximo de acordes', maxChordsSelect),
+      ),
+      h('div.simplify-actions', null, simplifyBtn, undoBtn),
+      simplifyPreview,
+    );
+    const beginnersBtn = h(
+      'button.btn',
+      { type: 'button', title: 'Aplica los acordes detectados y propone una versión fácil (4 acordes, sin extensiones, cejilla si ayuda)', onclick: () => simplifyForBeginners() },
+      SIMPLIFY_FOR_BEGINNERS_LABEL,
+    );
+    chordResultRow.appendChild(beginnersBtn);
+
+    // Strum pattern card
+    const strumSelect = h(
+      'select.simplify-select',
+      { 'aria-label': 'Patrón de rasgueo', onchange: () => onStrumPresetChange() },
+      ...STRUM_PRESETS.map((p) => h('option', { value: p.id }, p.label)),
+      h('option', { value: 'custom' }, 'Personalizado'),
+    ) as HTMLSelectElement;
+    const strumInput = h('input', { type: 'text', class: 'strum-input', 'aria-label': 'Patrón de rasgueo', spellcheck: false, autocapitalize: 'off', oninput: () => onStrumInput() }) as HTMLInputElement;
+    const strumApplyBtn = h('button.btn.btn-primary', { type: 'button', onclick: () => applyStrum() }, 'Aplicar') as HTMLButtonElement;
+    const strumError = h('div.audio-warn', { hidden: true });
+    const strumCard = h(
+      'div.card.strum-card',
+      null,
+      h('div.card-title', null, 'Rasgueo'),
+      h('p.muted.small', null, STRUM_LEGEND),
+      h('div.simplify-options', null, h('label.simplify-max', null, 'Patrón', strumSelect), h('label.simplify-max', null, 'Letras', strumInput), strumApplyBtn),
+      strumError,
+    );
 
     const waveform = new WaveformView(waveCanvas, {
       onOffsetChange: (sec) => setOffset(sec),
@@ -749,7 +1001,11 @@ export const editorScreen: Screen = {
         chordGrid.appendChild(h('div.muted.small', null, 'Escribe acordes en los compases para verlos aquí.'));
         return;
       }
-      for (const entry of analysis.chords) chordGrid.appendChild(chordChip(entry));
+      const keyHint: KeyHint = estimateKeyFromChords(weightedChordsOf(analysis.song));
+      for (const entry of analysis.chords) {
+        const { difficulty, rec } = chipRecommendation(entry.name, keyHint);
+        chordGrid.appendChild(chordChip(entry, { difficulty, rec, onReplace: (to) => replaceChordEverywhere(entry.name, to) }));
+      }
     }
 
     function renderStats(): void {
@@ -767,6 +1023,7 @@ export const editorScreen: Screen = {
       renderStats();
       renderIssues();
       renderChords();
+      renderStrum();
     }
 
     /** The song as it should be persisted right now (text + backing track metadata). */
@@ -946,7 +1203,7 @@ export const editorScreen: Screen = {
     }
 
     /** "Detectar acordes": transcribes the loaded track after a tick so the progress label paints. */
-    async function detectChords(): Promise<void> {
+    async function detectChords(bpmOverride?: number): Promise<void> {
       if (!backing || busy) return;
       busy = true;
       updateButtons();
@@ -960,6 +1217,8 @@ export const editorScreen: Screen = {
         transcription = transcribeChords(backing.monoSamples(), sampleRate, {
           beatsPerBar: beatsPerBarOpt,
           vocabulary,
+          bpm: bpmOverride,
+          firstBeatSec: bpmOverride !== undefined && audio ? Math.max(0, audio.offsetSec) : undefined,
           onProgress: (p) => {
             if (!unmounted) setChordProgress(p);
           },
@@ -972,6 +1231,165 @@ export const editorScreen: Screen = {
         busy = false;
         if (!unmounted) updateButtons();
       }
+    }
+
+    // ------------------------------------------------------------ strum pattern
+    function renderStrum(): void {
+      if (document.activeElement === strumInput) return;
+      const n = analysis.song.timeSignature.beatsPerBar;
+      const pattern = currentStrumHeader(textarea.value, n);
+      strumInput.value = pattern;
+      strumSelect.value = presetIdFor(pattern, n);
+      strumError.hidden = true;
+      strumApplyBtn.disabled = true;
+    }
+
+    function onStrumPresetChange(): void {
+      const preset = STRUM_PRESETS.find((p) => p.id === strumSelect.value);
+      if (!preset) return;
+      strumInput.value = preset.pattern(analysis.song.timeSignature.beatsPerBar);
+      onStrumInput();
+    }
+
+    function onStrumInput(): void {
+      const n = analysis.song.timeSignature.beatsPerBar;
+      const pattern = strumInput.value.trim();
+      const valid = isValidStrumPattern(pattern, n);
+      strumError.hidden = valid;
+      if (!valid) strumError.textContent = `Usa solo D, U, x y -, con ${n}, ${n * 2} o ${n * 4} letras para ${n}/${analysis.song.timeSignature.beatUnit}`;
+      strumApplyBtn.disabled = !valid || pattern === currentStrumHeader(textarea.value, n);
+      if (valid) strumSelect.value = presetIdFor(pattern, n);
+    }
+
+    function applyStrum(): void {
+      const n = analysis.song.timeSignature.beatsPerBar;
+      const pattern = strumInput.value.trim();
+      if (!isValidStrumPattern(pattern, n)) return;
+      applyText(rewriteStrumHeader(textarea.value, pattern));
+      renderStrum();
+    }
+
+    // ------------------------------------------------------------ simplify (SPEC section 13)
+    let simplifyResult: SimplifyResult | null = null;
+    const undoStack: string[] = [];
+
+    function currentSimplifyOptions(): SimplifyOptions {
+      return simplifyOptionsFrom({
+        removeExtensions: simplifyChecks.removeExtensions.checked,
+        substituteHard: simplifyChecks.substituteHard.checked,
+        suggestCapo: simplifyChecks.suggestCapo.checked,
+        allowSevenths: simplifyChecks.allowSevenths.checked,
+        maxChordsValue: maxChordsSelect.value,
+      });
+    }
+
+    function runSimplify(): void {
+      simplifyResult = simplifyChart(textarea.value, currentSimplifyOptions());
+      renderSimplifyPreview();
+    }
+
+    function hideSimplifyPreview(): void {
+      simplifyResult = null;
+      simplifyPreview.hidden = true;
+      clear(simplifyPreview);
+    }
+
+    function renderSimplifyPreview(): void {
+      clear(simplifyPreview);
+      const r = simplifyResult;
+      if (!r) {
+        simplifyPreview.hidden = true;
+        return;
+      }
+      const rows = simplifyPreviewRows(r);
+      const changed = r.source !== textarea.value;
+      simplifyPreview.appendChild(h('div.simplify-line', null, formatCapoLine(r.capo)));
+      if (rows.length === 0) {
+        simplifyPreview.appendChild(h('div.simplify-line.muted', null, changed ? 'Solo cambia la cejilla.' : 'No hay nada que simplificar con estas opciones.'));
+      } else {
+        simplifyPreview.appendChild(
+          h(
+            'table.simplify-table',
+            null,
+            h('thead', null, h('tr', null, h('th', null, 'Antes'), h('th', null, 'Después'), h('th', null, 'Pulsos'), h('th', null, 'Motivo'))),
+            h(
+              'tbody',
+              null,
+              ...rows.map((row) =>
+                h(
+                  'tr',
+                  null,
+                  h('td', null, h(`span.chord-chip-badge.lvl-${row.fromLevel}`, null, row.from)),
+                  h('td', null, h(`span.chord-chip-badge.lvl-${row.toLevel}`, null, row.to)),
+                  h('td', null, String(Math.round(row.beats))),
+                  h('td.muted.small', null, row.reason),
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+      simplifyPreview.appendChild(h('div.simplify-line', null, formatUnchangedRatio(r.unchangedBeatsRatio)));
+      const hard = remainingHardChords(r);
+      if (hard.length > 0) simplifyPreview.appendChild(h('div.simplify-line.muted.small', null, `Sin sustituto fácil: ${hard.join(', ')}`));
+      simplifyPreview.appendChild(h('div.simplify-line.muted.small', null, `Acordes: ${r.chordsBefore.join(' ') || '—'} → ${r.chordsAfter.join(' ') || '—'}`));
+      applySimplifyBtn.disabled = !changed;
+      simplifyPreview.appendChild(h('div.simplify-actions', null, applySimplifyBtn, cancelSimplifyBtn));
+      simplifyPreview.hidden = false;
+    }
+
+    /** Replaces the text programmatically (simplification / chip substitution), keeping the previous text for "Deshacer". */
+    function applyText(next: string): void {
+      if (next === textarea.value) return;
+      undoStack.push(textarea.value);
+      if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+      textarea.value = next;
+      onInput();
+      flush();
+      syncGrid();
+      updateCaret();
+      undoBtn.hidden = false;
+    }
+
+    function applySimplified(): void {
+      if (!simplifyResult) return;
+      applyText(simplifyResult.source);
+      hideSimplifyPreview();
+    }
+
+    function undoSimplify(): void {
+      const prev = undoStack.pop();
+      if (prev === undefined) return;
+      textarea.value = prev;
+      onInput();
+      flush();
+      syncGrid();
+      updateCaret();
+      hideSimplifyPreview();
+      undoBtn.hidden = undoStack.length === 0;
+    }
+
+    /** A manual edit of the textarea ends the undo history of simplifications. */
+    function onManualInput(): void {
+      if (undoStack.length === 0) return;
+      undoStack.length = 0;
+      undoBtn.hidden = true;
+    }
+
+    function replaceChordEverywhere(from: string, to: string): void {
+      applyText(rewriteChordTokens(textarea.value, (name) => (sameChordName(name, from) ? to : name)));
+    }
+
+    /** "Simplificar para principiantes": apply the transcription (if any), then preview with the defaults. */
+    function simplifyForBeginners(): void {
+      if (transcription) replaceChords();
+      simplifyChecks.removeExtensions.checked = DEFAULT_SIMPLIFY_OPTIONS.removeExtensions;
+      simplifyChecks.substituteHard.checked = DEFAULT_SIMPLIFY_OPTIONS.substituteHard;
+      simplifyChecks.suggestCapo.checked = DEFAULT_SIMPLIFY_OPTIONS.suggestCapo;
+      simplifyChecks.allowSevenths.checked = DEFAULT_SIMPLIFY_OPTIONS.allowSevenths;
+      maxChordsSelect.value = String(DEFAULT_SIMPLIFY_OPTIONS.maxChords ?? '');
+      runSimplify();
+      simplifyCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
     /** Title used for the generated chart: the text's title, else the stored one, else "Sin título". */
@@ -1321,6 +1739,8 @@ export const editorScreen: Screen = {
       h('div.card', null, h('div.card-title', null, 'Resumen'), h('div.stats', null, statBars.el, statDuration.el, statTempo.el, statTime.el)),
       h('div.card', null, issuesHeading, issuesList),
       h('div.card', null, chordsHeading, chordGrid),
+      strumCard,
+      simplifyCard,
       formatHelp(),
     );
 
@@ -1328,6 +1748,7 @@ export const editorScreen: Screen = {
     root.appendChild(screen);
 
     textarea.addEventListener('input', onInput);
+    textarea.addEventListener('input', onManualInput);
     textarea.addEventListener('keydown', onKeyDown);
     textarea.addEventListener('keyup', updateCaret);
     textarea.addEventListener('click', updateCaret);
@@ -1343,6 +1764,7 @@ export const editorScreen: Screen = {
     renderStats();
     renderIssues();
     renderChords();
+    renderStrum();
     setStatus('saved');
     updateCaret();
     renderTrackInfo();
@@ -1363,6 +1785,7 @@ export const editorScreen: Screen = {
         flashTimer = null;
       }
       textarea.removeEventListener('input', onInput);
+      textarea.removeEventListener('input', onManualInput);
       textarea.removeEventListener('keydown', onKeyDown);
       textarea.removeEventListener('keyup', updateCaret);
       textarea.removeEventListener('click', updateCaret);

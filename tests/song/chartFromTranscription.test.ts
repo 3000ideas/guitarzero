@@ -51,7 +51,7 @@ describe('chartFromTranscription', () => {
       'artist: Yo',
       'tempo: 100',
       'time: 4/4',
-      'strum: D-DU-UDU',
+      'strum: D-D-D-D-',
       '# Acordes detectados automáticamente: revisa y corrige. Tonalidad: Do mayor',
       'C . . . | G . Am . | N.C. . . . | F#m . . D |',
       'E . . . |',
@@ -79,14 +79,14 @@ describe('chartFromTranscription', () => {
     expect(song.totalBeats).toBe(20);
   });
 
-  it('3/4 uses time 3/4 and strum D-DUDU; opts.strum overrides; no artist line without artist', () => {
+  it('3/4 uses time 3/4 and strum D-D-D-; opts.strum overrides; no artist line without artist', () => {
     const bars: TranscribedBar[] = [
       { startBeat: 0, chords: [{ chord: 'Am', beats: 3 }] },
       { startBeat: 3, chords: [{ chord: 'F', beats: 2 }, { chord: 'C', beats: 1 }] },
     ];
     const text = chartFromTranscription(transcription(bars, { beatsPerBar: 3, bpm: 90.4 }), { title: 'Vals' });
     expect(text).toContain('time: 3/4\n');
-    expect(text).toContain('strum: D-DUDU\n');
+    expect(text).toContain('strum: D-D-D-\n');
     expect(text).toContain('tempo: 90\n');
     expect(text).not.toContain('artist:');
     expect(text).toContain('Am . . | F . C |\n');
@@ -98,8 +98,8 @@ describe('chartFromTranscription', () => {
     const custom = chartFromTranscription(transcription(bars, { beatsPerBar: 3 }), { title: 'Vals', strum: 'DDU' });
     expect(custom).toContain('strum: DDU\n');
     expect(parseSong(custom).errors).toEqual([]);
-    expect(defaultChartStrum(4)).toBe('D-DU-UDU');
-    expect(defaultChartStrum(3)).toBe('D-DUDU');
+    expect(defaultChartStrum(4)).toBe('D-D-D-D-');
+    expect(defaultChartStrum(3)).toBe('D-D-D-');
     expect(defaultChartStrum(2)).toBe('D-D-');
   });
 
