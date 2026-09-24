@@ -8,6 +8,7 @@ import { midiToFreq } from '../../src/music/notes';
 import { RealFFT } from '../../src/dsp/fft';
 import { OnsetDetector, type OnsetOpts } from '../../src/dsp/onset';
 import { ChordDetector } from '../../src/dsp/detector';
+import { CHORD_LIBRARY, shapeMidiNotes } from '../../src/music/chords';
 
 /** Seeded PRNG (mulberry32), uniform in [0, 1). */
 export function makeRng(seed = 1): () => number {
@@ -314,4 +315,96 @@ export function runDetector(
     frames.push(det.process(signal.subarray(end - fftSize, end), end / sampleRate));
   }
   return frames;
+}
+
+// ---------------------------------------------------------------- chord progressions
+
+export interface ProgressionOpts {
+  /** Tempo in BPM (default 100). */
+  bpm?: number;
+  /** Beats each chord lasts, one strum per beat (default 4). */
+  beatsPerChord?: number;
+  /** Times the whole progression is played (default 1). */
+  rounds?: number;
+  /** Silence before the first strum, seconds (default 0). */
+  leadSec?: number;
+  /** Extra seconds after the last beat where the last chord keeps ringing (default 0). */
+  tailSec?: number;
+  /** RMS of a white-noise floor in dBFS, or null for none (default -40). */
+  noiseDb?: number | null;
+  /** Peak level of every strum in dBFS (default -20). */
+  dbfs?: number;
+  /** Seed of the first strum (default 1); the noise uses seed + 1000. */
+  seed?: number;
+  /** MIDI notes per chord name; names missing here use the CHORD_LIBRARY voicing. */
+  voicings?: Record<string, number[]>;
+  /** Passed to synthStrumSequence. */
+  dampSec?: number;
+  spreadSec?: number;
+  decayScale?: number;
+  harmonics?: number;
+}
+
+export interface Progression {
+  signal: Float32Array;
+  /** Beat period in seconds (60 / bpm). */
+  periodSec: number;
+  /** Start time of every beat (= strum), seconds. */
+  beatTimes: number[];
+  /** Chord name sounding at every beat. */
+  beatChords: string[];
+}
+
+/** MIDI notes of the CHORD_LIBRARY voicing of a chord name (throws when the library lacks it). */
+export function libraryVoicing(name: string): number[] {
+  const shape = CHORD_LIBRARY.find((s) => s.name === name);
+  if (!shape) throw new Error(`no library voicing for ${name}`);
+  return shapeMidiNotes(shape);
+}
+
+/**
+ * A strummed chord progression: every chord of `chords` is strummed once per beat for
+ * `beatsPerChord` beats at `bpm`, `rounds` times, after `leadSec` of silence, over a white-noise
+ * floor. Returns the signal with the beat grid and the expected chord per beat.
+ */
+export function synthProgression(chords: string[], sampleRate: number, opts: ProgressionOpts = {}): Progression {
+  const bpm = opts.bpm ?? 100;
+  const periodSec = 60 / bpm;
+  const beatsPerChord = opts.beatsPerChord ?? 4;
+  const rounds = opts.rounds ?? 1;
+  const leadSec = opts.leadSec ?? 0;
+  const tailSec = opts.tailSec ?? 0;
+  const seed = opts.seed ?? 1;
+  const beatChords: string[] = [];
+  for (let r = 0; r < rounds; r++) {
+    for (const name of chords) for (let b = 0; b < beatsPerChord; b++) beatChords.push(name);
+  }
+  const beatTimes = beatChords.map((_, i) => leadSec + i * periodSec);
+  const totalSec = leadSec + beatChords.length * periodSec + tailSec;
+  const notes = beatChords.map((name) => opts.voicings?.[name] ?? libraryVoicing(name));
+  const seqOpts: StrumSequenceOpts = { dbfs: opts.dbfs ?? -20, seed };
+  if (opts.dampSec !== undefined) seqOpts.dampSec = opts.dampSec;
+  if (opts.spreadSec !== undefined) seqOpts.spreadSec = opts.spreadSec;
+  if (opts.decayScale !== undefined) seqOpts.decayScale = opts.decayScale;
+  if (opts.harmonics !== undefined) seqOpts.harmonics = opts.harmonics;
+  let signal = synthStrumSequence(notes, sampleRate, beatTimes, totalSec, seqOpts);
+  const noiseDb = opts.noiseDb === undefined ? -40 : opts.noiseDb;
+  if (noiseDb !== null) {
+    signal = mix(
+      [
+        { signal, atSec: 0 },
+        { signal: whiteNoise(sampleRate, totalSec, noiseDb, seed + 1000), atSec: 0 },
+      ],
+      sampleRate,
+      totalSec,
+    );
+  }
+  return { signal, periodSec, beatTimes, beatChords };
+}
+
+/** Repeats a signal `times` times back to back (new array). */
+export function tileSignal(signal: Float32Array, times: number): Float32Array {
+  const out = new Float32Array(signal.length * Math.max(0, times));
+  for (let i = 0; i < times; i++) out.set(signal, i * signal.length);
+  return out;
 }

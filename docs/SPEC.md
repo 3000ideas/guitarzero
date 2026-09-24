@@ -827,3 +827,71 @@ el usuario lo revisa en el editor. Tipos (ya en `types.ts`): `TranscribedBeat`,
   (`offsetSec = firstDownbeatSec`, `gain 0.8`) y navega a `#/edit/<id>`. Errores en español.
 - Prueba en navegador: el archivo se genera por JavaScript en el sandbox (no hay diálogo de
   archivos), como en la sección 11.
+
+## 13. Simplificar acordes
+
+Objetivo: convertir cualquier canción (detectada automáticamente o escrita) en una versión
+**fácil de tocar**: sin séptimas ni extensiones, con cejilla si eso convierte los acordes en
+formas abiertas, sustituyendo los acordes difíciles por el acorde fácil más cercano, y con la
+opción de limitarse a N acordes (p. ej. 4) para tocar la canción entera con ellos.
+
+### music/simplify.ts (puro)
+- `EASY_CHORDS: string[]` = `C D E G A Am Em Dm` (nivel 1) y `A7 D7 E7 G7 C7 B7 Am7 Em7 Dm7 Cmaj7 Fmaj7 Asus2 Asus4 Dsus2 Dsus4 Esus4 Cadd9` (nivel 2, "abiertos con extensión").
+- `chordDifficulty(sym: string | ChordSymbol): { level: 1 | 2 | 3; label: 'fácil' | 'medio' | 'difícil'; reason: string }`:
+  nivel 1 si su nombre normalizado (raíz + cualidad, sin bajo) está en el conjunto de nivel 1;
+  nivel 2 si está en el de nivel 2 o si `getChordShape` devuelve una forma de biblioteca sin
+  cejilla con ≤ 4 dedos; nivel 3 si la forma tiene `barre`, es `generated`, o no existe.
+  `reason` en español ("cejilla", "acorde de séptima", "sin digitación", …).
+- `transposeName(name: string, semitones: number): string` — transpone la raíz (y el bajo) con
+  sostenidos salvo para las raíces que suelen escribirse con bemol (`Bb`, `Eb`, `Ab`) cuando no
+  existe forma con sostenido en la biblioteca; conserva la cualidad textual.
+- `reduceQuality(sym: ChordSymbol): ChordSymbol` — `maj7/7/add9/6/9/sus2/sus4/7sus4/aug/5` → `maj`;
+  `m7/m6/dim/dim7/m7b5` → `min`; elimina el bajo alternativo. `name` regenerado.
+- `nearestEasyChord(sym, opts: { key: { root, mode } | null; allowSevenths: boolean; candidates?: string[] }): { name: string; shared: number; score: number } | null`
+  — candidatos = `EASY_CHORDS` (nivel 1, más nivel 2 si `allowSevenths`) o `opts.candidates`;
+  puntuación = notas compartidas ponderadas (raíz 1.5, tercera 1.0, quinta 0.5, otras 0.5)
+  + 0.5 si es diatónico en `key` − 0.3 si la cualidad (mayor/menor) cambia; se exige ≥ 2 notas
+  compartidas; empates → el candidato con menor nivel, luego orden en `EASY_CHORDS`.
+  Ejemplos que deben cumplirse: `F` → `Fmaj7` (allowSevenths) o `Dm`/`Am` (sin séptimas, con
+  tonalidad Do mayor → `Dm` o `Am`, nunca `C`); `Bm` (Sol mayor) → `D` o `G`; `B7` → `B7` si
+  allowSevenths (nivel 2 no se sustituye).
+- `bestCapo(chords: Array<{ name: string; beats: number }>, maxCapo = 7): { capo: number; difficulty: number; names: string[] }`
+  — para `capo` 0..maxCapo, transpone cada acorde `−capo` semitonos y suma `beats × level`;
+  devuelve el mínimo (empate → menor capo). Solo se propone si reduce la suma en ≥ 15 %.
+- `keepTopChords(chords: Array<{ name: string; beats: number }>, n: number, key): Map<string, string>`
+  — conserva los `n` acordes con más beats (empate → primero en aparecer) y mapea cada uno de
+  los demás al más cercano del conjunto conservado (`nearestEasyChord` con `candidates` = los
+  conservados, sin exigir ≥ 2 notas: si ninguno comparte notas, el conservado más frecuente).
+- `simplifyChart(source: string, opts: { removeExtensions: boolean; substituteHard: boolean; maxChords: number | null; suggestCapo: boolean; allowSevenths: boolean }): SimplifyResult`
+  con `SimplifyResult = { source: string; capo: number; substitutions: Array<{ from: string; to: string; beats: number; reason: string }>; chordsBefore: string[]; chordsAfter: string[]; unchangedBeatsRatio: number /* beats cuyo acorde no cambió / beats con acorde */ }`.
+  Pipeline: parsear con `parseSong` (beats por acorde de `song.bars`); (1) `reduceQuality` si
+  `removeExtensions`; (2) `bestCapo` si `suggestCapo` (cabecera `capo:` añadida/actualizada y
+  todos los nombres transpuestos; si la canción ya tenía `capo: n`, se parte de los acordes
+  escritos y el nuevo capo es total); (3) `substituteHard` → cada acorde de nivel 3 →
+  `nearestEasyChord` (tonalidad estimada del texto: `estimateKeyFromChords(chords)` = raíz/modo
+  que maximiza el nº de beats diatónicos); (4) `maxChords` → `keepTopChords`. Reescritura del
+  texto: solo los **tokens de acorde** de las líneas de compases (regex sobre tokens separados
+  por espacios y `|`: `^([A-G][#b]?[^\s|*\/]*)(\/[A-G][#b]?)?(\*\d+)?$`), conservando `.`, `-`,
+  `N.C.`, `*n`, comentarios, cabeceras, secciones, `x2` y letras; el bajo alternativo se elimina
+  cuando el acorde cambia. `estimateKeyFromChords` exportada.
+- Tests (`tests/music/simplify.test.ts`): dificultad de `C`/`F`/`Bm`/`G7`/`F#m`/`Bbm7`;
+  `transposeName('Bb', -1) === 'A'`, `('F#m', 2) === 'G#m'`; `reduceQuality` de `Cmaj7`, `Am7`,
+  `G/B`; `nearestEasyChord` con los ejemplos anteriores; `bestCapo` de `Eb Ab Bb Cm` → capo 3
+  (`C F G Am`) o 1 (`D G A Bm`) según niveles: el resultado debe minimizar la suma; `keepTopChords`
+  con 5 acordes y n = 4; `simplifyChart` sobre un texto con secciones, `x2`, comentarios `#`,
+  letras `>`, `Am7*2`, `G/B`: el resultado parsea sin errores, conserva la estructura
+  (mismo nº de compases y eventos) y cumple `chordsAfter.length ≤ maxChords`.
+
+### UI (editor)
+- Nueva tarjeta **"Simplificar"** en el panel lateral, debajo de la lista de acordes: casillas
+  "Quitar séptimas y extensiones" (on), "Sustituir acordes difíciles" (on), "Proponer cejilla"
+  (on), "Permitir séptimas abiertas (A7, E7…)" (off), selector "Máximo de acordes" (Sin límite,
+  3, 4, 5, 6; por defecto 4), botón **"Simplificar"** → previsualización: capo propuesto, tabla
+  `antes → después` (con nivel y beats afectados), "Tocas el N % de la canción sin cambios", y
+  botones **"Aplicar"** (sustituye el texto del textarea; guarda el texto anterior para
+  **"Deshacer"**, visible hasta el siguiente cambio manual) y "Cancelar".
+- Lista de acordes (chips): insignia de nivel (verde fácil / ámbar medio / rojo difícil) y, en
+  los difíciles, "→ X" con `title` "Acorde fácil más cercano: X (comparte n notas)"; click en la
+  flecha sustituye ese acorde en todo el texto (mismo mecanismo de reescritura por tokens).
+- Tras "Detectar acordes" (sección 12) o "Desde audio…", el resumen incluye el enlace "Simplificar
+  para principiantes" que abre la tarjeta con los valores por defecto.

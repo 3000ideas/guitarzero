@@ -113,6 +113,22 @@ acordes, pero conviene repasarlos en el editor (pulsa "Escuchar con metrónomo" 
 que no cuadre). En el panel "Pista de audio" del editor también puedes volver a lanzar
 "Detectar acordes" eligiendo compás (4/4 o 3/4) e incluir séptimas.
 
+## Simplificar una canción para tocarla con pocos acordes
+
+En el editor, la tarjeta **Simplificar** convierte cualquier canción (detectada o escrita) en una
+versión fácil:
+
+- **Quitar séptimas y extensiones** (Cmaj7 → C, Am7 → Am, G/B → G).
+- **Proponer cejilla**: busca el traste de cejilla con el que los acordes quedan en formas
+  abiertas (por ejemplo Eb Ab Bb Cm → cejilla 3 → C F G Am). La app ajusta la detección sola.
+- **Sustituir acordes difíciles** (cejillas como F, Bm, F#m) por el acorde fácil más cercano: el
+  que comparte más notas y encaja en la tonalidad.
+- **Máximo de acordes** (3 a 6): se conservan los más frecuentes y el resto se aproxima a ellos.
+  La previsualización dice qué porcentaje de la canción tocas sin cambios.
+
+En la lista de acordes cada uno lleva su nivel (fácil / medio / difícil) y, si es difícil, una
+recomendación con un clic para sustituirlo en toda la canción. Siempre puedes deshacer.
+
 ## Cómo juzga la app
 
 Cada rasgueo esperado tiene una ventana de tiempo (150 ms antes, 250 ms después). Si detecta

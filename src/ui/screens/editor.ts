@@ -16,15 +16,50 @@
  * rewrites the `tempo:` header). A test listen plays the track with metronome clicks on the
  * grid. Offset and gain changes are saved with a 300 ms debounce.
  *
+ * "Detectar acordes" (SPEC section 12) runs dsp/chordTranscribe.ts on the loaded track with the
+ * chosen meter (4/4 | 3/4) and vocabulary ("Incluir séptimas"), shows a summary (key, BPM,
+ * bars, chords) and offers "Sustituir acordes" (song/chartFromTranscription.ts `replaceChart`
+ * over the textarea, `tempo:` header, `offsetSec = firstDownbeatSec`, immediate save) and
+ * "Insertar al final" (appends the bar lines only). Confidence < 0.15 shows a warning.
+ *
+ * "Simplificar" (SPEC section 13) is a card of the side panel below the chord list: the options
+ * of music/simplify.ts `simplifyChart` (remove extensions, substitute hard chords, propose a
+ * capo, allow open sevenths, maximum number of chords) and a preview (proposed capo,
+ * "antes → después" table with difficulty labels and affected beats, unchanged-beats ratio,
+ * "sin sustituto fácil" note) with "Aplicar" / "Cancelar". Every applied change (also the
+ * "→ X" link of a hard chord chip, which rewrites that chord everywhere) pushes the previous
+ * text onto an UndoStack; "Deshacer" stays visible until the next manual edit. Chord chips
+ * carry a difficulty badge (fácil / medio / difícil). After "Detectar acordes" the summary
+ * offers "Simplificar para principiantes" (defaults + preview + scroll to the card).
+ *
  * `analyzeSource`, `lineRange`, `lineOfOffset`, `rewriteTempoHeader`, `formatTempoEstimate`,
- * `previewClickTimes` and the help data are pure (testable in Node).
+ * `previewClickTimes`, the transcription formatters (`formatTranscriptionSummary`,
+ * `transcriptionBarLines`, `appendBarLines`), the simplify helpers (`simplifyPreviewRows`,
+ * `remainingHardChords`, `chordChipInfo`, `substituteChordEverywhere`, `UndoStack`...) and the
+ * help data are pure (testable in Node).
  */
 import './editor.css';
-import type { AudioTrackInfo, ChordShape, ParseError, Screen, Song, StoredSong, TempoEstimate } from '../../types';
+import type { AudioTrackInfo, ChordShape, ChordTranscription, ParseError, Screen, Song, StoredSong, TempoEstimate } from '../../types';
 import { clear, fmtSeconds, h } from '../dom';
 import { drawChordDiagram } from '../chordDiagram';
 import { WaveformView } from '../waveform';
 import { getChordShape } from '../../music/chords';
+import {
+  DEFAULT_SIMPLIFY_OPTIONS,
+  chordDifficulty,
+  estimateKeyFromChords,
+  nearestEasyChord,
+  rewriteChordTokens,
+  sameChordName,
+  simplifyChart,
+  type ChordDifficulty,
+  type DifficultyLevel,
+  type KeyHint,
+  type NearestChord,
+  type SimplifyOptions,
+  type SimplifyResult,
+  type WeightedChord,
+} from '../../music/simplify';
 import { parseSong } from '../../song/parser';
 import { songDurationSec } from '../../song/tempo';
 import { isExampleId } from '../../song/examples';
@@ -34,6 +69,8 @@ import { getAudioContext } from '../../audio/context';
 import { BackingTrack } from '../../audio/backing';
 import { Metronome } from '../../audio/metronome';
 import { estimateTempo } from '../../dsp/tempoEstimate';
+import { transcribeChords } from '../../dsp/chordTranscribe';
+import { chartFromTranscription, replaceChart } from '../../song/chartFromTranscription';
 
 // ---------------------------------------------------------------- constants
 
@@ -54,6 +91,25 @@ export const PREVIEW_BARS = 8;
 export const PREVIEW_LEAD_SEC = 0.1;
 /** Fine offset steps of the sync row, in seconds. */
 export const OFFSET_STEPS_SEC: readonly number[] = [-0.1, -0.01, 0.01, 0.1];
+/** Below this `ChordTranscription.confidence` the editor shows LOW_CONFIDENCE_WARNING. */
+export const LOW_CONFIDENCE_THRESHOLD = 0.15;
+export const LOW_CONFIDENCE_WARNING = 'Confianza baja: revisa los acordes';
+/** Bars per text line when the transcription is written as chart text. */
+export const CHART_BARS_PER_LINE = 4;
+/** Written for a `null` (no chord) beat of the transcription. */
+export const NO_CHORD_TOKEN = 'N.C.';
+/** Options of the "Máximo de acordes" select of the "Simplificar" card (`value` '' = no limit). */
+export const SIMPLIFY_MAX_CHORD_OPTIONS: ReadonlyArray<{ value: string; label: string; max: number | null }> = [
+  { value: '', label: 'Sin límite', max: null },
+  { value: '3', label: '3', max: 3 },
+  { value: '4', label: '4', max: 4 },
+  { value: '5', label: '5', max: 5 },
+  { value: '6', label: '6', max: 6 },
+];
+/** How many applied simplifications "Deshacer" can revert one by one (until the next manual edit). */
+export const UNDO_LIMIT = 20;
+/** Label of the link shown in the detection summary (SPEC section 13). */
+export const SIMPLIFY_FOR_BEGINNERS_LABEL = 'Simplificar para principiantes';
 
 // ---------------------------------------------------------------- pure helpers
 
@@ -223,6 +279,71 @@ export function previewClickTimes(offsetSec: number, bpm: number, beatsPerBar: n
   return out;
 }
 
+/** "Analizando acordes… 40 %" (progress 0..1, rounded to whole percent). */
+export function analyzingChordsText(progress: number): string {
+  const p = Number.isFinite(progress) ? Math.min(1, Math.max(0, progress)) : 0;
+  return `Analizando acordes… ${Math.round(p * 100)} %`;
+}
+
+/** Distinct chord names of a transcription in order of first appearance (N.C. excluded). */
+export function transcriptionChordNames(t: Pick<ChordTranscription, 'bars'>): string[] {
+  const names: string[] = [];
+  for (const bar of t.bars) {
+    for (const { chord } of bar.chords) {
+      if (chord !== null && !names.includes(chord)) names.push(chord);
+    }
+  }
+  return names;
+}
+
+/** "Tonalidad Sol mayor · 96 BPM · 48 compases · G D Em C". */
+export function formatTranscriptionSummary(t: Pick<ChordTranscription, 'bars' | 'bpm' | 'key'>): string {
+  const bars = t.bars.length;
+  const names = transcriptionChordNames(t);
+  return [
+    `Tonalidad ${t.key.name}`,
+    `${formatBpm(t.bpm)} BPM`,
+    bars === 1 ? '1 compás' : `${bars} compases`,
+    names.length > 0 ? names.join(' ') : 'sin acordes',
+  ].join(' · ');
+}
+
+/**
+ * The bars of a transcription as chart lines (SPEC section 2), `barsPerLine` bars per line:
+ * each chord followed by a `.` per additional beat, `N.C.` for null, bars separated by `|` and
+ * every line closed with `|` — e.g. `C . . . | G . Am . |`. Empty string without bars.
+ */
+export function transcriptionBarLines(t: Pick<ChordTranscription, 'bars'>, barsPerLine: number = CHART_BARS_PER_LINE): string {
+  const perLine = Math.max(1, Math.floor(barsPerLine));
+  const lines: string[] = [];
+  for (let i = 0; i < t.bars.length; i += perLine) {
+    const cells = t.bars.slice(i, i + perLine).map((bar) =>
+      bar.chords
+        .map(({ chord, beats }) => {
+          const tokens = [chord ?? NO_CHORD_TOKEN];
+          for (let b = 1; b < beats; b++) tokens.push('.');
+          return tokens.join(' ');
+        })
+        .join(' '),
+    );
+    lines.push(`${cells.join(' | ')} |`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Appends `barLines` to `source` after a blank line, preserving the source's line endings.
+ * An empty source becomes just the bar lines; an empty `barLines` leaves the source untouched.
+ */
+export function appendBarLines(source: string, barLines: string): string {
+  if (barLines === '') return source;
+  const eol = source.includes('\r\n') ? '\r\n' : '\n';
+  const lines = barLines.split('\n').join(eol);
+  if (source.trim() === '') return lines;
+  const trimmed = source.replace(/(\r?\n)+$/, '');
+  return `${trimmed}${eol}${eol}${lines}${eol}`;
+}
+
 /** Short example shown inside the "Formato" help. */
 export const FORMAT_EXAMPLE = `title: Mi canción
 artist: Yo
@@ -359,6 +480,8 @@ export const editorScreen: Screen = {
     }
 
     // ------------------------------------------------------------ state
+    /** Title as stored (fallback for the generated chart when the text has no `title:`). */
+    const storedTitle = stored.title;
     let analysis = analyzeSource(stored.source, id);
     let dirty = false;
     let saveTimer: number | null = null;
@@ -376,6 +499,7 @@ export const editorScreen: Screen = {
     let preview: Preview | null = null;
     let previewRaf = 0;
     let estimate: TempoEstimate | null = null;
+    let transcription: ChordTranscription | null = null;
     let busy = false;
     let metronome: Metronome | null = null;
 
@@ -476,6 +600,46 @@ export const editorScreen: Screen = {
     const detectRow = h('div.audio-row', null, detectBtn, detectResult, applyTempoBtn, applyStartBtn);
     const constantTempoWarn = h('div.audio-warn', { hidden: true }, 'La pista solo se sincroniza con tempo constante: el texto cambia de tempo entre compases.');
 
+    // Chord transcription (SPEC section 12)
+    const chordsBtn = h(
+      'button.btn',
+      { type: 'button', title: 'Propone tempo, tonalidad y un acorde por pulso a partir del audio', onclick: () => void detectChords() },
+      'Detectar acordes',
+    ) as HTMLButtonElement;
+    const meterSelect = h(
+      'select.audio-meter-select',
+      { 'aria-label': 'Compás de la transcripción' },
+      h('option', { value: '4' }, '4/4'),
+      h('option', { value: '3' }, '3/4'),
+    ) as HTMLSelectElement;
+    meterSelect.value = analysis.song.timeSignature.beatsPerBar === 3 ? '3' : '4';
+    const seventhsCheck = h('input', { type: 'checkbox', 'aria-label': 'Incluir séptimas' }) as HTMLInputElement;
+    const chordProgressFill = h('div.progress-fill');
+    const chordProgress = h('div.progress.audio-progress', { hidden: true, role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100' }, chordProgressFill);
+    const chordStatus = h('span.audio-detect-result', { role: 'status', 'aria-live': 'polite' });
+    const chordsRow = h(
+      'div.audio-row',
+      null,
+      chordsBtn,
+      h('label.audio-offset-label', null, 'Compás', meterSelect),
+      h('label.audio-check-label', null, seventhsCheck, 'Incluir séptimas'),
+      chordStatus,
+      chordProgress,
+    );
+    const chordSummary = h('span.audio-detect-result.audio-chord-summary');
+    const replaceChordsBtn = h(
+      'button.btn',
+      { type: 'button', title: 'Sustituye los compases del texto por los acordes detectados (conserva título, artista y cejilla) y fija el inicio del compás 1', onclick: () => replaceChords() },
+      'Sustituir acordes',
+    ) as HTMLButtonElement;
+    const appendChordsBtn = h(
+      'button.btn',
+      { type: 'button', title: 'Añade los compases detectados al final del texto', onclick: () => appendChords() },
+      'Insertar al final',
+    ) as HTMLButtonElement;
+    const chordResultRow = h('div.audio-row.audio-chord-result', { hidden: true }, chordSummary, replaceChordsBtn, appendChordsBtn);
+    const lowConfidenceWarn = h('div.audio-warn', { hidden: true }, LOW_CONFIDENCE_WARNING);
+
     const playMetroBtn = h(
       'button.btn.btn-sm',
       { type: 'button', title: 'Reproduce desde un compás antes del inicio con clics en cada pulso', onclick: () => startPreview('metronome') },
@@ -501,7 +665,20 @@ export const editorScreen: Screen = {
 
     const audioStatus = h('div.audio-status', { hidden: true });
     const storageNote = h('div.audio-warn', { hidden: true });
-    const trackView = h('div.audio-track', { hidden: true }, trackInfo, waveWrap, waveHint, syncRow, detectRow, constantTempoWarn, previewRow);
+    const trackView = h(
+      'div.audio-track',
+      { hidden: true },
+      trackInfo,
+      waveWrap,
+      waveHint,
+      syncRow,
+      detectRow,
+      constantTempoWarn,
+      chordsRow,
+      chordResultRow,
+      lowConfidenceWarn,
+      previewRow,
+    );
     const audioPanel = h('section.card.audio-panel', null, h('div.card-title', null, 'Pista de audio'), fileInput, emptyView, trackView, audioStatus, storageNote);
 
     const waveform = new WaveformView(waveCanvas, {
@@ -719,10 +896,14 @@ export const editorScreen: Screen = {
       loadBtn.disabled = busy;
       replaceBtn.disabled = busy;
       removeBtn.disabled = busy;
-      for (const b of [playMetroBtn, playHereBtn, detectBtn, markBtn, minusBeatBtn, plusBeatBtn, ...stepButtons]) b.disabled = !ready;
+      for (const b of [playMetroBtn, playHereBtn, detectBtn, chordsBtn, markBtn, minusBeatBtn, plusBeatBtn, ...stepButtons]) b.disabled = !ready;
       stopBtn.disabled = preview === null;
       applyTempoBtn.disabled = busy;
       applyStartBtn.disabled = busy;
+      meterSelect.disabled = busy;
+      seventhsCheck.disabled = busy;
+      replaceChordsBtn.disabled = busy || transcription === null;
+      appendChordsBtn.disabled = busy || transcription === null;
     }
 
     function hideEstimate(): void {
@@ -730,6 +911,110 @@ export const editorScreen: Screen = {
       detectResult.textContent = '';
       applyTempoBtn.hidden = true;
       applyStartBtn.hidden = true;
+    }
+
+    function setChordProgress(progress: number | null): void {
+      if (progress === null) {
+        chordProgress.hidden = true;
+        chordStatus.textContent = '';
+        return;
+      }
+      const pct = Math.round(Math.min(1, Math.max(0, progress)) * 100);
+      chordStatus.textContent = analyzingChordsText(progress);
+      chordProgressFill.style.width = `${pct}%`;
+      chordProgress.setAttribute('aria-valuenow', String(pct));
+      chordProgress.hidden = false;
+    }
+
+    function hideTranscription(): void {
+      transcription = null;
+      setChordProgress(null);
+      chordSummary.textContent = '';
+      chordResultRow.hidden = true;
+      lowConfidenceWarn.hidden = true;
+    }
+
+    function renderTranscription(): void {
+      if (!transcription) {
+        hideTranscription();
+        return;
+      }
+      setChordProgress(null);
+      chordSummary.textContent = formatTranscriptionSummary(transcription);
+      chordResultRow.hidden = false;
+      lowConfidenceWarn.hidden = transcription.confidence >= LOW_CONFIDENCE_THRESHOLD;
+    }
+
+    /** "Detectar acordes": transcribes the loaded track after a tick so the progress label paints. */
+    async function detectChords(): Promise<void> {
+      if (!backing || busy) return;
+      busy = true;
+      updateButtons();
+      hideTranscription();
+      setChordProgress(0);
+      const beatsPerBarOpt: 4 | 3 = meterSelect.value === '3' ? 3 : 4;
+      const vocabulary = seventhsCheck.checked ? 'extended' : 'basic';
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      try {
+        if (unmounted || !backing) return;
+        transcription = transcribeChords(backing.monoSamples(), sampleRate, {
+          beatsPerBar: beatsPerBarOpt,
+          vocabulary,
+          onProgress: (p) => {
+            if (!unmounted) setChordProgress(p);
+          },
+        });
+        renderTranscription();
+      } catch (err) {
+        hideTranscription();
+        if (!unmounted) chordStatus.textContent = errorMessage(err, 'No se pudieron detectar los acordes');
+      } finally {
+        busy = false;
+        if (!unmounted) updateButtons();
+      }
+    }
+
+    /** Title used for the generated chart: the text's title, else the stored one, else "Sin título". */
+    function chartTitle(): string {
+      const fromText = analysis.song.title.trim();
+      if (fromText !== '') return fromText;
+      const fromStore = storedTitle.trim();
+      return fromStore !== '' ? fromStore : 'Sin título';
+    }
+
+    /**
+     * "Sustituir acordes": replaces every bar of the text with the transcription (title, artist
+     * and capo are kept by replaceChart), sets the tempo header, moves the start of bar 1 to the
+     * first downbeat and saves at once (text + audio metadata).
+     */
+    function replaceChords(): void {
+      if (!transcription || busy) return;
+      const t = transcription;
+      const chart = chartFromTranscription(t, { title: chartTitle(), artist: analysis.song.artist.trim() || undefined });
+      const next = rewriteTempoHeader(replaceChart(textarea.value, chart), Math.round(t.bpm));
+      if (next !== textarea.value) {
+        textarea.value = next;
+        onInput();
+      }
+      if (audio) setOffset(t.firstDownbeatSec);
+      flush();
+      syncGrid();
+      textarea.scrollTop = 0;
+      updateCaret();
+    }
+
+    /** "Insertar al final": appends the transcribed bar lines (only the bars) to the text. */
+    function appendChords(): void {
+      if (!transcription || busy) return;
+      const next = appendBarLines(textarea.value, transcriptionBarLines(transcription));
+      if (next !== textarea.value) {
+        textarea.value = next;
+        onInput();
+        flush();
+      }
+      syncGrid();
+      textarea.scrollTop = textarea.scrollHeight;
+      updateCaret();
     }
 
     function setOffset(sec: number): void {
@@ -867,6 +1152,7 @@ export const editorScreen: Screen = {
         commitTrack(decoded.track, decoded.sampleRate);
         decoded = null;
         hideEstimate();
+        hideTranscription();
         audioDirty = true;
         flush();
         renderTrackInfo();
@@ -899,6 +1185,7 @@ export const editorScreen: Screen = {
       sampleRate = 0;
       waveform.setAudio(new Float32Array(0), 44100);
       hideEstimate();
+      hideTranscription();
       audioDirty = true;
       flush();
       renderTrackInfo();

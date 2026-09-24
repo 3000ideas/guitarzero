@@ -8,14 +8,29 @@
  * "Progresión rápida" create a song from their templates and open the editor. Songs with a
  * backing track (StoredSong.audio) carry a "♪ pista" badge.
  *
- * `songMeta` and the formatting helpers are pure (testable in Node).
+ * "Desde audio…" (SPEC section 12) creates a song from an audio file: the file is decoded with
+ * BackingTrack (shared AudioContext, no resume needed), stored in IndexedDB (putTrack), its
+ * tempo and chords are transcribed (dsp/tempoEstimate.ts + dsp/chordTranscribe.ts, 4/4, basic
+ * vocabulary) with an inline "Analizando «archivo»… N %" status, the chart text is generated
+ * (song/chartFromTranscription.ts) and saved with the audio metadata (`offsetSec` = first
+ * downbeat, gain 0.8) before opening the editor. On failure the song is deleted and a Spanish
+ * message is shown.
+ *
+ * `songMeta`, `titleFromFileName`, `importStatusText` and the formatting helpers are pure
+ * (testable in Node).
  */
 import './library.css';
-import type { Screen, StoredSong } from '../../types';
+import type { ChordTranscription, Screen, StoredSong } from '../../types';
 import { clear, fmtSeconds, h } from '../dom';
 import { parseSong } from '../../song/parser';
 import { songDurationSec } from '../../song/tempo';
-import { QUICK_PROGRESSION_TEMPLATE, deleteSong, duplicateSong, listSongs, newSong } from '../../song/storage';
+import { QUICK_PROGRESSION_TEMPLATE, deleteSong, duplicateSong, listSongs, newSong, saveSong } from '../../song/storage';
+import { putTrack } from '../../song/audioStore';
+import { getAudioContext } from '../../audio/context';
+import { BackingTrack } from '../../audio/backing';
+import { estimateTempo } from '../../dsp/tempoEstimate';
+import { transcribeChords } from '../../dsp/chordTranscribe';
+import { chartFromTranscription } from '../../song/chartFromTranscription';
 
 // ---------------------------------------------------------------- pure helpers
 
@@ -95,6 +110,25 @@ export function songMeta(stored: StoredSong): SongMeta {
   };
 }
 
+/** Linear gain given to the track of a song created with "Desde audio…". */
+export const IMPORT_TRACK_GAIN = 0.8;
+
+/**
+ * Title of a song created from an audio file: the file name without its extension (a final
+ * `.xxx` of 1–5 letters/digits), whitespace collapsed; "Sin título" when nothing is left.
+ */
+export function titleFromFileName(fileName: string): string {
+  const base = fileName.replace(/^.*[\\/]/, '').replace(/\.[A-Za-z0-9]{1,5}$/, '');
+  const title = base.replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  return title === '' ? UNTITLED : title;
+}
+
+/** "Analizando «cancion.mp3»… 40 %" (progress 0..1, rounded to whole percent). */
+export function importStatusText(fileName: string, progress: number): string {
+  const p = Number.isFinite(progress) ? Math.min(1, Math.max(0, progress)) : 0;
+  return `Analizando «${fileName}»… ${Math.round(p * 100)} %`;
+}
+
 /** Formats `updatedAt` as a short Spanish date, or '' when unknown. */
 export function formatUpdatedAt(updatedAt: number, now: number = Date.now()): string {
   if (!Number.isFinite(updatedAt) || updatedAt <= 0) return '';
@@ -124,6 +158,16 @@ function metaItem(label: string, value: string): HTMLElement {
   return h('span', null, h('b', null, value), ` ${label}`);
 }
 
+function errorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message.trim() !== '') return err.message;
+  return fallback;
+}
+
+/** Lets the browser paint the status text before a long synchronous analysis. */
+function nextTick(): Promise<void> {
+  return new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
 export const libraryScreen: Screen = {
   mount(root: HTMLElement): () => void {
     const userList = h('div.lib-list');
@@ -131,6 +175,145 @@ export const libraryScreen: Screen = {
     const userCount = h('span.muted.small');
     /** Id of a song just created by "Duplicar", highlighted once in the list. */
     let highlightId: string | null = null;
+    /** True while "Desde audio…" is decoding / analysing a file. */
+    let importing = false;
+    let unmounted = false;
+
+    // "Desde audio…" elements: hidden file input + inline status card
+    const audioInput = h('input', { type: 'file', accept: 'audio/*', hidden: true, 'aria-label': 'Archivo de audio', onchange: () => void onAudioChosen() });
+    const fromAudioBtn = h(
+      'button.btn',
+      { type: 'button', title: 'Crea una canción a partir de un archivo de audio: detecta el tempo y los acordes', onclick: () => audioInput.click() },
+      'Desde audio…',
+    ) as HTMLButtonElement;
+    const importText = h('span.lib-import-text', { role: 'status', 'aria-live': 'polite' });
+    const importFill = h('div.progress-fill');
+    const importProgress = h('div.progress.lib-import-progress', { hidden: true, role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100' }, importFill);
+    const importClose = h('button.btn.btn-sm', { type: 'button', hidden: true, onclick: () => hideImport() }, 'Cerrar') as HTMLButtonElement;
+    const importBox = h('div.card.lib-import', { hidden: true }, importText, importProgress, importClose);
+
+    function hideImport(): void {
+      importBox.hidden = true;
+      importBox.classList.remove('is-error');
+      importText.textContent = '';
+      importProgress.hidden = true;
+      importClose.hidden = true;
+    }
+
+    function showImport(text: string, progress: number | null): void {
+      importBox.hidden = false;
+      importBox.classList.remove('is-error');
+      importText.textContent = text;
+      importClose.hidden = true;
+      if (progress === null) {
+        importProgress.hidden = true;
+        return;
+      }
+      const pct = Math.round(Math.min(1, Math.max(0, progress)) * 100);
+      importFill.style.width = `${pct}%`;
+      importProgress.setAttribute('aria-valuenow', String(pct));
+      importProgress.hidden = false;
+    }
+
+    function showImportError(text: string): void {
+      importBox.hidden = false;
+      importBox.classList.add('is-error');
+      importText.textContent = text;
+      importProgress.hidden = true;
+      importClose.hidden = false;
+    }
+
+    async function onAudioChosen(): Promise<void> {
+      const file = audioInput.files && audioInput.files[0];
+      audioInput.value = '';
+      if (!file || importing) return;
+      await importFromAudio(file);
+    }
+
+    /**
+     * Creates a song from `file`: decode → store the file → tempo + chords → chart → save with
+     * the audio metadata → open the editor. Any failure deletes the song (and its track), and so
+     * does leaving the screen before the analysis has run; once analysed, the song is saved even
+     * if the screen is gone (only the navigation is skipped).
+     */
+    async function importFromAudio(file: File): Promise<void> {
+      importing = true;
+      fromAudioBtn.disabled = true;
+      const title = titleFromFileName(file.name);
+      let created: StoredSong | null = null;
+      let track: BackingTrack | null = null;
+      try {
+        showImport(`Cargando «${file.name}»…`, null);
+        created = newSong(`title: ${title}\ntempo: 80\n`);
+        try {
+          track = new BackingTrack(getAudioContext());
+        } catch (err) {
+          throw new Error(errorMessage(err, 'Este navegador no permite decodificar audio'));
+        }
+        const info = await track.load(file);
+        if (unmounted) return;
+        try {
+          await putTrack(created.id, file, { name: file.name, type: file.type, size: file.size });
+        } catch (err) {
+          throw new Error(errorMessage(err, 'No se pudo guardar el audio en este navegador (¿sin espacio?)'));
+        }
+        if (unmounted) return;
+
+        showImport(importStatusText(file.name, 0), 0);
+        await nextTick();
+        if (unmounted) return;
+        const samples = track.monoSamples();
+        const tempo = estimateTempo(samples, info.sampleRate);
+        let transcription: ChordTranscription;
+        try {
+          transcription = transcribeChords(samples, info.sampleRate, {
+            bpm: tempo.bpm,
+            firstBeatSec: tempo.firstBeatSec,
+            beatsPerBar: 4,
+            vocabulary: 'basic',
+            onProgress: (p) => {
+              if (!unmounted) showImport(importStatusText(file.name, p), p);
+            },
+          });
+        } catch (err) {
+          throw new Error(errorMessage(err, 'No se pudieron detectar los acordes del audio'));
+        }
+        showImport(importStatusText(file.name, 1), 1);
+
+        const source = chartFromTranscription(transcription, { title });
+        const { song } = parseSong(source, { id: created.id });
+        saveSong({
+          ...created,
+          title: song.title.trim() !== '' ? song.title : title,
+          artist: song.artist,
+          source,
+          audio: {
+            name: file.name,
+            type: file.type,
+            size: file.size,
+            durationSec: info.durationSec,
+            offsetSec: transcription.firstDownbeatSec,
+            gain: IMPORT_TRACK_GAIN,
+          },
+        });
+        const saved = created;
+        created = null; // committed: not deleted below
+        if (unmounted) return;
+        hideImport();
+        navigate(`#/edit/${saved.id}`);
+      } catch (err) {
+        if (created) deleteSong(created.id);
+        created = null;
+        if (!unmounted) showImportError(errorMessage(err, `No se pudo crear la canción a partir de «${file.name}»`));
+      } finally {
+        // Still set only after an early return (the screen was left before the analysis): the
+        // half-made song must not linger in the library.
+        if (created) deleteSong(created.id);
+        track?.dispose();
+        importing = false;
+        fromAudioBtn.disabled = false;
+      }
+    }
 
     function songCard(meta: SongMeta): HTMLElement {
       const title = displayTitle(meta.title);
@@ -275,6 +458,8 @@ export const libraryScreen: Screen = {
         },
         'Nueva canción',
       ),
+      fromAudioBtn,
+      audioInput,
       h(
         'button.btn',
         {
@@ -294,6 +479,7 @@ export const libraryScreen: Screen = {
       null,
       header,
       toolbar,
+      importBox,
       h('section.lib-section', null, h('div.lib-section-title', null, h('h2', null, 'Mis canciones'), userCount), userList),
       h(
         'section.lib-section',
@@ -307,7 +493,9 @@ export const libraryScreen: Screen = {
     renderLists();
 
     return () => {
-      /* nothing to release: no window listeners or timers outlive the DOM */
+      // No window listeners or timers outlive the DOM. A running import checks this flag: before
+      // the analysis it aborts (and deletes the song); after it, it saves and skips the navigation.
+      unmounted = true;
     };
   },
 };

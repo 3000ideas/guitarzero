@@ -322,6 +322,44 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* "Detectar acordes" row: meter select, sevenths checkbox, progress and result */
+
+.editor .audio-meter-select {
+  width: auto;
+  min-width: 5.5em;
+  padding: 6px 10px;
+}
+
+.editor .audio-check-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--touch);
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.editor .audio-progress {
+  width: 140px;
+  flex: 0 0 auto;
+}
+
+.editor .audio-progress > .progress-fill {
+  transition: width 0.15s;
+}
+
+.editor .audio-chord-summary {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.editor .audio-chord-result {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+
 .editor .audio-status {
   font-size: 14px;
   color: var(--muted);

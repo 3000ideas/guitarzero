@@ -1,9 +1,42 @@
 /* Biblioteca (#/) — screen-specific styles. Base tokens and classes live in src/styles.css. */
 
+.library [hidden] {
+  display: none !important;
+}
+
 .library .lib-toolbar {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+/* "Desde audio…" inline status: "Analizando «archivo»… 40 %" + progress bar, or an error */
+
+.library .lib-import {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.library .lib-import.is-error {
+  border-color: rgba(248, 113, 113, 0.5);
+  color: var(--bad);
+}
+
+.library .lib-import-text {
+  overflow-wrap: anywhere;
+}
+
+.library .lib-import-progress {
+  width: 180px;
+  flex: 0 0 auto;
+}
+
+.library .lib-import-progress > .progress-fill {
+  transition: width 0.15s;
 }
 
 .library .lib-section {
