@@ -301,6 +301,95 @@ describe('chartFromTranscription tempo map and sections (SPEC 15)', () => {
     );
   });
 
+  it('sectionStrums: two sections with different patterns -> one extra strum line, no errors, different events per section (SPEC 16)', () => {
+    const sections: ChordTranscription['sections'] = [
+      { startBar: 0, endBar: 7, label: 'Estrofa', letter: 'A' },
+      { startBar: 8, endBar: 15, label: 'Estribillo', letter: 'B' },
+    ];
+    const t = transcription(SIXTEEN, { bpm: 100, sections });
+    const text = chartFromTranscription(t, { title: 'Dos', sectionStrums: ['D-DU-UDU', 'DUDUDUDU'] });
+    const lines = text.split('\n');
+    // The header takes the first section's pattern; only the second section needs its own line.
+    expect(lines.filter((l) => /^strum:/.test(l))).toEqual(['strum: D-DU-UDU', 'strum: DUDUDUDU']);
+    const i0 = lines.indexOf('[Estrofa]');
+    expect(lines[i0 + 1]).toBe('C . . . | G . . . | Am . . . | F . . . |');
+    const i1 = lines.indexOf('[Estribillo]');
+    expect(lines[i1 + 1]).toBe('strum: DUDUDUDU');
+    expect(lines[i1 + 2]).toBe('C . . . | G . . . | Am . . . | F . . . |');
+    const { song, errors } = parsedBars(text);
+    expect(errors).toEqual([]);
+    expect(song.bars).toHaveLength(16);
+    const slots = (barIndex: number) => song.events.filter((e) => e.barIndex === barIndex).map((e) => `${e.beatInBar}${e.direction[0]}`);
+    for (let b = 0; b < 8; b++) expect(slots(b)).toEqual(['0d', '1d', '1.5u', '2.5u', '3d', '3.5u']);
+    for (let b = 8; b < 16; b++) expect(slots(b)).toEqual(['0d', '0.5u', '1d', '1.5u', '2d', '2.5u', '3d', '3.5u']);
+    expect(song.bars.map((b) => b.section)).toEqual([...Array(8).fill('Estrofa'), ...Array(8).fill('Estribillo')]);
+  });
+
+  it('sectionStrums: undefined entries keep the pattern in force, equal patterns write no line, opts.strum stays the header', () => {
+    const sections: ChordTranscription['sections'] = [
+      { startBar: 0, endBar: 3, label: 'Intro', letter: 'A' },
+      { startBar: 4, endBar: 7, label: 'Estrofa', letter: 'B' },
+      { startBar: 8, endBar: 11, label: 'Estribillo', letter: 'C' },
+      { startBar: 12, endBar: 15, label: 'Final', letter: 'D' },
+    ];
+    const t = transcription(SIXTEEN, { bpm: 100, sections });
+    // Intro: no pattern -> header (first defined: the Estrofa's). Estrofa: same as header -> no line.
+    // Estribillo: new pattern -> line. Final: undefined -> keeps the Estribillo's.
+    const text = chartFromTranscription(t, { title: 'Huecos', sectionStrums: [undefined, 'D-DU-UDU', 'DDDD', undefined] });
+    const lines = text.split('\n');
+    expect(lines.filter((l) => /^strum:/.test(l))).toEqual(['strum: D-DU-UDU', 'strum: DDDD']);
+    expect(lines[lines.indexOf('[Estribillo]') + 1]).toBe('strum: DDDD');
+    expect(lines[lines.indexOf('[Final]') + 1]).toMatch(/^C \. \. \. \|/);
+    const { song, errors } = parsedBars(text);
+    expect(errors).toEqual([]);
+    const beats = (barIndex: number) => song.events.filter((e) => e.barIndex === barIndex).map((e) => e.beatInBar);
+    expect(beats(0)).toEqual([0, 1, 1.5, 2.5, 3, 3.5]);
+    expect(beats(7)).toEqual([0, 1, 1.5, 2.5, 3, 3.5]);
+    expect(beats(8)).toEqual([0, 1, 2, 3]);
+    expect(beats(15)).toEqual([0, 1, 2, 3]);
+
+    // opts.strum is the header even when the first section has its own pattern (which then differs -> line).
+    const explicit = chartFromTranscription(t, { title: 'Global', strum: 'D-D-D-D-', sectionStrums: ['D-DU-UDU', 'D-DU-UDU', undefined, 'D-D-D-D-'] });
+    const el = explicit.split('\n');
+    expect(el.filter((l) => /^strum:/.test(l))).toEqual(['strum: D-D-D-D-', 'strum: D-DU-UDU', 'strum: D-D-D-D-']);
+    expect(el[el.indexOf('[Intro]') + 1]).toBe('strum: D-DU-UDU');
+    expect(el[el.indexOf('[Estrofa]') + 1]).not.toMatch(/^strum:/);
+    expect(el[el.indexOf('[Final]') + 1]).toBe('strum: D-D-D-D-');
+    expect(parseSong(explicit).errors).toEqual([]);
+
+    // A repeated section with its pattern restored after a different one gets its line back each time.
+    const repeated: ChordTranscription['sections'] = [
+      { startBar: 0, endBar: 3, label: 'Estrofa', letter: 'A' },
+      { startBar: 4, endBar: 7, label: 'Estribillo', letter: 'B' },
+      { startBar: 8, endBar: 11, label: 'Estrofa', letter: 'A' },
+      { startBar: 12, endBar: 15, label: 'Estribillo', letter: 'B' },
+    ];
+    const rep = chartFromTranscription(transcription(SIXTEEN, { bpm: 100, sections: repeated }), {
+      title: 'Repe',
+      sectionStrums: ['D-DU-UDU', 'DUDUDUDU', 'D-DU-UDU', 'DUDUDUDU'],
+    });
+    expect(rep.split('\n').filter((l) => /^strum:/.test(l))).toEqual(['strum: D-DU-UDU', 'strum: DUDUDUDU', 'strum: D-DU-UDU', 'strum: DUDUDUDU']);
+    const r = parsedBars(rep);
+    expect(r.errors).toEqual([]);
+    expect(r.song.events.filter((e) => e.barIndex === 8).map((e) => e.beatInBar)).toEqual([0, 1, 1.5, 2.5, 3, 3.5]);
+    expect(r.song.events.filter((e) => e.barIndex === 12).map((e) => e.beatInBar)).toEqual([0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5]);
+
+    // All sections with the same pattern: header only. Empty / unparsable entries are ignored.
+    const same = chartFromTranscription(t, { title: 'Igual', sectionStrums: ['DUDUDUDU', 'DUDUDUDU', 'DUDUDUDU', 'DUDUDUDU'] });
+    expect(same.split('\n').filter((l) => /^strum:/.test(l))).toEqual(['strum: DUDUDUDU']);
+    const bad = chartFromTranscription(t, { title: 'Malo', sectionStrums: ['', 'D-DU-UDU', 'DUD', 'DDU-x', 'D-DU-UDX'] });
+    expect(bad.split('\n').filter((l) => /^strum:/.test(l))).toEqual(['strum: D-DU-UDU']);
+    expect(parseSong(bad).errors).toEqual([]);
+    // Surrounding whitespace is trimmed (one character per beat is valid, too).
+    const padded = chartFromTranscription(t, { title: 'Pad', sectionStrums: ['  DDU-  ', undefined, ' D-DU-UDU '] });
+    expect(padded.split('\n').filter((l) => /^strum:/.test(l))).toEqual(['strum: DDU-', 'strum: D-DU-UDU']);
+    expect(parseSong(padded).errors).toEqual([]);
+    // Without sections the option changes nothing.
+    expect(chartFromTranscription(transcription(SIXTEEN, { bpm: 100 }), { title: 'Sin', sectionStrums: ['DUDUDUDU'] })).toBe(
+      chartFromTranscription(transcription(SIXTEEN, { bpm: 100 }), { title: 'Sin' }),
+    );
+  });
+
   it('round trip from audio: a structured song gives section labels that parseSong reproduces', () => {
     const song = synthStructuredSong(
       [

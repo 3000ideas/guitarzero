@@ -15,10 +15,12 @@
  * the recording's `tempo:` changes and its `[Intro]` / `[Estrofa]` / `[Estribillo]`… blocks)
  * with an inline "Analizando «archivo»… N %" status, the strum pattern is detected
  * on the transcription's grid (dsp/strumDetect.ts, SPEC section 14; used when its confidence
- * ≥ 0.3, else one down-strum per beat), the chart text is generated
- * (song/chartFromTranscription.ts) and saved with the audio metadata (`offsetSec` = first
- * downbeat, gain 0.8) before opening the editor. On failure the song is deleted and a Spanish
- * message is shown.
+ * ≥ 0.3, else one down-strum per beat) and, when the transcription has sections, per section
+ * on each section's slice with its tracked beats (editor.ts `detectSectionStrums`, SPEC
+ * section 16; a section keeps its own pattern with confidence ≥ 0.3 over ≥ 2 bars, passed as
+ * `sectionStrums`), the chart text is generated (song/chartFromTranscription.ts) and saved
+ * with the audio metadata (`offsetSec` = first downbeat, gain 0.8) before opening the editor.
+ * On failure the song is deleted and a Spanish message is shown.
  *
  * `songMeta`, `titleFromFileName`, `importStatusText`, `strumStatusText` and the formatting
  * helpers are pure (testable in Node).
@@ -36,7 +38,7 @@ import { estimateTempo } from '../../dsp/tempoEstimate';
 import { transcribeChords } from '../../dsp/chordTranscribe';
 import { detectStrumPattern } from '../../dsp/strumDetect';
 import { chartFromTranscription } from '../../song/chartFromTranscription';
-import { chartStrumFrom } from './editor';
+import { chartStrumFrom, detectSectionStrums, type SectionStrumChartOpts } from './editor';
 
 // ---------------------------------------------------------------- pure helpers
 
@@ -312,8 +314,12 @@ export const libraryScreen: Screen = {
           console.warn('No se pudo detectar el rasgueo del audio', err);
           strum = undefined;
         }
+        // Per-section strums (SPEC section 16): only with sections, and only the confident ones
+        // (a section without one keeps the global pattern). Never throws.
+        const sectionStrums = detectSectionStrums(samples, info.sampleRate, transcription);
 
-        const source = chartFromTranscription(transcription, { title, strum });
+        const chartOpts: SectionStrumChartOpts = { title, strum, sectionStrums };
+        const source = chartFromTranscription(transcription, chartOpts);
         const { song } = parseSong(source, { id: created.id });
         saveSong({
           ...created,

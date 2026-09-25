@@ -512,3 +512,31 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   letter-spacing: 0.04em;
 }
+
+/* ---------------------------------------------------------------- Strum recorded by tapping (SPEC section 16) */
+.editor .strum-record-box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin-top: 10px;
+}
+
+.editor .strum-tap-btn {
+  flex: 1 1 auto;
+  min-height: 72px;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.editor .strum-tap-btn:active {
+  transform: scale(0.97);
+}
+
+.editor .strum-record-status.is-error {
+  color: var(--bad);
+}

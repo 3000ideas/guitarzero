@@ -1027,3 +1027,56 @@ cada una en bucle. Tipos (ya en `types.ts`): `TranscribedSection`,
 - "Desde audio…" usa `trackBeats` y `detectSections` por defecto.
 - Practicar: sin cambios (el desplegable "Sección" ya muestra los tramos y el bucle por
   sección ya existe).
+
+## 16. Rasgueo grabado a mano y rasgueo por sección
+
+Objetivo: que el patrón `strum:` coincida con lo que el usuario oye y quiere tocar, aunque el
+análisis automático falle (batería, mezclas densas): el usuario **marca el rasgueo tocando**
+mientras suena la canción, y el patrón puede ser **distinto por sección**.
+
+### dsp/strumFromTaps.ts (puro)
+- `patternFromTaps(tapsSec: number[], beatTimes: number[], beatsPerBar: number, opts?: { minBarFraction?: 0.5; latencySec?: number | 'auto' }): StrumDetection`.
+  1. Rejilla: pulsos `beatTimes` (beat 0 = primer tiempo del compás 1; se extrapolan con el
+     último intervalo si faltan); slots de semicorchea interpolados entre pulsos.
+  2. Latencia del toque: si `latencySec === 'auto'` (defecto), `δ = mediana(tap − slot de
+     corchea más cercano)` acotada a [−0.05, 0.2] s; se resta a todos los toques.
+  3. Cada toque se asigna al slot de semicorchea más cercano del compás en que cae; se cuentan
+     toques por slot (máximo uno por toque) y compases con al menos un toque (`bars`).
+  4. Subdivisión: si los slots impares de semicorchea reúnen ≥ 20 % de los toques →
+     `charsPerBeat = 4`; si no, 2. `slotStrength[k]` = toques del slot / `bars` (0..1) a esa
+     resolución.
+  5. Slot activo si `slotStrength ≥ minBarFraction` (0.5: en al menos la mitad de los compases);
+     el primer slot del compás es activo si hay algún toque en ≥ 25 % de los compases.
+     Dirección: tiempo → `D`, contratiempo → `U` (a resolución 4: slots pares `D`, impares `U`).
+     Si ningún slot resulta activo → `'D-'.repeat(beatsPerBar)` con `confidence 0`.
+  6. `confidence` = fracción de compases cuyo conjunto de slots con toque coincide con el patrón
+     en ≥ 75 % de las posiciones.
+- Tests (`tests/dsp/strumFromTaps.test.ts`): toques exactos en `D-DU-UDU` durante 8 compases a
+  100 BPM → mismo patrón, `charsPerBeat 2`, `confidence 1`; los mismos toques con +90 ms de
+  latencia constante → mismo patrón (auto-latencia); toques con jitter ±40 ms → mismo patrón,
+  `confidence ≥ 0.75`; un compás con un toque de más no cambia el patrón; semicorcheas
+  `D-DUD-DUD-DUD-DU` → `charsPerBeat 4` y ≥ 14/16; rejilla con rampa de tempo (pulsos de
+  `rampBeatTimes`) → patrón correcto; sin toques → una por pulso y `confidence 0`.
+
+### Rasgueo por sección
+- `chartFromTranscription(t, { …, sectionStrums?: (string | undefined)[] })`: con `sections` y
+  `sectionStrums[i]` definido, tras la línea `[Etiqueta]` de la sección i se escribe
+  `strum: <patrón>` si difiere del patrón vigente (la cabecera global sigue siendo el de la
+  primera sección con patrón, o `opts.strum`). Test: dos secciones con patrones distintos →
+  una línea `strum:` extra y `parseSong` sin errores con eventos distintos por sección.
+- Importación "Desde audio…" y "Detectar acordes": si hay secciones, `detectStrumPattern` se
+  ejecuta por sección (con los `beatTimes` de sus pulsos y `firstDownbeatSec` = su primer
+  pulso); se usa el patrón de la sección si `confidence ≥ 0.3` y `bars ≥ 2`; si no, el global.
+
+### UI (editor, tarjeta Rasgueo)
+- Botón **"Grabar rasgueo tocando"**: reanuda el contexto, reproduce la pista desde un compás
+  antes del compás 1 con el metrónomo (como "Escuchar con metrónomo", pero hasta 16 compases
+  o hasta "Parar") y entra en modo grabación: un botón grande **"¡Rasgueo!"** (y la barra
+  espaciadora, salvo cuando el foco está en un campo de texto) registra cada toque con la
+  posición de audio del playhead. Indicador "Grabando… N toques · compás M". Al pulsar
+  "Parar" o al terminar: `patternFromTaps` con los `beatTimes` del mapa de tempo del texto
+  (`offsetSec + beatToSec(segments, k)`) → rellena el campo de letras, selecciona preset o
+  "Personalizado", muestra "Grabado en N compases (confianza …)" y activa "Aplicar". Si no hubo
+  toques: "No se registró ningún rasgueo". Salir de la pantalla cancela la grabación.
+- Nota bajo el botón: "Toca la barra espaciadora (o el botón) en cada rasgueo mientras suena.
+  Abajo en los tiempos, arriba en los contratiempos."

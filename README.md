@@ -122,6 +122,19 @@ acordes, pero conviene repasarlos en el editor (pulsa "Escuchar con metrónomo" 
 que no cuadre). En el panel "Pista de audio" del editor también puedes volver a lanzar
 "Detectar acordes" eligiendo compás (4/4 o 3/4) e incluir séptimas.
 
+## Si el rasgueo no coincide con la canción
+
+El patrón automático se mide sobre los golpes de la grabación; con batería o mezclas densas puede
+marcar rasgueos que la guitarra no da. Dos soluciones en la tarjeta **Rasgueo** del editor:
+
+- **Grabar rasgueo tocando**: la canción suena con metrónomo y tú pulsas la barra espaciadora (o el
+  botón "¡Rasgueo!") en cada rasgueo. La app cuantiza tus toques a la rejilla, compensa tu
+  latencia y escribe el patrón (↓ en los tiempos, ↑ en los contratiempos). "Aplicar" lo guarda.
+- **Presets**: "Una por pulso" es el más sencillo y siempre encaja.
+
+Además, al importar desde audio el patrón se detecta **por sección** (`strum:` bajo cada
+`[Etiqueta]` cuando cambia), porque estrofa y estribillo suelen rasguearse distinto.
+
 ## Simplificar una canción para tocarla con pocos acordes
 
 En el editor, la tarjeta **Simplificar** convierte cualquier canción (detectada o escrita) en una

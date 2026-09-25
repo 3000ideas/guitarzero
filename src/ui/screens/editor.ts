@@ -47,13 +47,30 @@
  * appends "N secciones: Intro · Estrofa · Estribillo…" and "tempo variable (96–104 BPM)" when
  * the transcription carries `sections` / a varying `barTempos`.
  *
+ * Strum recorded by tapping and per-section strums (SPEC section 16): "Grabar rasgueo tocando"
+ * (Rasgueo card, with a loaded track) resumes the context, plays the track with the metronome
+ * from one bar before bar 1 for up to RECORD_BARS bars (the metronome preview with an end) and
+ * enters recording mode: the big "¡Rasgueo!" button (pointerdown) and the space bar (document
+ * keydown, ignored while a text field has the focus) record the audio position of the playhead;
+ * "Grabando… N toques · compás M" follows live. "Parar" or the end of the preview runs
+ * dsp/strumFromTaps.ts `patternFromTaps` with the beat times of the text's tempo map
+ * (`offsetSec + beatToSec(segments, k)`), fills the letters field ("Aplicar" enabled) and reports
+ * "Grabado en N compases (confianza …)" — or "No se registró ningún rasgueo". Leaving the screen
+ * cancels the recording and removes the key listener. "Detectar acordes" also runs the strum
+ * detection per section (`detectSectionStrums`, on the slice of audio of every section with its
+ * tracked beats) and "Sustituir acordes" passes the confident ones (confidence ≥ 0.3, ≥ 2 bars)
+ * to chartFromTranscription as `sectionStrums`, keeping the global pattern as before.
+ *
  * `analyzeSource`, `lineRange`, `lineOfOffset`, `rewriteTempoHeader`, `formatTempoEstimate`,
  * `previewClickTimes`, the transcription formatters (`formatTranscriptionSummary`,
  * `sectionsSummaryText`, `variableTempoText`, `transcriptionBarLines`, `appendBarLines`), the
  * simplify helpers (`simplifyPreviewRows`,
  * `remainingHardChords`, `chordChipInfo`, `substituteChordEverywhere`, `UndoStack`...), the strum
- * helpers (`formatStrumDetection`, `chartStrumFrom`, `firstDownbeatInAudio`, `waveformStrum`)
- * and the help data are pure (testable in Node).
+ * helpers (`formatStrumDetection`, `chartStrumFrom`, `firstDownbeatInAudio`, `waveformStrum`),
+ * the recording helpers (`recordingStatusText`, `formatRecordedStrum`, `recordingBeatTimes`,
+ * `previewEndSec`, `barNumberAt`, `isTypingTarget`), the per-section strum helpers
+ * (`sectionBeatTimes`, `sectionStrumJob`, `sectionStrumPattern`, `detectSectionStrums`,
+ * `sectionStrumsNote`) and the help data are pure (testable in Node).
  */
 import './editor.css';
 import type {
@@ -90,7 +107,7 @@ import {
   type WeightedChord,
 } from '../../music/simplify';
 import { parseSong } from '../../song/parser';
-import { beatToSec, songDurationSec } from '../../song/tempo';
+import { beatToSec, secToBeat, songDurationSec } from '../../song/tempo';
 import { isExampleId } from '../../song/examples';
 import { getSong, saveSong } from '../../song/storage';
 import { deleteTrack, getTrack, hasIndexedDb, putTrack } from '../../song/audioStore';
@@ -99,8 +116,9 @@ import { BackingTrack } from '../../audio/backing';
 import { Metronome } from '../../audio/metronome';
 import { estimateTempo } from '../../dsp/tempoEstimate';
 import { transcribeChords } from '../../dsp/chordTranscribe';
-import { detectStrumPattern } from '../../dsp/strumDetect';
-import { chartFromTranscription, replaceChart } from '../../song/chartFromTranscription';
+import { detectStrumPattern, type StrumDetectOpts } from '../../dsp/strumDetect';
+import { patternFromTaps } from '../../dsp/strumFromTaps';
+import { chartFromTranscription, replaceChart, type ChartOpts } from '../../song/chartFromTranscription';
 
 // ---------------------------------------------------------------- constants
 
@@ -400,6 +418,211 @@ export function waveformStrum(source: string, beatsPerBar: number): WaveformStru
   const header = currentStrumHeader(source, n);
   const pattern = isValidStrumPattern(header, n) ? header : 'D-'.repeat(n);
   return { pattern, charsPerBeat: pattern.length / n };
+}
+
+// ---------------------------------------------------------------- strum recorded by tapping (SPEC section 16)
+
+/** Label of the button that starts a tap recording. */
+export const STRUM_RECORD_LABEL = 'Grabar rasgueo tocando';
+/** Label of the big tap button shown while recording. */
+export const STRUM_TAP_LABEL = '¡Rasgueo!';
+/** Note under the recording button. */
+export const STRUM_RECORD_NOTE = 'Toca la barra espaciadora (o el botón) en cada rasgueo mientras suena. Abajo en los tiempos, arriba en los contratiempos.';
+/** Bars played (after the one-bar lead-in) by a tap recording unless "Parar" ends it earlier. */
+export const RECORD_BARS = 16;
+/** Shown when a recording ends without a single tap. */
+export const NO_TAPS_TEXT = 'No se registró ningún rasgueo';
+/** Status shown while a recording is starting (before the first tap can land). */
+export const RECORDING_TEXT = 'Grabando…';
+
+/** "Grabando… 3 toques · compás 2" (singular "1 toque"; the lead-in bar is "compás 0"). */
+export function recordingStatusText(taps: number, bar: number): string {
+  const n = Math.max(0, Math.round(taps));
+  return `${RECORDING_TEXT} ${n === 1 ? '1 toque' : `${n} toques`} · compás ${Math.round(bar)}`;
+}
+
+/** "Grabado en 8 compases (confianza alta)" — singular "1 compás". */
+export function formatRecordedStrum(d: Pick<StrumDetection, 'bars' | 'confidence'>): string {
+  const n = Math.max(0, Math.round(d.bars));
+  return `Grabado en ${n === 1 ? '1 compás' : `${n} compases`} (confianza ${confidenceLabel(d.confidence)})`;
+}
+
+/**
+ * Audio times of the beats of the text's tempo map that a tap recording is judged against:
+ * `offsetSec + beatToSec(segments, k)` for k = 0 .. bars × beatsPerBar (the end of the last
+ * bar included, so `patternFromTaps` never has to extrapolate inside the recorded span).
+ */
+export function recordingBeatTimes(offsetSec: number, segments: TempoSegment[], beatsPerBar: number, bars: number = RECORD_BARS): number[] {
+  const n = Math.max(1, Math.round(beatsPerBar)) * Math.max(1, Math.round(bars));
+  const out: number[] = [];
+  for (let k = 0; k <= n; k++) out.push(offsetSec + beatToSec(segments, k));
+  return out;
+}
+
+/** Audio time at which bar `bars` of the text ends (`offsetSec + beatToSec(segments, bars × beatsPerBar)`). */
+export function previewEndSec(offsetSec: number, segments: TempoSegment[], beatsPerBar: number, bars: number): number {
+  return offsetSec + beatToSec(segments, Math.max(1, Math.round(beatsPerBar)) * Math.max(0, bars));
+}
+
+/**
+ * 1-based number of the bar of the text playing at audio time `sec`: bar 1 starts at `offsetSec`
+ * and the bars follow the tempo map; the lead-in bar (and anything earlier) is bar 0.
+ */
+export function barNumberAt(sec: number, offsetSec: number, segments: TempoSegment[], beatsPerBar: number): number {
+  const n = Math.max(1, Math.round(beatsPerBar));
+  const beat = secToBeat(segments, sec - offsetSec);
+  if (!Number.isFinite(beat)) return 0;
+  return Math.max(0, Math.floor(beat / n) + 1);
+}
+
+/**
+ * True when a key press on `target` is typing: an input, textarea, select or editable element
+ * (the space bar must not record a tap while the user edits the text).
+ */
+export function isTypingTarget(target: EventTarget | null | undefined): boolean {
+  if (!target || typeof target !== 'object') return false;
+  const el = target as { tagName?: unknown; isContentEditable?: unknown };
+  const tag = typeof el.tagName === 'string' ? el.tagName.toUpperCase() : '';
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  return el.isContentEditable === true;
+}
+
+// ---------------------------------------------------------------- strum per section (SPEC section 16)
+
+/** A section needs at least this many analysed bars for its own strum pattern. */
+export const SECTION_STRUM_MIN_BARS = 2;
+/** Audio handed to a section's detection starts this long before its first beat (the onset envelope subtracts a 0.5 s moving average). */
+export const SECTION_PRE_ROLL_SEC = 1;
+/** Audio handed to a section's detection ends this long after its last bar. */
+export const SECTION_POST_ROLL_SEC = 0.25;
+
+/**
+ * Tracked beat times of a section of a transcription: the beats of its bars (`startBar` ..
+ * `endBar`) plus the first beat after them when the transcription has it (the end of its last
+ * bar, so the detection does not have to extrapolate it). Empty when the section does not fit the
+ * transcription.
+ */
+export function sectionBeatTimes(t: Pick<ChordTranscription, 'beats' | 'bars' | 'beatsPerBar'>, section: Pick<TranscribedSection, 'startBar' | 'endBar'>): number[] {
+  const first = Math.floor(section.startBar);
+  const last = Math.floor(section.endBar);
+  if (!(first >= 0) || !(last >= first) || last >= t.bars.length) return [];
+  const from = t.bars[first].startBeat;
+  const next = t.bars[last + 1];
+  const to = next !== undefined ? next.startBeat : t.bars[last].startBeat + Math.max(1, Math.round(t.beatsPerBar));
+  if (!(from >= 0) || !(to > from)) return [];
+  const out: number[] = [];
+  for (let k = from; k <= to && k < t.beats.length; k++) {
+    const sec = t.beats[k].timeSec;
+    if (!Number.isFinite(sec)) return [];
+    out.push(sec);
+  }
+  return out;
+}
+
+export interface SectionStrumJob {
+  /** Audio time at which the analysed slice starts (`SECTION_PRE_ROLL_SEC` before the first beat, never < 0). */
+  startSec: number;
+  /** Audio time at which the analysed slice ends. */
+  endSec: number;
+  /** Options for detectStrumPattern on the slice: times are relative to `startSec`. */
+  opts: StrumDetectOpts;
+}
+
+/**
+ * What to run for a section: the slice of audio to analyse and the detection options on it
+ * (SPEC section 16: the section's tracked beats as `beatTimes`, its first beat as
+ * `firstDownbeatSec`, the transcription's `bpm` and `beatsPerBar`), with the times shifted to the
+ * slice so every section costs only its own length. Null when the section has fewer beats than a
+ * bar.
+ */
+export function sectionStrumJob(
+  t: Pick<ChordTranscription, 'beats' | 'bars' | 'beatsPerBar' | 'bpm'>,
+  section: Pick<TranscribedSection, 'startBar' | 'endBar'>,
+  preRollSec: number = SECTION_PRE_ROLL_SEC,
+  postRollSec: number = SECTION_POST_ROLL_SEC,
+): SectionStrumJob | null {
+  const beatsPerBar = Math.max(1, Math.round(t.beatsPerBar));
+  const times = sectionBeatTimes(t, section);
+  if (times.length <= beatsPerBar) return null;
+  const beatSec = t.bpm > 0 ? 60 / t.bpm : 0;
+  const startSec = Math.max(0, times[0] - Math.max(0, preRollSec));
+  // One extra beat after the last time covers an extrapolated bar end (last section of the song).
+  const endSec = times[times.length - 1] + beatSec + Math.max(0, postRollSec);
+  return {
+    startSec,
+    endSec,
+    opts: {
+      bpm: t.bpm,
+      beatsPerBar,
+      firstDownbeatSec: times[0] - startSec,
+      beatTimes: times.map((sec) => sec - startSec),
+      maxSeconds: endSec - startSec + 1,
+    },
+  };
+}
+
+/** The section's own pattern when the detection is confident enough (≥ 0.3) over ≥ 2 bars, else undefined (the global pattern applies). */
+export function sectionStrumPattern(d: Pick<StrumDetection, 'pattern' | 'confidence' | 'bars'> | null | undefined): string | undefined {
+  if (!d || d.pattern === '' || !(d.confidence >= STRUM_CONFIDENCE_THRESHOLD) || !(d.bars >= SECTION_STRUM_MIN_BARS)) return undefined;
+  return d.pattern;
+}
+
+export type StrumDetector = (samples: Float32Array, sampleRate: number, opts: StrumDetectOpts) => StrumDetection;
+
+/**
+ * `sectionStrums` for chartFromTranscription: the strum heard in every section of `t` on its own
+ * slice of `samples` (see sectionStrumJob), kept when confident (sectionStrumPattern), undefined
+ * otherwise. A failing detection only loses that section. Returns undefined without sections or
+ * when no section has a pattern of its own.
+ */
+export function detectSectionStrums(
+  samples: Float32Array,
+  sampleRate: number,
+  t: ChordTranscription,
+  detect: StrumDetector = detectStrumPattern,
+): (string | undefined)[] | undefined {
+  const sections = t.sections;
+  if (!sections || sections.length === 0) return undefined;
+  const out: (string | undefined)[] = [];
+  let any = false;
+  for (const section of sections) {
+    let pattern: string | undefined;
+    const job = sectionStrumJob(t, section);
+    if (job) {
+      const from = Math.max(0, Math.min(samples.length, Math.floor(job.startSec * sampleRate)));
+      const to = Math.max(from, Math.min(samples.length, Math.ceil(job.endSec * sampleRate)));
+      try {
+        pattern = sectionStrumPattern(detect(samples.subarray(from, to), sampleRate, job.opts));
+      } catch (err) {
+        console.warn(`No se pudo detectar el rasgueo de la sección «${section.label}»`, err);
+        pattern = undefined;
+      }
+    }
+    if (pattern !== undefined) any = true;
+    out.push(pattern);
+  }
+  return any ? out : undefined;
+}
+
+/**
+ * Options of chartFromTranscription with the per-section strums of SPEC section 16
+ * (`sectionStrums[i]` = pattern of section i, undefined = the global one). Spelled out here so
+ * the callers type-check whether or not song/chartFromTranscription.ts already declares the
+ * option in `ChartOpts` (the two declarations are identical once it does).
+ */
+export type SectionStrumChartOpts = ChartOpts & { sectionStrums?: (string | undefined)[] };
+
+/**
+ * "rasgueo propio en 2 secciones" — how many sections got a pattern different from the global
+ * one (`globalStrum`, or the default one-down-per-beat pattern when undefined); null when none.
+ */
+export function sectionStrumsNote(sectionStrums: ReadonlyArray<string | undefined> | undefined, globalStrum: string | undefined, beatsPerBar: number): string | null {
+  if (!sectionStrums) return null;
+  const base = globalStrum !== undefined && globalStrum !== '' ? globalStrum : 'D-'.repeat(Math.max(1, Math.round(beatsPerBar)));
+  let n = 0;
+  for (const s of sectionStrums) if (s !== undefined && s !== base) n++;
+  if (n === 0) return null;
+  return n === 1 ? 'rasgueo propio en 1 sección' : `rasgueo propio en ${n} secciones`;
 }
 
 /** "≈ 96 BPM (confianza alta), inicio 1.32 s". */
@@ -791,6 +1014,27 @@ interface Preview {
   /** AudioContext time at which `fromSec` of the audio starts playing. */
   whenWall: number;
   fromSec: number;
+  /** Audio time at which the preview stops by itself (a tap recording), or null to play to the end. */
+  endSec: number | null;
+}
+
+interface PreviewOpts {
+  /** Bars with metronome clicks after the lead-in bar (default PREVIEW_BARS). */
+  bars?: number;
+  /** Stop when the last of those bars ends instead of playing to the end of the audio. */
+  stopAtEnd?: boolean;
+}
+
+/** A tap recording in progress (SPEC section 16). */
+interface Recording {
+  /** Audio positions (playhead seconds) of the taps, in order. */
+  taps: number[];
+  /** Beat times of the text's tempo map the taps are judged against (see recordingBeatTimes). */
+  beatTimes: number[];
+  beatsPerBar: number;
+  /** Grid the live "compás M" is computed on (frozen when the recording starts). */
+  offsetSec: number;
+  segments: TempoSegment[];
 }
 
 export const editorScreen: Screen = {
@@ -829,6 +1073,10 @@ export const editorScreen: Screen = {
     let transcription: ChordTranscription | null = null;
     /** Strum heard on the transcription's grid (with `transcription`); null when it failed or there is none. */
     let transcriptionStrum: StrumDetection | null = null;
+    /** Strum heard per section of the transcription (SPEC section 16); undefined without sections or confident patterns. */
+    let transcriptionSectionStrums: (string | undefined)[] | undefined;
+    /** Tap recording in progress (SPEC section 16), or null. Only exists while `preview` does. */
+    let recording: Recording | null = null;
     let busy = false;
     let metronome: Metronome | null = null;
 
@@ -1086,6 +1334,37 @@ export const editorScreen: Screen = {
       STRUM_DETECT_LABEL,
     ) as HTMLButtonElement;
     const strumDetectStatus = h('span.strum-detect-status.audio-detect-result', { role: 'status', 'aria-live': 'polite' });
+    // Strum recorded by tapping (SPEC section 16)
+    const strumRecordBtn = h(
+      'button.btn.btn-sm',
+      {
+        type: 'button',
+        disabled: true,
+        title: `Reproduce la pista con metrónomo desde un compás antes del inicio (hasta ${RECORD_BARS} compases) y anota cada rasgueo que marques (con la pista cargada)`,
+        onclick: () => startRecording(),
+      },
+      STRUM_RECORD_LABEL,
+    ) as HTMLButtonElement;
+    const strumRecordStatus = h('span.strum-record-status.audio-detect-result', { role: 'status', 'aria-live': 'polite' });
+    const tapBtn = h(
+      'button.btn.btn-primary.strum-tap-btn',
+      {
+        type: 'button',
+        title: 'Marca un rasgueo (o pulsa la barra espaciadora)',
+        // pointerdown: no focus change (the space bar keeps going to the document listener) and no
+        // wait for the pointer to go up. The click only counts for keyboard activations (detail 0).
+        onpointerdown: (ev: PointerEvent) => {
+          ev.preventDefault();
+          tap();
+        },
+        onclick: (ev: MouseEvent) => {
+          if (ev.detail === 0) tap();
+        },
+      },
+      STRUM_TAP_LABEL,
+    ) as HTMLButtonElement;
+    const recordStopBtn = h('button.btn.btn-sm', { type: 'button', title: 'Termina la grabación y calcula el patrón', onclick: () => stopPreview() }, '■ Parar') as HTMLButtonElement;
+    const recordBox = h('div.strum-record-box', { hidden: true }, tapBtn, recordStopBtn);
     const strumCard = h(
       'div.card.strum-card',
       null,
@@ -1095,6 +1374,9 @@ export const editorScreen: Screen = {
       strumError,
       h('div.strum-detect-row', null, strumDetectBtn, strumDetectStatus),
       h('p.muted.small.strum-note', null, STRUM_DETECT_NOTE),
+      h('div.strum-detect-row', null, strumRecordBtn, strumRecordStatus),
+      recordBox,
+      h('p.muted.small.strum-note', null, STRUM_RECORD_NOTE),
     );
 
     const waveform = new WaveformView(waveCanvas, {
@@ -1327,6 +1609,7 @@ export const editorScreen: Screen = {
       replaceBtn.disabled = busy;
       removeBtn.disabled = busy;
       for (const b of [playMetroBtn, playHereBtn, detectBtn, chordsBtn, strumDetectBtn, markBtn, minusBeatBtn, plusBeatBtn, ...stepButtons]) b.disabled = !ready;
+      strumRecordBtn.disabled = !ready || recording !== null;
       stopBtn.disabled = preview === null;
       applyTempoBtn.disabled = busy;
       applyStartBtn.disabled = busy;
@@ -1359,6 +1642,7 @@ export const editorScreen: Screen = {
     function hideTranscription(): void {
       transcription = null;
       transcriptionStrum = null;
+      transcriptionSectionStrums = undefined;
       setChordProgress(null);
       chordSummary.textContent = '';
       chordStrumNote.textContent = '';
@@ -1374,10 +1658,11 @@ export const editorScreen: Screen = {
       setChordProgress(null);
       chordSummary.textContent = formatTranscriptionSummary(transcription);
       const strum = chartStrumFrom(transcriptionStrum);
+      const sectionsNote = sectionStrumsNote(transcriptionSectionStrums, strum, transcription.beatsPerBar);
       chordStrumNote.textContent =
-        strum !== undefined && transcriptionStrum
+        (strum !== undefined && transcriptionStrum
           ? `Rasgueo ${strum} (confianza ${confidenceLabel(transcriptionStrum.confidence)})`
-          : 'Rasgueo: una por pulso (no se reconoció un patrón claro)';
+          : 'Rasgueo: una por pulso (no se reconoció un patrón claro)') + (sectionsNote !== null ? ` · ${sectionsNote}` : '');
       chordResultRow.hidden = false;
       lowConfidenceWarn.hidden = transcription.confidence >= LOW_CONFIDENCE_THRESHOLD;
     }
@@ -1419,8 +1704,10 @@ export const editorScreen: Screen = {
             if (!unmounted) setChordProgress(p);
           },
         });
-        // The strum heard on the same samples with the transcription's grid (SPEC section 14).
+        // The strum heard on the same samples with the transcription's grid (SPEC section 14)...
         transcriptionStrum = detectTranscriptionStrum(samples, t);
+        // ...and per section, on each section's slice with its tracked beats (SPEC section 16).
+        transcriptionSectionStrums = detectSectionStrums(samples, sampleRate, t);
         transcription = t;
         renderTranscription();
       } catch (err) {
@@ -1507,6 +1794,90 @@ export const editorScreen: Screen = {
         busy = false;
         if (!unmounted) updateButtons();
       }
+    }
+
+    // ------------------------------------------------------------ strum recorded by tapping (SPEC section 16)
+
+    /**
+     * "Grabar rasgueo tocando": resumes the context (synchronously, inside the click), plays the
+     * track with the metronome from one bar before bar 1 for RECORD_BARS bars (the preview stops
+     * by itself at the end of the last one) and enters recording mode: the big "¡Rasgueo!" button
+     * and the space bar record the playhead position of every strum. `stopPreview` (the "Parar"
+     * buttons or the end of the preview) turns the taps into the pattern (finishRecording).
+     */
+    function startRecording(): void {
+      if (!audio || !backing || busy || recording) return;
+      const segments = analysis.song.tempoSegments;
+      const n = beatsPerBar();
+      const beatTimes = recordingBeatTimes(audio.offsetSec, segments, n, RECORD_BARS);
+      strumRecordStatus.classList.remove('is-error');
+      if (!startPreview('metronome', { bars: RECORD_BARS, stopAtEnd: true })) {
+        strumRecordStatus.classList.add('is-error');
+        strumRecordStatus.textContent = 'No se puede reproducir la pista desde el inicio del compás 1';
+        return;
+      }
+      recording = { taps: [], beatTimes, beatsPerBar: n, offsetSec: audio.offsetSec, segments };
+      recordBox.hidden = false;
+      strumRecordStatus.textContent = recordingStatusText(0, 0);
+      document.addEventListener('keydown', onRecordKeyDown);
+      updateButtons();
+    }
+
+    /** Records one strum at the current audio position of the playhead (no-op outside a recording). */
+    function tap(): void {
+      if (!recording) return;
+      const sec = currentPreviewSec();
+      if (sec === null) return;
+      recording.taps.push(sec);
+      updateRecordingStatus(sec);
+    }
+
+    /** "Grabando… N toques · compás M" for the playhead at audio time `sec`. */
+    function updateRecordingStatus(sec: number): void {
+      const rec = recording;
+      if (!rec) return;
+      const text = recordingStatusText(rec.taps.length, barNumberAt(sec, rec.offsetSec, rec.segments, rec.beatsPerBar));
+      if (strumRecordStatus.textContent !== text) strumRecordStatus.textContent = text;
+    }
+
+    /** Space bar = tap while recording, unless the user is typing in a field. Holding the key does not repeat. */
+    function onRecordKeyDown(ev: KeyboardEvent): void {
+      if (!recording) return;
+      if (ev.key !== ' ' && ev.code !== 'Space') return;
+      if (isTypingTarget(ev.target)) return;
+      ev.preventDefault();
+      if (ev.repeat) return;
+      tap();
+    }
+
+    /**
+     * Ends the recording in progress (called by stopPreview): removes the key listener, hides the
+     * tap button and, unless the screen is gone (leaving cancels the recording), writes the
+     * pattern of the taps into the letters field ("Aplicar" enabled when it differs from the
+     * text) and reports the bars and the confidence — or that no strum was recorded.
+     */
+    function finishRecording(): void {
+      const rec = recording;
+      if (!rec) return;
+      recording = null;
+      document.removeEventListener('keydown', onRecordKeyDown);
+      recordBox.hidden = true;
+      if (unmounted) return;
+      strumRecordStatus.classList.remove('is-error');
+      try {
+        const result = rec.taps.length > 0 ? patternFromTaps(rec.taps, rec.beatTimes, rec.beatsPerBar) : null;
+        if (!result || result.bars === 0) {
+          strumRecordStatus.textContent = NO_TAPS_TEXT;
+        } else {
+          strumInput.value = result.pattern;
+          onStrumInput();
+          strumRecordStatus.textContent = formatRecordedStrum(result);
+        }
+      } catch (err) {
+        strumRecordStatus.classList.add('is-error');
+        strumRecordStatus.textContent = errorMessage(err, 'No se pudo calcular el rasgueo grabado');
+      }
+      updateButtons();
     }
 
     // ------------------------------------------------------------ simplify (SPEC section 13)
@@ -1642,14 +2013,21 @@ export const editorScreen: Screen = {
 
     /**
      * "Sustituir acordes": replaces every bar of the text with the transcription (title, artist
-     * and capo are kept by replaceChart) using the detected strum when it is confident enough,
+     * and capo are kept by replaceChart) using the detected strum when it is confident enough
+     * (and the per-section strums of SPEC section 16, when any section has a confident one),
      * sets the tempo header, moves the start of bar 1 to the first downbeat and saves at once
      * (text + audio metadata).
      */
     function replaceChords(): void {
       if (!transcription || busy) return;
       const t = transcription;
-      const chart = chartFromTranscription(t, { title: chartTitle(), artist: analysis.song.artist.trim() || undefined, strum: chartStrumFrom(transcriptionStrum) });
+      const chartOpts: SectionStrumChartOpts = {
+        title: chartTitle(),
+        artist: analysis.song.artist.trim() || undefined,
+        strum: chartStrumFrom(transcriptionStrum),
+        sectionStrums: transcriptionSectionStrums,
+      };
+      const chart = chartFromTranscription(t, chartOpts);
       const next = rewriteTempoHeader(replaceChart(textarea.value, chart), Math.round(t.bpm));
       if (next !== textarea.value) {
         textarea.value = next;
@@ -1706,6 +2084,8 @@ export const editorScreen: Screen = {
 
     function onSeek(sec: number): void {
       lastSeekSec = sec;
+      // A click on the waveform must not restart (and so end) a tap recording.
+      if (recording) return;
       if (preview) startPreview('free');
       else waveform.setPlayhead(sec);
     }
@@ -1899,23 +2279,33 @@ export const editorScreen: Screen = {
       return metronome;
     }
 
-    function startPreview(mode: PreviewMode): void {
-      if (!audio || !backing) return;
+    /**
+     * Plays the track: 'metronome' from one bar before bar 1 with clicks on `opts.bars` bars
+     * (default PREVIEW_BARS) of the text's tempo map, 'free' from the last click on the waveform
+     * without clicks. With `opts.stopAtEnd` the playback stops by itself when the last of those
+     * bars ends (a tap recording). Returns false when nothing could be started (no track, or the
+     * start lies past the end of the audio).
+     */
+    function startPreview(mode: PreviewMode, opts: PreviewOpts = {}): boolean {
+      if (!audio || !backing) return false;
       const ctx = getAudioContext();
       void ctx.resume().catch(noop); // synchronously, inside the click handler (iOS)
       stopPreview();
+      const bars = opts.bars !== undefined && opts.bars > 0 ? Math.round(opts.bars) : PREVIEW_BARS;
       const fromSec = mode === 'metronome' ? previewStartSec(audio.offsetSec, bpm(), beatsPerBar()) : clamp(lastSeekSec, 0, audio.durationSec);
-      if (fromSec >= audio.durationSec) return;
+      if (fromSec >= audio.durationSec) return false;
+      const endSec = opts.stopAtEnd ? Math.min(audio.durationSec, previewEndSec(audio.offsetSec, analysis.song.tempoSegments, beatsPerBar(), bars)) : null;
+      if (endSec !== null && endSec <= fromSec) return false;
       const whenWall = ctx.currentTime + PREVIEW_LEAD_SEC;
       backing.setGain(audio.gain);
       backing.start(whenWall, fromSec, 1);
       if (mode === 'metronome') {
         const clicks = ensureMetronome();
-        for (const c of previewClickTimes(audio.offsetSec, bpm(), beatsPerBar(), fromSec, PREVIEW_BARS, analysis.song.tempoSegments)) {
+        for (const c of previewClickTimes(audio.offsetSec, bpm(), beatsPerBar(), fromSec, bars, analysis.song.tempoSegments)) {
           clicks.scheduleClick(whenWall + (c.sec - fromSec), c.accent);
         }
       }
-      preview = { mode, whenWall, fromSec };
+      preview = { mode, whenWall, fromSec, endSec };
       updateButtons();
       const durationSec = audio.durationSec;
       const track = backing;
@@ -1923,16 +2313,20 @@ export const editorScreen: Screen = {
         previewRaf = 0;
         if (!preview || unmounted) return;
         const sec = preview.fromSec + (ctx.currentTime - preview.whenWall);
-        if (sec >= durationSec || (sec > preview.fromSec + 0.5 && !track.isPlaying())) {
+        if (sec >= durationSec || (preview.endSec !== null && sec >= preview.endSec) || (sec > preview.fromSec + 0.5 && !track.isPlaying())) {
           stopPreview();
           return;
         }
-        waveform.setPlayhead(Math.max(preview.fromSec, sec));
+        const shown = Math.max(preview.fromSec, sec);
+        waveform.setPlayhead(shown);
+        if (recording) updateRecordingStatus(shown);
         previewRaf = requestAnimationFrame(tick);
       };
       previewRaf = requestAnimationFrame(tick);
+      return true;
     }
 
+    /** Stops the playback (and its clicks); a tap recording in progress ends with its pattern. */
     function stopPreview(): void {
       if (previewRaf) {
         cancelAnimationFrame(previewRaf);
@@ -1943,6 +2337,7 @@ export const editorScreen: Screen = {
       backing?.stop();
       metronome?.clear();
       waveform.setPlayhead(null);
+      finishRecording();
       updateButtons();
     }
 
@@ -2021,7 +2416,8 @@ export const editorScreen: Screen = {
 
     return () => {
       unmounted = true;
-      stopPreview();
+      stopPreview(); // a tap recording is cancelled (finishRecording sees `unmounted`)
+      finishRecording(); // belt and braces: the key listener never outlives the screen
       flush();
       if (flashTimer !== null) {
         clearTimeout(flashTimer);

@@ -8,7 +8,8 @@
  * way (the median of the next two bars differs too), at most one every TEMPO_CHANGE_MIN_BARS
  * bars and never on the last bar; and a `[Etiqueta]` line at the start of every section, whose
  * bars then go 4 per line (a repeated section is written out every time: the parser redefines
- * it). The strum pattern stays global.
+ * it). The `strum:` header is global; with `opts.sectionStrums` (SPEC section 16) a section
+ * whose pattern differs from the one in force gets its own `strum:` line after its label.
  */
 import type { ChordTranscription, TranscribedBar, TranscribedSection } from '../types';
 
@@ -29,8 +30,34 @@ const TEMPO_CHANGE_MIN_BARS = 2;
 export interface ChartOpts {
   title: string;
   artist?: string;
-  /** Strum pattern; defaults to one down-strum per beat (D-D-D-D- in 4/4). */
+  /**
+   * Strum pattern of the `strum:` header; defaults to the first section pattern (see
+   * `sectionStrums`) or, without one, to one down-strum per beat (D-D-D-D- in 4/4).
+   */
   strum?: string;
+  /**
+   * Strum pattern per section, parallel to `t.sections` (SPEC section 16). Right after the
+   * `[Etiqueta]` line of section i a `strum: <patrón>` line is written when `sectionStrums[i]`
+   * differs from the pattern in force (the header, then the last written line); an undefined,
+   * empty or unparsable entry keeps the pattern in force. Ignored without sections.
+   */
+  sectionStrums?: (string | undefined)[];
+}
+
+/** Characters of a strum pattern (song grammar, section 2). */
+const STRUM_RE = /^[DUx-]+$/;
+
+/**
+ * A section pattern the parser accepts for `beatsPerBar` (trimmed, D/U/x/- only, one, two or
+ * four characters per beat), or undefined: an invalid pattern would make the parser report an
+ * error and keep the pattern in force anyway, so it is left out here without the error.
+ */
+function sectionPattern(value: string | undefined, beatsPerBar: number): string | undefined {
+  if (value === undefined) return undefined;
+  const p = value.trim();
+  if (p === '' || !STRUM_RE.test(p)) return undefined;
+  const charsPerBeat = p.length / beatsPerBar;
+  return charsPerBeat === 1 || charsPerBeat === 2 || charsPerBeat === 4 ? p : undefined;
 }
 
 /** Default strum pattern of the generated chart: one down-strum per beat (the safest for a transcription; the editor offers presets). */
@@ -112,21 +139,33 @@ function labelText(label: string): string | null {
   return s === '' ? null : s;
 }
 
+/** A run of bars written together: its bar range, the label line (if any) and the index of its section in `t.sections`. */
+interface BarGroup {
+  start: number;
+  end: number;
+  label: string | null;
+  /** Index into the transcription's `sections`, or null for bars no section covers. */
+  section: number | null;
+}
+
 /**
  * Contiguous bar groups with the label to write before each: the sections of the transcription
  * (sorted, clamped to the bars, gaps and overlaps resolved by the first section that covers a
  * bar), or a single unlabelled group when there are none.
  */
-function barGroups(sections: TranscribedSection[] | undefined, bars: number): Array<{ start: number; end: number; label: string | null }> {
-  const groups: Array<{ start: number; end: number; label: string | null }> = [];
+function barGroups(sections: TranscribedSection[] | undefined, bars: number): BarGroup[] {
+  const groups: BarGroup[] = [];
   if (bars === 0) return groups;
-  const sorted = (sections ?? []).filter((s) => Number.isFinite(s.startBar) && Number.isFinite(s.endBar)).slice().sort((a, b) => a.startBar - b.startBar);
-  let currentSection: TranscribedSection | null | undefined;
+  const sorted = (sections ?? [])
+    .map((s, index) => ({ s, index }))
+    .filter(({ s }) => Number.isFinite(s.startBar) && Number.isFinite(s.endBar))
+    .sort((a, b) => a.s.startBar - b.s.startBar);
+  let current: { s: TranscribedSection; index: number } | null | undefined;
   for (let i = 0; i < bars; i++) {
-    const section = sorted.find((s) => i >= Math.floor(s.startBar) && i <= Math.floor(s.endBar)) ?? null;
-    if (groups.length === 0 || section !== currentSection) {
-      groups.push({ start: i, end: i, label: section ? labelText(section.label) : null });
-      currentSection = section;
+    const found = sorted.find(({ s }) => i >= Math.floor(s.startBar) && i <= Math.floor(s.endBar)) ?? null;
+    if (groups.length === 0 || found !== current) {
+      groups.push({ start: i, end: i, label: found ? labelText(found.s.label) : null, section: found ? found.index : null });
+      current = found;
     } else {
       groups[groups.length - 1].end = i;
     }
@@ -138,22 +177,36 @@ function barGroups(sections: TranscribedSection[] | undefined, bars: number): Ar
  * Song text for a transcription: `title`, `artist` (when given), `tempo` (rounded), `time`,
  * `strum`, a comment line with the key, then the bars four per line, e.g.
  * `C . . . | G . Am . | N.C. . . . | F#m . . D |`, with `tempo:` lines where the tracked tempo
- * changes (see tempoChanges) and `[Etiqueta]` lines at the start of every section.
+ * changes (see tempoChanges), `[Etiqueta]` lines at the start of every section and, after a
+ * label, a `strum:` line when that section's pattern (`opts.sectionStrums`) differs from the
+ * pattern in force.
  */
 export function chartFromTranscription(t: ChordTranscription, opts: ChartOpts): string {
   const beatsPerBar = Math.max(1, Math.round(t.beatsPerBar));
   const tempo = Math.min(MAX_TEMPO, Math.max(MIN_TEMPO, Math.round(t.bpm)));
+  const groups = barGroups(t.sections, t.bars.length);
+  /** Pattern of each group, from `sectionStrums` (chart order), or undefined. */
+  const groupStrums = groups.map((g) => (g.section === null ? undefined : sectionPattern(opts.sectionStrums?.[g.section], beatsPerBar)));
+  const explicitStrum = opts.strum !== undefined && opts.strum.trim() !== '' ? opts.strum.trim() : undefined;
+  const headerStrum = explicitStrum ?? groupStrums.find((p) => p !== undefined) ?? defaultChartStrum(beatsPerBar);
   const lines: string[] = [];
   lines.push(`title: ${singleLine(opts.title)}`);
   const artist = opts.artist === undefined ? '' : singleLine(opts.artist);
   if (artist !== '') lines.push(`artist: ${artist}`);
   lines.push(`tempo: ${tempo}`);
   lines.push(`time: ${beatsPerBar}/4`);
-  lines.push(`strum: ${opts.strum !== undefined && opts.strum.trim() !== '' ? opts.strum.trim() : defaultChartStrum(beatsPerBar)}`);
+  lines.push(`strum: ${headerStrum}`);
   lines.push(`# Acordes detectados automáticamente: revisa y corrige. Tonalidad: ${t.key.name}`);
   const changes = tempoChanges(t, tempo);
-  for (const group of barGroups(t.sections, t.bars.length)) {
+  let strumInForce = headerStrum;
+  for (let g = 0; g < groups.length; g++) {
+    const group = groups[g];
     if (group.label !== null) lines.push(`[${group.label}]`);
+    const sectionStrum = groupStrums[g];
+    if (sectionStrum !== undefined && sectionStrum !== strumInForce) {
+      lines.push(`strum: ${sectionStrum}`);
+      strumInForce = sectionStrum;
+    }
     let line: string[] = [];
     const flush = (): void => {
       if (line.length > 0) lines.push(line.join(' | ') + ' |');
