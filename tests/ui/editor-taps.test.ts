@@ -385,11 +385,19 @@ describe('editor / library wiring (SPEC section 16)', () => {
     expect(editorSource).toMatch(/ctx\.resume\(\)/);
   });
 
-  it('"Sustituir acordes" and "Desde audio…" pass the per-section strums to chartFromTranscription', () => {
-    expect(editorSource).toMatch(/transcriptionSectionStrums = detectSectionStrums\(samples, sampleRate, t\)/);
-    expect(editorSource).toMatch(/sectionStrums:\s*transcriptionSectionStrums/);
-    expect(librarySource).toMatch(/detectSectionStrums\(samples, info\.sampleRate, transcription\)/);
-    expect(librarySource).toMatch(/\{ title, strum, sectionStrums \}/);
+  it('"Sustituir acordes" and "Desde audio…" default to the simplest strum (one per beat), never a mix-guessed pattern', () => {
+    // Guessing a detailed strum from a full mix (drums, voice, bass) proved unreliable and
+    // confusing (it can read percussion/vocal transients as extra strums), so the auto-generated
+    // chart always starts from the simplest, always-tokenErrorSafe pattern: one down-strum per
+    // beat. "Detectar rasgueo del audio" and "Grabar rasgueo tocando" (Rasgueo card) remain the
+    // opt-in ways to get a more detailed pattern, on the user's own terms.
+    expect(editorSource).not.toMatch(/transcriptionStrum = detectTranscriptionStrum/);
+    expect(editorSource).not.toMatch(/transcriptionSectionStrums = detectSectionStrums\(samples, sampleRate, t\)/);
+    expect(editorSource).not.toMatch(/strum:\s*chartStrumFrom\(transcriptionStrum\)/);
+    expect(editorSource).not.toMatch(/sectionStrums:\s*transcriptionSectionStrums/);
+    expect(librarySource).not.toMatch(/detectStrumPattern\(samples, info\.sampleRate/);
+    expect(librarySource).not.toMatch(/detectSectionStrums\(samples, info\.sampleRate, transcription\)/);
+    expect(librarySource).not.toMatch(/\{ title, strum, sectionStrums \}/);
   });
 
   it('keeps the default test listen at PREVIEW_BARS bars', () => {

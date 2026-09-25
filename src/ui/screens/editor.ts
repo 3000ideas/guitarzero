@@ -1657,29 +1657,10 @@ export const editorScreen: Screen = {
       }
       setChordProgress(null);
       chordSummary.textContent = formatTranscriptionSummary(transcription);
-      const strum = chartStrumFrom(transcriptionStrum);
-      const sectionsNote = sectionStrumsNote(transcriptionSectionStrums, strum, transcription.beatsPerBar);
       chordStrumNote.textContent =
-        (strum !== undefined && transcriptionStrum
-          ? `Rasgueo ${strum} (confianza ${confidenceLabel(transcriptionStrum.confidence)})`
-          : 'Rasgueo: una por pulso (no se reconoció un patrón claro)') + (sectionsNote !== null ? ` · ${sectionsNote}` : '');
+        'Rasgueo: una por pulso (el más simple para aprenderla). Puedes afinarlo en la tarjeta Rasgueo, abajo.';
       chordResultRow.hidden = false;
       lowConfidenceWarn.hidden = transcription.confidence >= LOW_CONFIDENCE_THRESHOLD;
-    }
-
-    /** Strum heard on the grid of a transcription (never throws: null when the detection fails). */
-    function detectTranscriptionStrum(samples: Float32Array, t: ChordTranscription): StrumDetection | null {
-      try {
-        return detectStrumPattern(samples, sampleRate, {
-          bpm: t.bpm,
-          firstDownbeatSec: t.firstDownbeatSec,
-          beatsPerBar: t.beatsPerBar,
-          beatTimes: t.beats.map((b) => b.timeSec),
-        });
-      } catch (err) {
-        console.warn('No se pudo detectar el rasgueo de la transcripción', err);
-        return null;
-      }
     }
 
     /** "Detectar acordes": transcribes the loaded track after a tick so the progress label paints. */
@@ -1704,10 +1685,13 @@ export const editorScreen: Screen = {
             if (!unmounted) setChordProgress(p);
           },
         });
-        // The strum heard on the same samples with the transcription's grid (SPEC section 14)...
-        transcriptionStrum = detectTranscriptionStrum(samples, t);
-        // ...and per section, on each section's slice with its tracked beats (SPEC section 16).
-        transcriptionSectionStrums = detectSectionStrums(samples, sampleRate, t);
+        // The chart always starts with the simplest possible strum (one down-strum per beat):
+        // guessing a detailed pattern from a full mix (drums, voice, bass) is unreliable and was
+        // confusing more than it helped. "Detectar rasgueo del audio" / "Grabar rasgueo tocando"
+        // in the Rasgueo card remain available for anyone who wants a more detailed pattern.
+        transcriptionStrum = null;
+        transcriptionSectionStrums = undefined;
+        void samples;
         transcription = t;
         renderTranscription();
       } catch (err) {
@@ -2021,11 +2005,13 @@ export const editorScreen: Screen = {
     function replaceChords(): void {
       if (!transcription || busy) return;
       const t = transcription;
+      // Always the simplest strum (one per beat); "Detectar rasgueo del audio" / "Grabar
+      // rasgueo tocando" in the Rasgueo card let the user opt into a more detailed pattern.
+      void transcriptionStrum;
+      void transcriptionSectionStrums;
       const chartOpts: SectionStrumChartOpts = {
         title: chartTitle(),
         artist: analysis.song.artist.trim() || undefined,
-        strum: chartStrumFrom(transcriptionStrum),
-        sectionStrums: transcriptionSectionStrums,
       };
       const chart = chartFromTranscription(t, chartOpts);
       const next = rewriteTempoHeader(replaceChart(textarea.value, chart), Math.round(t.bpm));

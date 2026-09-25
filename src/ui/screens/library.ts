@@ -36,9 +36,8 @@ import { getAudioContext } from '../../audio/context';
 import { BackingTrack } from '../../audio/backing';
 import { estimateTempo } from '../../dsp/tempoEstimate';
 import { transcribeChords } from '../../dsp/chordTranscribe';
-import { detectStrumPattern } from '../../dsp/strumDetect';
 import { chartFromTranscription } from '../../song/chartFromTranscription';
-import { chartStrumFrom, detectSectionStrums, type SectionStrumChartOpts } from './editor';
+import type { SectionStrumChartOpts } from './editor';
 
 // ---------------------------------------------------------------- pure helpers
 
@@ -296,29 +295,12 @@ export const libraryScreen: Screen = {
         }
         showImport(importStatusText(file.name, 1), 1);
 
-        // Strum heard on the same samples with the transcription's grid (SPEC section 14). A
-        // failure here only loses the pattern: the chart falls back to one down-strum per beat.
-        showImport(strumStatusText(file.name), 1);
-        await nextTick();
-        if (unmounted) return;
-        let strum: string | undefined;
-        try {
-          const detected = detectStrumPattern(samples, info.sampleRate, {
-            bpm: transcription.bpm,
-            firstDownbeatSec: transcription.firstDownbeatSec,
-            beatsPerBar: transcription.beatsPerBar,
-            beatTimes: transcription.beats.map((b) => b.timeSec),
-          });
-          strum = chartStrumFrom(detected);
-        } catch (err) {
-          console.warn('No se pudo detectar el rasgueo del audio', err);
-          strum = undefined;
-        }
-        // Per-section strums (SPEC section 16): only with sections, and only the confident ones
-        // (a section without one keeps the global pattern). Never throws.
-        const sectionStrums = detectSectionStrums(samples, info.sampleRate, transcription);
-
-        const chartOpts: SectionStrumChartOpts = { title, strum, sectionStrums };
+        // The imported chart always starts with the simplest possible strum (one down-strum
+        // per beat): guessing a detailed pattern from a full mix (drums, voice, bass) is
+        // unreliable and confusing rather than helpful. The editor's "Detectar rasgueo del
+        // audio" and "Grabar rasgueo tocando" (Rasgueo card) let the user opt into a more
+        // detailed pattern once the song is open, on their own terms.
+        const chartOpts: SectionStrumChartOpts = { title };
         const source = chartFromTranscription(transcription, chartOpts);
         const { song } = parseSong(source, { id: created.id });
         saveSong({
