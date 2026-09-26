@@ -3,10 +3,18 @@
  * NEW Float32Array of the last `fftSize` samples, stamped with the RAW AudioContext time of the
  * end of the frame (never latency-corrected here; only the practice engine applies latencySec).
  *
- * Browser-only (needs `navigator.mediaDevices` and the shared AudioContext). Nothing here touches
- * `window` at import time, so the module can be imported from Node tests via type-only imports.
+ * Capture runs on its OWN private AudioContext, never shared with playback (the backing track /
+ * metronome use the separate shared context from audio/context.ts). A single AudioContext that
+ * both pulls live microphone samples (via a MediaStreamAudioSourceNode) AND pushes buffered
+ * playback samples (an AudioBufferSourceNode) has to service both within the same real-time
+ * render callback; any jitter pulling the live capture can then delay or glitch the WHOLE
+ * callback for that context, including the unrelated playback samples due at that same instant.
+ * Giving capture its own context gives it its own independent Chrome-internal audio thread and
+ * OS audio session, so a hiccup there can no longer stall the output context's rendering.
+ *
+ * Browser-only. Nothing here touches `window` at import time, so the module can be imported from
+ * Node tests via type-only imports.
  */
-import { getAudioContext } from './context';
 
 export type MicErrorCode = 'insecure' | 'unsupported' | 'denied' | 'notfound' | 'device';
 
@@ -66,6 +74,8 @@ export class MicInput {
   private sourceNode: MediaStreamAudioSourceNode | null = null;
   private analyser: AnalyserNode | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
+  /** This capture's own AudioContext (lazy; never shared with playback). See the class doc comment. */
+  private captureCtx: AudioContext | null = null;
   private readonly subscribers = new Set<MicFrameCallback>();
   private starting: Promise<void> | null = null;
   /** Bumped by stop(): a start() that was awaiting getUserMedia when stop() ran discards its stream. */
@@ -81,9 +91,16 @@ export class MicInput {
     this.fftSize = fftSize;
   }
 
-  /** The shared AudioContext (created lazily on first access; resume it from a user gesture). */
+  /**
+   * This capture's private AudioContext (created lazily on first access; `start()` resumes it).
+   * Deliberately NOT the shared playback context from audio/context.ts — see the class doc.
+   */
   get context(): AudioContext {
-    return getAudioContext();
+    if (!this.captureCtx) {
+      const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      this.captureCtx = new Ctor({ latencyHint: 'playback' });
+    }
+    return this.captureCtx;
   }
 
   /**
@@ -138,6 +155,16 @@ export class MicInput {
     let analyser: AnalyserNode;
     try {
       ctx = this.context;
+      if (ctx.state !== 'running') {
+        try {
+          // getUserMedia just resolved from a user-gesture-initiated call, which still counts as
+          // user activation in every browser that matters here; if it doesn't, the next start()
+          // (also gesture-initiated) resumes it.
+          await ctx.resume();
+        } catch {
+          /* resumed on the next gesture */
+        }
+      }
       sourceNode = ctx.createMediaStreamSource(stream);
       analyser = ctx.createAnalyser();
       analyser.fftSize = this.fftSize;
