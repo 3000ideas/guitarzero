@@ -51,6 +51,10 @@ export const TUNER_CLOSE_CENTS = 15;
 export const TUNER_HOLD_MS = 1000;
 /** Cents range clamped for the needle/meter position (beyond this, only the text says how far off). */
 export const TUNER_METER_RANGE_CENTS = 50;
+/** How long a reading is shown as "live" before being flagged stale (the string decayed / peg is being turned without re-plucking), ms. */
+export const TUNER_STALE_MS = 2500;
+/** How long with no audio signal at all after starting before hinting a possible mic problem, ms. */
+export const TUNER_NO_SIGNAL_HINT_MS = 5000;
 
 export type TunerZone = 'in-tune' | 'close' | 'off';
 
@@ -115,6 +119,9 @@ export const tunerScreen: Screen = {
     let currentIndex = 0;
     let lastReading: TunerReading | null = null;
     let inTuneSinceMs: number | null = null;
+    /** Last time any frame had real audio above the silence gate (not necessarily a valid pitch). */
+    let lastSignalAtMs: number | null = null;
+    let startedAtMs: number | null = null;
 
     // ---------------------------------------------------------------- elements
 
@@ -126,7 +133,10 @@ export const tunerScreen: Screen = {
     const meter = h('div.tuner-meter', null, meterFill, meterNeedle, h('div.tuner-meter-mid'));
     const centsEl = h('div.tuner-cents', null, '');
     const heardEl = h('div.tuner-heard', null, '');
+    const staleEl = h('div.tuner-stale', null, '');
+    const ledEl = h('span.tuner-led', { 'aria-hidden': 'true' });
     const statusEl = h('div.tuner-status', null, 'Pulsa Empezar y toca la cuerda señalada arriba.');
+    const statusRow = h('div.tuner-status-row', null, ledEl, statusEl);
 
     const stringButtons = OPEN_STRINGS.map((s, i) =>
       h(
@@ -191,18 +201,35 @@ export const tunerScreen: Screen = {
         meter,
         centsEl,
         heardEl,
-        statusEl,
+        staleEl,
+        statusRow,
         h('div.tuner-actions', null, startBtn, stopBtn, retryBtn),
         h(
           'p.tuner-help',
           null,
           'Toca solo la cuerda señalada arriba, sin rasguear las demás. Verde = afinada, ámbar = cerca, rojo = lejos. ' +
-            'Mantenla afinada un segundo y pasa sola a la siguiente. Si nunca se pone verde por poco en ninguna cuerda, ' +
-            'prueba primero con un afinador aparte: puede que sea la app, no la guitarra.',
+            'Mantenla afinada un segundo y pasa sola a la siguiente. Si giras la clavija y no vuelves a tocar la cuerda, ' +
+            'el número se queda parado en lo último que sonó: toca la cuerda cada pocos segundos mientras la afinas, ' +
+            'no solo una vez. También puedes cambiar de cuerda con las flechas ← → del teclado. Si nunca se pone verde ' +
+            'por poco en ninguna cuerda, prueba primero con un afinador aparte: puede que sea la app, no la guitarra.',
         ),
       ),
     );
     root.appendChild(screen);
+
+    // Left/Up = previous string, Right/Down = next — mirrors the Anterior←/Siguiente→ buttons and
+    // the diagram's top-to-bottom (string 6 to string 1) order, so it works without a mouse.
+    function handleKeydown(e: KeyboardEvent): void {
+      if (e.altKey || e.ctrlKey || e.metaKey) return;
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        selectString(currentIndex - 1);
+      } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        selectString(currentIndex + 1);
+      }
+    }
+    window.addEventListener('keydown', handleKeydown);
 
     // ---------------------------------------------------------------- logic
 
@@ -229,6 +256,11 @@ export const tunerScreen: Screen = {
 
     function render(): void {
       const now = performance.now();
+      const signalAgeMs = lastSignalAtMs === null ? Infinity : now - lastSignalAtMs;
+      // The LED is a "piloto": grey when stopped, softly pulsing while listening, bright the
+      // instant real audio (above the silence gate) comes in — visible proof the mic is alive,
+      // independent of whether a note was actually recognised yet.
+      ledEl.className = !running ? 'tuner-led' : signalAgeMs < 400 ? 'tuner-led is-signal' : 'tuner-led is-listening';
       const target = OPEN_STRINGS[currentIndex];
       // The reading is kept on screen after the string stops ringing (like a real tuner's needle
       // holding its last position), not cleared after a short timeout: the player needs time to
@@ -240,11 +272,20 @@ export const tunerScreen: Screen = {
         freqEl.textContent = '— Hz';
         centsEl.textContent = '';
         heardEl.textContent = '';
+        staleEl.textContent = '';
         meterNeedle.style.left = '50%';
         meterFill.className = 'tuner-meter-fill';
         inTuneSinceMs = null;
+        if (running && lastSignalAtMs === null && startedAtMs !== null && now - startedAtMs > TUNER_NO_SIGNAL_HINT_MS) {
+          statusEl.textContent = 'No se detecta ningún sonido del micrófono. Comprueba el micrófono en Ajustes o toca más fuerte.';
+        }
         return;
       }
+      // A reading is only "live" while the string is still ringing above the gate. Once it goes
+      // quiet (e.g. while turning the tuning peg without re-plucking), the number stays on screen
+      // per the note above, but it no longer reflects the string's current pitch — flag that
+      // explicitly so it doesn't look like "nothing changes no matter how much I turn the peg".
+      staleEl.textContent = signalAgeMs > TUNER_STALE_MS ? 'Sin sonido ahora: esto es lo último que se oyó. Toca la cuerda otra vez.' : '';
       const cents = centsFromTarget(reading.freqHz, target.midi, settings.a4);
       const zone = tunerZone(cents);
       noteEl.textContent = target.name;
@@ -285,6 +326,7 @@ export const tunerScreen: Screen = {
       // played. Same gate the chord detector uses (rmsDbOf + settings.gateDb), so "silence" means
       // the same thing everywhere in the app.
       if (rmsDbOf(samples) < settings.gateDb) return;
+      lastSignalAtMs = performance.now();
       fft.magnitudes(samples, mag);
       const reading = detectPitch(mag, mic.context.sampleRate, mic.fftSize, { a4: settings.a4 });
       if (reading) lastReading = reading;
@@ -303,6 +345,8 @@ export const tunerScreen: Screen = {
         await mic.start(settings.inputDeviceId ?? undefined, { echoCancellation: settings.echoCancellation });
         if (disposed) return;
         running = true;
+        startedAtMs = performance.now();
+        lastSignalAtMs = null;
         mic.onFrame(onMicFrame);
         startBtn.hidden = true;
         stopBtn.hidden = false;
@@ -328,6 +372,8 @@ export const tunerScreen: Screen = {
       raf = 0;
       lastReading = null;
       inTuneSinceMs = null;
+      lastSignalAtMs = null;
+      startedAtMs = null;
       startBtn.hidden = false;
       stopBtn.hidden = true;
       statusEl.textContent = 'Pulsa Empezar y toca la cuerda señalada arriba.';
@@ -341,6 +387,7 @@ export const tunerScreen: Screen = {
       running = false;
       cancelAnimationFrame(raf);
       mic.stop();
+      window.removeEventListener('keydown', handleKeydown);
       screen.remove();
     };
   },
