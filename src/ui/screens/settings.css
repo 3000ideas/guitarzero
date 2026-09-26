@@ -207,3 +207,17 @@
   justify-content: flex-start;
   margin-top: 8px;
 }
+
+.settings-diag-output {
+  margin-top: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  background: var(--panel-2, #0b1220);
+  border: 1px solid var(--border, #263042);
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+}

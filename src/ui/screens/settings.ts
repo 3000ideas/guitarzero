@@ -211,6 +211,85 @@ export const settingsScreen: Screen = {
       }
     }
 
+    // ---------------------------------------------------------------- diagnostics
+    // Records real microphone input for a few seconds through the exact same pipeline used
+    // everywhere else (MicInput -> MicDetectorSource), and lists every analysed frame's level,
+    // whether it was read as an onset, and the live chord — so a real strum's actual numbers can
+    // be read directly off the screen instead of copy-pasted console scripts (which turned out
+    // error-prone: it's too easy to accidentally re-run a previous one by mistake).
+
+    const DIAG_DURATION_SEC = 6;
+
+    const diagBtn = h(
+      'button',
+      { class: 'btn', type: 'button', onclick: () => void runDiagnostic() },
+      `Grabar ${DIAG_DURATION_SEC} s y analizar`,
+    ) as HTMLButtonElement;
+    const diagStatus = h(
+      'div.settings-help',
+      null,
+      `Pulsa el botón y, en cuanto empiece a contar, rasguea con fuerza cerca del micrófono durante los ${DIAG_DURATION_SEC} segundos.`,
+    );
+    const diagOutput = h('pre.settings-diag-output', { hidden: true });
+
+    async function runDiagnostic(): Promise<void> {
+      if (abort || disposed) return;
+      const ctx = getAudioContext();
+      void ctx.resume().catch(noop); // synchronously, before any await
+      diagBtn.disabled = true;
+      detectBtn.disabled = true;
+      calibrateBtn.disabled = true;
+      diagOutput.hidden = true;
+      diagOutput.textContent = '';
+      diagStatus.textContent = 'Preparando el micrófono…';
+
+      let source: MicDetectorSource | null = null;
+      const rows: string[] = [];
+      let maxRmsDb = -Infinity;
+      let onsetCount = 0;
+      try {
+        await mic.start(settings.inputDeviceId ?? undefined, { echoCancellation: settings.echoCancellation });
+        if (disposed) return;
+        source = new MicDetectorSource(mic, detectorOptsFromSettings(settings));
+        const startSec = ctx.currentTime;
+        let lastShownSecLeft = -1;
+        const unsub = source.onFrame((f) => {
+          const t = f.timeSec - startSec;
+          if (f.rmsDb > maxRmsDb) maxRmsDb = f.rmsDb;
+          if (f.onset) onsetCount++;
+          rows.push(
+            `${t.toFixed(2).padStart(5)} s   rms ${f.rmsDb.toFixed(1).padStart(6)} dB   onset ${f.onset ? 'SÍ' : '·'}   acorde ${f.bestChord ? f.bestChord.name : '—'}`,
+          );
+          const secLeft = Math.max(0, Math.ceil(DIAG_DURATION_SEC - t));
+          if (secLeft !== lastShownSecLeft) {
+            lastShownSecLeft = secLeft;
+            diagStatus.textContent = secLeft > 0 ? `Grabando… ¡rasguea! (${secLeft} s)` : 'Grabando…';
+          }
+        });
+        await new Promise((resolve) => setTimeout(resolve, DIAG_DURATION_SEC * 1000));
+        unsub();
+        if (disposed) return;
+        const gateDb = source.getGateDb();
+        const noiseFloorDb = source.getNoiseFloorDb();
+        diagStatus.textContent =
+          `Nivel máximo: ${maxRmsDb === -Infinity ? '—' : `${maxRmsDb.toFixed(1)} dB`} · ` +
+          `Golpes detectados: ${onsetCount} · ` +
+          `Umbral efectivo: ${gateDb.toFixed(1)} dB (suelo de ruido ${noiseFloorDb.toFixed(1)} dB)`;
+        diagOutput.textContent = rows.length > 0 ? rows.join('\n') : '(no llegó ningún fotograma del micrófono)';
+        diagOutput.hidden = false;
+      } catch (err) {
+        if (!disposed) diagStatus.textContent = err instanceof MicError ? err.message : 'No se pudo grabar el micrófono';
+      } finally {
+        source?.dispose();
+        mic.stop();
+        if (!disposed) {
+          diagBtn.disabled = false;
+          detectBtn.disabled = false;
+          calibrateBtn.disabled = false;
+        }
+      }
+    }
+
     // ---------------------------------------------------------------- detection
 
     const gateField = rangeField('Umbral mínimo de silencio', {
@@ -316,6 +395,19 @@ export const settingsScreen: Screen = {
           calibProgress,
           calibResult,
           calibratedNote,
+        ),
+      ),
+
+      h(
+        'fieldset.settings-group',
+        null,
+        h('legend', null, 'Diagnóstico'),
+        h(
+          'div.settings-field',
+          null,
+          diagStatus,
+          h('div.settings-row', null, diagBtn),
+          diagOutput,
         ),
       ),
 

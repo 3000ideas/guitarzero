@@ -119,6 +119,13 @@ export class MicInput {
       if (sameDevice && echoCancellation === this.echoCancellation) return Promise.resolve();
       this.stop();
     }
+    // Resume synchronously, in the SAME tick as the caller's gesture, before the getUserMedia
+    // await below. Firefox's autoplay policy can refuse to honour resume() once it is issued
+    // after an intervening await (i.e. after getUserMedia has already resolved): the capture
+    // context would then stay 'suspended' forever, silently delivering all-zero samples forever
+    // — the mic "hears nothing" even though permission was granted and the track is live.
+    const ctx = this.context;
+    if (ctx.state !== 'running') void ctx.resume().catch(() => {});
     this.starting = this.doStart(deviceId, echoCancellation).finally(() => {
       this.starting = null;
     });
