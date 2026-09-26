@@ -184,3 +184,61 @@
   max-width: 420px;
   margin: 4px 0 0;
 }
+
+.tuner-diagram {
+  width: 100%;
+  max-width: 340px;
+  margin: 4px 0;
+}
+
+.tuner-diagram-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+
+.tuner-diagram-nut {
+  fill: var(--border);
+}
+
+.tuner-diagram-line {
+  stroke: var(--muted);
+  opacity: 0.6;
+  transition: stroke 0.15s, opacity 0.15s;
+}
+
+.tuner-diagram-label {
+  fill: var(--muted);
+  font-size: 11px;
+  font-family: var(--mono);
+  dominant-baseline: middle;
+  transition: fill 0.15s;
+}
+
+.tuner-diagram-arrow {
+  fill: var(--accent);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.tuner-diagram-row.is-current .tuner-diagram-line {
+  stroke: var(--accent);
+  opacity: 1;
+}
+
+.tuner-diagram-row.is-current .tuner-diagram-label {
+  fill: var(--text);
+  font-weight: 700;
+}
+
+.tuner-diagram-row.is-current .tuner-diagram-arrow {
+  opacity: 1;
+}
+
+.tuner-diagram-caption {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}

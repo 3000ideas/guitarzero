@@ -75,6 +75,28 @@ export function centsFromTarget(freqHz: number, targetMidi: number, a4 = 440): n
   return 1200 * Math.log2(freqHz / midiToFreq(targetMidi, a4));
 }
 
+/** Cents beyond which the deviation more likely means "wrong string" than "just needs a tweak". */
+export const TUNER_FAR_CENTS = 150;
+
+/**
+ * Actionable Spanish guidance for a (possibly large, unclamped) cents deviation from the target:
+ * sharp (positive cents) means the string sounds HIGHER than it should, i.e. it is TOO TIGHT
+ * (más tensa) and needs loosening; flat (negative) means too loose (floja) and needs tightening.
+ * Guitarists think in terms of turning the tuning peg, not abstract cents, hence this over just
+ * showing the number.
+ */
+export function tunerAdvice(cents: number): string {
+  const zone = tunerZone(cents);
+  if (zone === 'in-tune') return 'Afinada';
+  const tooTight = cents > 0;
+  const state = tooTight ? 'tensa' : 'floja';
+  const action = tooTight ? 'Afloja' : 'Aprieta';
+  const magnitude = Math.abs(cents);
+  if (magnitude > TUNER_FAR_CENTS) return `Mucho más ${state} de lo normal — ¿es esta cuerda? ${action} bastante la clavija y comprueba`;
+  if (zone === 'close') return `Un poco ${state}: ${action.toLowerCase()} ligeramente la clavija`;
+  return `Más ${state} de lo normal: ${action.toLowerCase()} la clavija`;
+}
+
 /** "6ª · Mi (E2)" — the label for a target string. */
 export function stringLabel(s: Pick<(typeof OPEN_STRINGS)[number], 'name' | 'string'>): string {
   return `${s.string}ª · ${SPANISH_NOTE[s.name] ?? s.name} (${s.name})`;
@@ -119,6 +141,34 @@ export const tunerScreen: Screen = {
     );
     const stringsRow = h('div.tuner-strings', null, ...stringButtons);
 
+    // Visual guitar neck: 6 lines from thick (string 6, top) to thin (string 1, bottom), the way
+    // a player sees their own strings looking down while holding the guitar to play (NOT how a
+    // photo facing the guitar would show it) — this is what a beginner actually needs to match
+    // "cuerda 6" / "cuerda 1" against, since the numbers alone don't say which is which.
+    const diagramWrap = h('div.tuner-diagram');
+    diagramWrap.innerHTML = `
+      <svg viewBox="0 0 300 150" class="tuner-diagram-svg" role="img" aria-label="Diagrama de las 6 cuerdas">
+        <rect x="2" y="6" width="12" height="138" rx="4" class="tuner-diagram-nut"></rect>
+        ${OPEN_STRINGS.map((s, i) => {
+          const y = 16 + i * 24;
+          const thickness = (5 - i * 0.65).toFixed(2);
+          return `
+            <g class="tuner-diagram-row" data-index="${i}">
+              <polygon class="tuner-diagram-arrow" points="18,${y - 6} 30,${y} 18,${y + 6}"></polygon>
+              <line x1="34" y1="${y}" x2="250" y2="${y}" stroke-width="${thickness}" class="tuner-diagram-line" stroke-linecap="round"></line>
+              <text x="258" y="${y + 4}" class="tuner-diagram-label">${s.string}ª · ${s.name}</text>
+            </g>`;
+        }).join('')}
+      </svg>
+      <div class="tuner-diagram-caption">
+        Sostén la guitarra para tocar y mira hacia abajo: la cuerda 6 (la más gruesa) queda arriba, la 1 (la más fina) abajo.
+      </div>`;
+    const diagramRows = Array.from(diagramWrap.querySelectorAll<SVGGElement>('.tuner-diagram-row'));
+
+    function updateDiagram(): void {
+      diagramRows.forEach((row, i) => row.classList.toggle('is-current', i === currentIndex));
+    }
+
     const prevBtn = h('button.btn.btn-sm', { type: 'button', onclick: () => selectString(currentIndex - 1) }, '← Anterior') as HTMLButtonElement;
     const nextBtn = h('button.btn.btn-sm', { type: 'button', onclick: () => selectString(currentIndex + 1) }, 'Siguiente →') as HTMLButtonElement;
     const navRow = h('div.tuner-nav', null, prevBtn, nextBtn);
@@ -134,6 +184,7 @@ export const tunerScreen: Screen = {
       h(
         'div.card.tuner-card',
         null,
+        diagramWrap,
         stringsRow,
         navRow,
         h('div.tuner-target-label', null, 'Toca esta cuerda:'),
@@ -162,6 +213,7 @@ export const tunerScreen: Screen = {
       prevBtn.disabled = currentIndex <= 0;
       nextBtn.disabled = currentIndex >= OPEN_STRINGS.length - 1;
       stringButtons.forEach((btn, i) => btn.classList.toggle('is-current', i === currentIndex));
+      updateDiagram();
     }
 
     function selectString(index: number): void {
@@ -195,15 +247,17 @@ export const tunerScreen: Screen = {
       }
       const cents = centsFromTarget(reading.freqHz, target.midi, settings.a4);
       const zone = tunerZone(cents);
-      const clampedCents = Math.max(-99, Math.min(99, Math.round(cents)));
       noteEl.textContent = target.name;
       noteEl.className = `tuner-note is-${zone}`;
       freqEl.textContent = `${reading.freqHz.toFixed(1)} Hz (objetivo ${midiToFreq(target.midi, settings.a4).toFixed(1)} Hz)`;
-      const sign = clampedCents > 0 ? '+' : clampedCents < 0 ? '−' : '';
-      centsEl.textContent = clampedCents === 0 ? 'afinada' : `${sign}${Math.abs(clampedCents)} cents ${clampedCents > 0 ? '(muy alta)' : '(muy baja)'}`.replace('99 cents', '50+ cents');
+      const advice = tunerAdvice(cents);
+      const roundedAbs = Math.round(Math.abs(cents));
+      // Actionable guidance first ("más tensa: afloja"), the raw number as a small confirmation —
+      // a guitarist thinks in terms of turning the tuning peg, not abstract cents.
+      centsEl.textContent = zone === 'in-tune' ? advice : `${advice} (${roundedAbs} cents)`;
       meterNeedle.style.left = `${(needleFraction(cents) * 100).toFixed(1)}%`;
       meterFill.className = `tuner-meter-fill is-${zone}`;
-      heardEl.textContent = reading.midi === target.midi ? '' : `Se oye: ${reading.noteName} (puede que sea otra cuerda)`;
+      heardEl.textContent = reading.midi === target.midi ? '' : `Se oye: ${reading.noteName}`;
 
       if (zone === 'in-tune') {
         if (inTuneSinceMs === null) inTuneSinceMs = now;

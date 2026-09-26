@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   OPEN_STRINGS,
   TUNER_CLOSE_CENTS,
+  TUNER_FAR_CENTS,
   TUNER_IN_TUNE_CENTS,
   centsFromTarget,
   needleFraction,
   stringLabel,
+  tunerAdvice,
   tunerZone,
 } from '../../src/ui/screens/tuner';
 import { midiToFreq } from '../../src/music/notes';
@@ -60,6 +62,41 @@ describe('centsFromTarget', () => {
   it('honours a custom A4 reference', () => {
     // At a4 = 432, A3 (midi 57) sounds at 216 Hz.
     expect(centsFromTarget(216, 57, 432)).toBeCloseTo(0, 6);
+  });
+});
+
+describe('tunerAdvice', () => {
+  it('says "Afinada" when in tune', () => {
+    expect(tunerAdvice(0)).toBe('Afinada');
+    expect(tunerAdvice(TUNER_IN_TUNE_CENTS)).toBe('Afinada');
+    expect(tunerAdvice(-TUNER_IN_TUNE_CENTS)).toBe('Afinada');
+  });
+
+  it('sharp (positive cents) means too tight: tells the player to loosen (aflojar)', () => {
+    expect(tunerAdvice(10)).toMatch(/tensa/i);
+    expect(tunerAdvice(10)).toMatch(/afloja/i);
+    expect(tunerAdvice(40)).toMatch(/tensa/i);
+    expect(tunerAdvice(40)).toMatch(/afloja/i);
+  });
+
+  it('flat (negative cents) means too loose: tells the player to tighten (apretar)', () => {
+    expect(tunerAdvice(-10)).toMatch(/floja/i);
+    expect(tunerAdvice(-10)).toMatch(/aprieta/i);
+    expect(tunerAdvice(-40)).toMatch(/floja/i);
+    expect(tunerAdvice(-40)).toMatch(/aprieta/i);
+  });
+
+  it('distinguishes a small nudge (close) from a bigger correction (off)', () => {
+    const close = tunerAdvice(TUNER_CLOSE_CENTS);
+    const off = tunerAdvice(TUNER_CLOSE_CENTS + 10);
+    expect(close).toMatch(/ligeramente/i);
+    expect(off).not.toMatch(/ligeramente/i);
+  });
+
+  it('flags a very large deviation as possibly the wrong string', () => {
+    expect(tunerAdvice(TUNER_FAR_CENTS + 1)).toMatch(/cuerda/i);
+    expect(tunerAdvice(-(TUNER_FAR_CENTS + 1))).toMatch(/cuerda/i);
+    expect(tunerAdvice(50)).not.toMatch(/cuerda/i);
   });
 });
 
