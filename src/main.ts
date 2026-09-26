@@ -1,8 +1,8 @@
 /**
  * Bootstrap and hash router (SPEC.md section 8).
  *
- * Routes: `#/` (library), `#/edit/:id` (editor), `#/play/:id` (practice), `#/settings`.
- * Ids must match ID_RE. An unknown route or a missing song id redirects with
+ * Routes: `#/` (library), `#/edit/:id` (editor), `#/play/:id` (practice), `#/settings`,
+ * `#/tuner`. Ids must match ID_RE. An unknown route or a missing song id redirects with
  * `location.replace('#/')`. On the initial load and on every `hashchange` the current screen
  * is unmounted (`current?.()`), the root is emptied (`replaceChildren`) and the new screen is
  * mounted with its params.
@@ -16,8 +16,9 @@ import { libraryScreen } from './ui/screens/library';
 import { editorScreen } from './ui/screens/editor';
 import { practiceScreen } from './ui/screens/practice';
 import { settingsScreen } from './ui/screens/settings';
+import { tunerScreen } from './ui/screens/tuner';
 
-export type RouteName = 'library' | 'editor' | 'practice' | 'settings';
+export type RouteName = 'library' | 'editor' | 'practice' | 'settings' | 'tuner';
 
 export interface Route {
   name: RouteName;
@@ -34,6 +35,7 @@ const SCREENS: Record<RouteName, Screen> = {
   editor: editorScreen,
   practice: practiceScreen,
   settings: settingsScreen,
+  tuner: tunerScreen,
 };
 
 function decodeSegment(segment: string): string {
@@ -64,6 +66,7 @@ export function parseRoute(hash: string): Route | null {
     .map(decodeSegment);
   if (parts.length === 1 && parts[0] === '') return { name: 'library', params: {} };
   if (parts.length === 1 && parts[0] === 'settings') return { name: 'settings', params: {} };
+  if (parts.length === 1 && parts[0] === 'tuner') return { name: 'tuner', params: {} };
   if (parts.length === 2 && (parts[0] === 'edit' || parts[0] === 'play')) {
     const id = parts[1];
     if (!isValidId(id)) return null;
@@ -92,6 +95,8 @@ export function titleForRoute(route: Route): string {
       return `${APP_NAME} — Practicar`;
     case 'settings':
       return `${APP_NAME} — Ajustes`;
+    case 'tuner':
+      return `${APP_NAME} — Afinador`;
   }
 }
 

@@ -54,6 +54,7 @@ describe.skipIf(!SCREENS_READY)('router (main.ts)', () => {
     expect(parseRoute('#/settings')).toEqual({ name: 'settings', params: {} });
     expect(parseRoute('#/settings/')).toEqual({ name: 'settings', params: {} });
     expect(parseRoute('#/settings?x=1')).toEqual({ name: 'settings', params: {} });
+    expect(parseRoute('#/tuner')).toEqual({ name: 'tuner', params: {} });
     expect(parseRoute('#/edit/s_abc123')).toEqual({ name: 'editor', params: { id: 's_abc123' } });
     expect(parseRoute('#/play/ex:pop-c-g-am-f')).toEqual({ name: 'practice', params: { id: 'ex:pop-c-g-am-f' } });
     expect(parseRoute('#/play/ex%3Apop-c-g-am-f')).toEqual({ name: 'practice', params: { id: 'ex:pop-c-g-am-f' } });
@@ -77,6 +78,7 @@ describe.skipIf(!SCREENS_READY)('router (main.ts)', () => {
     const { routeIsAvailable } = await loadMain();
     expect(routeIsAvailable({ name: 'library', params: {} })).toBe(true);
     expect(routeIsAvailable({ name: 'settings', params: {} })).toBe(true);
+    expect(routeIsAvailable({ name: 'tuner', params: {} })).toBe(true);
     expect(routeIsAvailable({ name: 'practice', params: { id: 'ex:pop-c-g-am-f' } })).toBe(true);
     expect(routeIsAvailable({ name: 'editor', params: { id: 's_missing' } })).toBe(false);
     saveSong({ id: 's_mine', title: 'Mía', artist: '', source: 'tempo: 80\nC . . . |', updatedAt: 0 });
@@ -92,7 +94,8 @@ describe.skipIf(!SCREENS_READY)('router (main.ts)', () => {
     expect(titleForRoute({ name: 'editor', params: { id: 'x' } })).toContain('Editor');
     expect(titleForRoute({ name: 'practice', params: { id: 'x' } })).toContain('Practicar');
     expect(titleForRoute({ name: 'settings', params: {} })).toContain('Ajustes');
-    for (const name of ['library', 'editor', 'practice', 'settings'] as const) {
+    expect(titleForRoute({ name: 'tuner', params: {} })).toContain('Afinador');
+    for (const name of ['library', 'editor', 'practice', 'settings', 'tuner'] as const) {
       expect(titleForRoute({ name, params: {} })).toContain(APP_NAME);
     }
   });

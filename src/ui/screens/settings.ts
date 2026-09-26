@@ -459,7 +459,12 @@ export const settingsScreen: Screen = {
         ),
       ),
 
-      h('footer.settings-footer', null, h('a', { class: 'btn', href: '#/' }, 'Volver')),
+      h(
+        'footer.settings-footer',
+        null,
+        h('a', { class: 'btn', href: '#/tuner', title: 'Comprueba si la guitarra está afinada' }, 'Afinador'),
+        h('a', { class: 'btn', href: '#/' }, 'Volver'),
+      ),
     );
     root.appendChild(rootEl);
 

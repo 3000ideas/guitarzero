@@ -462,6 +462,7 @@ export const libraryScreen: Screen = {
       null,
       h('div.col', { style: 'gap: 2px' }, h('h1.brand', null, 'GuitarZero'), h('span.brand-tagline', null, 'Practica acordes al ritmo de la pelota')),
       h('span.spacer'),
+      h('a.btn', { href: '#/tuner', title: 'Afinador: comprueba si la guitarra está afinada' }, 'Afinador'),
       h('a.btn', { href: '#/settings', title: 'Micrófono, latencia y afinación' }, 'Ajustes'),
     );
 

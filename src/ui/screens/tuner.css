@@ -1,0 +1,186 @@
+.tuner {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.tuner-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.tuner-header h1 {
+  font-size: 20px;
+  margin: 0;
+}
+
+.tuner-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 24px 16px;
+  text-align: center;
+}
+
+.tuner-strings {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-bottom: 4px;
+}
+
+.tuner-string {
+  min-width: 52px;
+  min-height: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-family: var(--mono);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.tuner-string-num {
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.tuner-string-name {
+  font-size: 14px;
+}
+
+.tuner-string.is-current {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.tuner-nav {
+  display: flex;
+  gap: 10px;
+}
+
+.tuner-target-label {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+.tuner-target {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.tuner-note {
+  font-size: 64px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text);
+  transition: color 0.15s;
+}
+
+.tuner-note.is-in-tune {
+  color: var(--ok);
+}
+
+.tuner-note.is-close {
+  color: var(--warn);
+}
+
+.tuner-note.is-off {
+  color: var(--bad);
+}
+
+.tuner-freq {
+  font-family: var(--mono);
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.tuner-meter {
+  position: relative;
+  width: 100%;
+  max-width: 360px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.tuner-meter-fill {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, var(--bad), var(--warn), var(--ok), var(--warn), var(--bad));
+  opacity: 0.25;
+}
+
+.tuner-meter-mid {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--border);
+  transform: translateX(-1px);
+}
+
+.tuner-meter-needle {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 4px;
+  border-radius: 2px;
+  background: var(--text);
+  left: 50%;
+  transform: translateX(-2px);
+  transition: left 0.08s linear;
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.6);
+}
+
+.tuner-cents {
+  font-family: var(--mono);
+  font-size: 14px;
+  min-height: 18px;
+  color: var(--muted);
+}
+
+.tuner-heard {
+  font-size: 13px;
+  min-height: 16px;
+  color: var(--warn);
+}
+
+.tuner-status {
+  color: var(--muted);
+  font-size: 14px;
+  min-height: 20px;
+}
+
+.tuner-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.tuner-help {
+  color: var(--muted);
+  font-size: 13px;
+  max-width: 420px;
+  margin: 4px 0 0;
+}
