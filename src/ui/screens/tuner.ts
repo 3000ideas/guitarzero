@@ -49,8 +49,6 @@ export const TUNER_IN_TUNE_CENTS = 5;
 export const TUNER_CLOSE_CENTS = 15;
 /** How long a reading must stay within TUNER_IN_TUNE_CENTS before auto-advancing, ms. */
 export const TUNER_HOLD_MS = 1000;
-/** How long the last reading is still shown after the note stops ringing loud enough, ms. */
-export const TUNER_READING_TTL_MS = 400;
 /** Cents range clamped for the needle/meter position (beyond this, only the text says how far off). */
 export const TUNER_METER_RANGE_CENTS = 50;
 
@@ -116,7 +114,6 @@ export const tunerScreen: Screen = {
     let raf = 0;
     let currentIndex = 0;
     let lastReading: TunerReading | null = null;
-    let lastReadingAt = 0;
     let inTuneSinceMs: number | null = null;
 
     // ---------------------------------------------------------------- elements
@@ -233,7 +230,10 @@ export const tunerScreen: Screen = {
     function render(): void {
       const now = performance.now();
       const target = OPEN_STRINGS[currentIndex];
-      const reading = lastReading && now - lastReadingAt < TUNER_READING_TTL_MS ? lastReading : null;
+      // The reading is kept on screen after the string stops ringing (like a real tuner's needle
+      // holding its last position), not cleared after a short timeout: the player needs time to
+      // actually read the advice text. selectString() clears it when moving to another string.
+      const reading = lastReading;
       if (!reading) {
         noteEl.textContent = '—';
         noteEl.className = 'tuner-note';
@@ -287,10 +287,7 @@ export const tunerScreen: Screen = {
       if (rmsDbOf(samples) < settings.gateDb) return;
       fft.magnitudes(samples, mag);
       const reading = detectPitch(mag, mic.context.sampleRate, mic.fftSize, { a4: settings.a4 });
-      if (reading) {
-        lastReading = reading;
-        lastReadingAt = performance.now();
-      }
+      if (reading) lastReading = reading;
     }
 
     async function start(): Promise<void> {
