@@ -39,6 +39,7 @@ import { MicError, MicInput } from '../../audio/mic';
 import { MicDetectorSource, detectorOptsFromSettings } from '../../audio/micDetector';
 import { Metronome } from '../../audio/metronome';
 import { BackingTrack } from '../../audio/backing';
+import { renderChordTrack } from '../../audio/chordSynth';
 import { PracticeSession } from '../../game/engine';
 import { HighwayRenderer, countInStartBeat, lowerBound } from '../highway';
 import { drawChordDiagram } from '../chordDiagram';
@@ -270,6 +271,9 @@ export const practiceScreen: Screen = {
     /** The last load failed: Empezar does not retry by itself (toggling "Pista" on does). */
     let backingFailed = false;
     let backingSaveTimer: number | null = null;
+    // The synthesized "solo acordes" track is pure per song + a4, so it is rendered once and reused.
+    let chordTrackBuffer: AudioBuffer | null = null;
+    let chordTrackRender: Promise<AudioBuffer> | null = null;
 
     // ---------------------------------------------------------------- session
 
@@ -348,11 +352,21 @@ export const practiceScreen: Screen = {
       oninput: () => onBackingVolume(),
     });
     const backingStatusEl = h('span.practice-backing-status');
+    const backingSourceSelect = h('select', {
+      class: 'practice-select practice-backing-source',
+      'aria-label': 'Qué suena en la pista',
+      title: 'Qué suena en la pista: la grabación original o solo los acordes sintetizados',
+      onchange: () => void onBackingSourceChange(),
+    });
+    backingSourceSelect.appendChild(h('option', { value: 'audio' }, 'Grabación original'));
+    backingSourceSelect.appendChild(h('option', { value: 'chords' }, 'Solo acordes (simplificado)'));
+    backingSourceSelect.value = settings.backingSource;
     const backingControls = audio
       ? h(
           'div.practice-backing',
           null,
-          h('label.practice-toggle', { title: 'Reproducir la pista de audio de la canción' }, backingToggle, 'Pista'),
+          h('label.practice-toggle', { title: 'Reproducir la pista de la canción' }, backingToggle, 'Pista'),
+          backingSourceSelect,
           backingVolume,
           backingStatusEl,
         )
@@ -582,27 +596,54 @@ export const practiceScreen: Screen = {
       backingStatusEl.classList.toggle('is-error', isError);
     }
 
+    /** Renders (once) the synthesized chords-only track for this song, cached for reuse. */
+    function ensureChordTrackRendered(): Promise<AudioBuffer> {
+      if (chordTrackBuffer) return Promise.resolve(chordTrackBuffer);
+      if (chordTrackRender) return chordTrackRender;
+      const render = renderChordTrack(song, ctx.sampleRate)
+        .then((buffer) => {
+          chordTrackBuffer = buffer;
+          return buffer;
+        })
+        .finally(() => {
+          chordTrackRender = null;
+        });
+      chordTrackRender = render;
+      return render;
+    }
+
     /**
-     * Loads (once) the song's audio file into a BackingTrack. Never rejects: resolves true when
-     * the track is ready, false when the song has no audio, the load failed or the screen was
-     * unmounted meanwhile. Decoding works on the suspended context.
+     * Loads (once) the current backing source into a BackingTrack: either the song's uploaded
+     * audio file, or the synthesized chords-only track (settings.backingSource). Never rejects:
+     * resolves true when the track is ready, false when the song has no audio, the load failed or
+     * the screen was unmounted meanwhile. Decoding/rendering both work on the suspended context.
      */
     function ensureBackingLoaded(): Promise<boolean> {
       if (!audio) return Promise.resolve(false);
       if (backingLoad) return backingLoad;
       const info = audio;
+      const useChords = settings.backingSource === 'chords';
       setBackingStatus(BACKING_LOADING_TEXT);
       const load = (async (): Promise<boolean> => {
         let track: BackingTrack | null = null;
         try {
-          const blob = await getTrack(id);
-          if (disposed) return false;
-          if (!blob) throw new Error('No se encontró el archivo de audio en este navegador');
           track = new BackingTrack(ctx);
-          await track.load(blob);
-          if (disposed) {
-            track.dispose();
-            return false;
+          if (useChords) {
+            const buffer = await ensureChordTrackRendered();
+            if (disposed) {
+              track.dispose();
+              return false;
+            }
+            track.loadBuffer(buffer);
+          } else {
+            const blob = await getTrack(id);
+            if (disposed) return false;
+            if (!blob) throw new Error('No se encontró el archivo de audio en este navegador');
+            await track.load(blob);
+            if (disposed) {
+              track.dispose();
+              return false;
+            }
           }
           track.setGain(info.gain);
           backing = track;
@@ -624,12 +665,35 @@ export const practiceScreen: Screen = {
       return load;
     }
 
-    /** Restarts the audio so that the count-in start beat of `s` is heard at its wall time. */
+    /** "Grabación original" / "Solo acordes": switches the backing source and reloads it if playing. */
+    async function onBackingSourceChange(): Promise<void> {
+      const source = backingSourceSelect.value === 'chords' ? 'chords' : 'audio';
+      if (source === settings.backingSource) return;
+      settings = { ...settings, backingSource: source };
+      saveSettings({ backingSource: source });
+      backing?.dispose();
+      backing = null;
+      backingLoad = null;
+      if (!settings.backingTrack) return;
+      backingFailed = false;
+      void ctx.resume().catch(noop);
+      const ok = await ensureBackingLoaded();
+      if (!ok || disposed || !backingToggle.checked) return;
+      const phase = session.getState().phase;
+      if (phase === 'countin' || phase === 'playing') syncBacking(session);
+    }
+
+    /**
+     * Restarts the audio so that the count-in start beat of `s` is heard at its wall time. The
+     * synthesized chords track has no independent alignment offset (its sample 0 IS song beat 0),
+     * unlike the uploaded recording (audio.offsetSec, set by "Sincronizar" in the editor).
+     */
     function syncBacking(s: PracticeSession): void {
       if (!backing || !audio || !settings.backingTrack) return;
       const b = s.getState().countInStartBeat;
+      const posSec = settings.backingSource === 'chords' ? beatToSec(song.tempoSegments, b) : backingPositionSec(audio, song, b);
       backing.stop();
-      backing.start(s.wallSec(b), backingPositionSec(audio, song, b), settings.tempoScale);
+      backing.start(s.wallSec(b), posSec, settings.tempoScale);
     }
 
     /** "Pista" toggle: persists the setting and starts/stops the audio in the middle of a pass. */

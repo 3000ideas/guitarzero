@@ -90,6 +90,15 @@ export class BackingTrack {
     return { durationSec: buffer.duration, sampleRate: buffer.sampleRate, channels: buffer.numberOfChannels };
   }
 
+  /** Like load(), but for an already-decoded buffer (e.g. audio/chordSynth.ts's synthesized track). */
+  loadBuffer(buffer: AudioBuffer): BackingTrackInfo {
+    this.stop();
+    if (this.disposed) throw new Error('La pista de audio ya se ha liberado');
+    this.decoded = buffer;
+    this.mono = null;
+    return { durationSec: buffer.duration, sampleRate: buffer.sampleRate, channels: buffer.numberOfChannels };
+  }
+
   /** Seconds the source is started ahead of the nominal time so the audio is HEARD on time. */
   outputLatencySec(): number {
     const reported = (this.ctx as { outputLatency?: number }).outputLatency;

@@ -457,6 +457,8 @@ export interface Settings {
   invertStrings: boolean;
   /** Play the song's backing track (when the song has one) during practice. */
   backingTrack: boolean;
+  /** What plays as the backing track: the uploaded recording, or a synthesized chords-only version (audio/chordSynth.ts). */
+  backingSource: 'audio' | 'chords';
   /** Ask the browser for echo cancellation on the mic (helps when the backing track plays through speakers). */
   echoCancellation: boolean;
 }
@@ -475,5 +477,6 @@ export const DEFAULT_SETTINGS: Settings = {
   tuningOffset: 0,
   invertStrings: false,
   backingTrack: true,
+  backingSource: 'audio',
   echoCancellation: false,
 };

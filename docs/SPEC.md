@@ -1137,3 +1137,62 @@ mínimo dificulta más aún mantener el ritmo cuando el sistema graba y reproduc
 `latencyHint: 'playback'` (búfer más grande y estable); el retraso fijo adicional que esto
 añade ya lo absorbe la calibración de latencia existente (`Settings.latencySec`, "Calibrar" en
 Ajustes).
+
+## 19. Afinador (`#/tuner`)
+
+Afinador cromático guiado, independiente de cualquier canción: responde a una pregunta que el
+detector de acordes/rasgueo no puede responder por sí solo — ¿está afinada la guitarra? Guiado
+(no por auto-detección): la pantalla siempre nombra UNA cuerda objetivo ("6ª · Mi (E2)") y
+compara lo que suena contra ESA nota, nunca contra "la nota de referencia numéricamente más
+cercana" (eso falla justo cuando más importa: una cuerda a más de medio semitono de su objetivo
+se compararía silenciosamente con la cuerda vecina equivocada). El jugador elige la cuerda (los
+6 chips, Anterior/Siguiente, o las flechas ← → / ↑ ↓ del teclado) o sigue el orden por defecto
+(6ª a 1ª); mantenerla afinada ~1 s pasa sola a la siguiente.
+
+- `dsp/tuner.ts` (puro, testeable): `detectPitch(mag, sampleRate, fftSize, opts)` — pico más
+  fuerte en [70, 400] Hz (cubre las 6 cuerdas al aire con margen), refinado por interpolación
+  parabólica (igual que `chroma.ts`), convertido a MIDI/cents. Monofónico a propósito (una
+  cuerda a la vez, como cualquier afinador).
+- `ui/screens/tuner.ts`: reutiliza `MicInput` directamente (no el Worker de
+  `micDetector.ts` — una sola nota es mucho más simple que reconocer acordes) con su propio
+  `AudioContext` de captura. Filtro de silencio: `rmsDbOf(samples) < settings.gateDb` descarta
+  el fotograma entero (sin esto, "el pico más fuerte del fotograma" sigue siendo un pico aunque
+  sea silencio, y el afinador "oía" una nota fantasma nada más empezar a escuchar).
+- La última lectura se queda fija en pantalla (no se borra a los 400 ms) para dar tiempo a leer
+  el consejo; un piloto (punto de color junto al estado: gris parado, pulsando mientras escucha,
+  verde en cuanto hay señal real) y un aviso "sin sonido ahora" cuando la lectura lleva más de
+  `TUNER_STALE_MS` (2.5 s) sin refrescarse dejan claro cuándo el número ya NO refleja lo que
+  suena en ese instante (p. ej. mientras se gira la clavija sin volver a tocar la cuerda).
+- `tunerAdvice(cents)`: en vez de un número abstracto, "más tensa: afloja" / "más floja:
+  aprieta" (más allá de `TUNER_FAR_CENTS` = 150, sugiere comprobar si es la cuerda correcta).
+- Diagrama SVG de las 6 cuerdas (gruesa arriba = 6ª, fina abajo = 1ª) orientado como el jugador
+  ve su propia guitarra al tocar, no como se ve en una foto de frente.
+
+## 20. Pista de acordes simplificada (sintetizada)
+
+Alternativa a la grabación real subida: en vez de la mezcla completa (batería, bajo, voz…),
+sintetiza SOLO los acordes en el ritmo exacto de `song.events` (los mismos datos que dibujan la
+autopista), para practicar controlando el ritmo y los acordes sin el ruido de las demás pistas.
+
+- `audio/chordSynth.ts`, separado en dos capas (como el resto de `audio/`: envoltorio de Web
+  Audio fino y sin tests, lógica pura y sí testeada):
+  - `planChordTrack(song, a4 = 440): PlannedVoice[]` — puro, sin Web Audio, testeable en Node.
+    Por cada evento no silencioso (`chord.quality !== 'nc'`): un rasgueo mudo (`muted`) se
+    convierte en un golpe percusivo (`{kind:'mute'}`); un rasgueo real usa
+    `getChordShape`/`shapeMidiNotes` (music/chords.ts) para obtener las notas MIDI que suenan
+    en esa digitación y genera una nota por cuerda, de grave a aguda para un rasgueo hacia abajo
+    y de aguda a grave para uno hacia arriba, cada una desplazada `CHORD_SYNTH_STRING_STAGGER_SEC`
+    (10 ms) respecto a la anterior (el "barrido" de un rasgueo real, no todas las cuerdas a la vez).
+  - `renderChordTrack(song, sampleRate, a4): Promise<AudioBuffer>` — `OfflineAudioContext`;
+    cada nota es un oscilador `triangle` con envolvente rápida (4 ms de ataque, decaimiento
+    exponencial τ = 0.35 s); cada golpe mudo es una ráfaga corta de ruido blanco filtrada en
+    banda (~2200 Hz); todo pasa por un único filtro paso-bajo maestro (3500 Hz) para un timbre
+    cálido con muy pocos nodos. Requiere navegador real (`OfflineAudioContext` no existe en
+    Node/Vitest); verificado a mano — sin errores, pico y RMS dentro de rango, sin saturar.
+- `audio/backing.ts`: `BackingTrack.loadBuffer(buffer: AudioBuffer)` — como `load(blob)` pero
+  para un `AudioBuffer` ya decodificado, reutilizando toda la lógica de sincronización/ganancia
+  existente.
+- `Settings.backingSource: 'audio' | 'chords'` (por defecto `'audio'`), selector "Grabación
+  original" / "Solo acordes (simplificado)" en Practicar, solo visible cuando la canción tiene
+  audio subido. La pista sintetizada se renderiza una vez por canción y se cachea; a diferencia
+  del audio subido, su muestra 0 ES el beat 0 exacto (sin `audio.offsetSec` propio).

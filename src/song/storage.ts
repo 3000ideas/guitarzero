@@ -360,6 +360,8 @@ export function mergeSettings(input: unknown): Settings {
       const def = DEFAULT_SETTINGS[key];
       if (key === 'inputDeviceId') {
         if (value === null || typeof value === 'string') picked[key] = value;
+      } else if (key === 'backingSource') {
+        if (value === 'audio' || value === 'chords') picked[key] = value;
       } else if (typeof def === 'number') {
         if (typeof value === 'number' && Number.isFinite(value)) picked[key] = value;
       } else if (typeof def === 'boolean') {
