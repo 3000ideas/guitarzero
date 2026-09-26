@@ -1080,3 +1080,60 @@ mientras suena la canción, y el patrón puede ser **distinto por sección**.
   toques: "No se registró ningún rasgueo". Salir de la pantalla cancela la grabación.
 - Nota bajo el botón: "Toca la barra espaciadora (o el botón) en cada rasgueo mientras suena.
   Abajo en los tiempos, arriba en los contratiempos."
+
+## 17. Análisis del micrófono en un hilo aparte (Worker)
+
+Motivo: en algunos ordenadores, con "Escuchar" activado y la pista de acompañamiento sonando a
+la vez, la reproducción se cortaba. La causa más probable es que el análisis del micrófono
+(FFT, chroma, detección de ataques) se ejecutaba en el hilo principal del navegador, compitiendo
+por CPU con el resto de la página justo en el momento en que el sistema también tiene que grabar
+y reproducir audio a la vez. Se ha movido ese análisis a un **Web Worker** dedicado, para que
+nunca pueda competir con la reproducción ni con el resto de la interfaz, sin cambiar el
+comportamiento observable de la detección.
+
+### audio/detectorWorker.ts (nuevo)
+- Script de worker: solo cálculo puro (`ChordDetector` de `dsp/detector.ts`), sin DOM ni Web
+  Audio. `self` se tipa como `Worker` (no `DedicatedWorkerGlobalScope`) para no mezclar las
+  librerías TS `dom` y `webworker` en el mismo `tsconfig`.
+- Mensajes de entrada: `{ type: 'init', sampleRate, opts }`, `{ type: 'frame', frame, timeSec }`
+  (el `frame` se transfiere, no se copia), `{ type: 'setOptions', patch }`,
+  `{ type: 'setTranspose', semitones }`.
+- Mensajes de salida: `{ type: 'result', frame: DetectorFrame, gateDb, noiseFloorDb }` (los dos
+  últimos campos van fuera de `DetectorFrame`, que no cambia) o `{ type: 'error', message }`. Los
+  `Float32Array` de `energyChroma`/`chroma` se transfieren de vuelta (se asignan nuevos en cada
+  `process()`, así que transferirlos es seguro).
+- Sin test propio: es solo el cableado de mensajes alrededor de `ChordDetector`, ya probado a
+  fondo; no se puede instanciar un `Worker` real en Vitest (entorno Node).
+
+### audio/micDetector.ts (reescrito, mismo contrato público)
+- `MicDetectorSource` intenta crear el worker en el constructor
+  (`new Worker(new URL('./detectorWorker.ts', import.meta.url), { type: 'module' })`); si
+  `Worker` no existe (tests en Node, navegador antiguo) o la creación lanza, usa **el mismo
+  `ChordDetector` de siempre en el hilo principal**, exactamente como antes. Ningún otro módulo
+  necesita saber cuál de los dos casos está activo.
+- `getGateDb()`/`getNoiseFloorDb()` devuelven el último valor recibido del worker (llegan en
+  cada mensaje `result`) cuando hay worker, o se leen directamente del detector en modo
+  respaldo. `setOptions`/`setTranspose` se reenvían al worker con `postMessage` (sin esperar
+  respuesta) o se aplican directamente en modo respaldo.
+- Nuevo método `usingWorker(): boolean` (diagnóstico).
+- `dispose()` también termina el worker (`worker.terminate()`).
+- Test (`tests/audio/micDetector.test.ts`): cubre la ruta de respaldo (la única que corre en
+  Node) con un `MicInput` falso: entrega síncrona de `DetectorFrame`, detección real de un
+  acorde sintetizado, `setOptions`/`setTranspose`, valores por defecto antes del primer
+  fotograma, `dispose()`, y que un suscriptor que lanza no rompe a los demás.
+- Verificado a mano en el navegador real (Vite dev, sin usar el micrófono): construir
+  `MicDetectorSource` con un `MicInput` falso, comprobar `usingWorker() === true`, empujar un
+  fotograma sintetizado y comprobar que el resultado (acorde, chroma, rms) llega igual que en
+  modo respaldo.
+
+## 18. AudioContext: sin forzar frecuencia ni la menor latencia posible
+
+`audio/context.ts` fijaba `sampleRate: 48000` y `latencyHint: 'interactive'` (el búfer de
+hardware más pequeño posible). Todo el DSP recibe `sampleRate` como parámetro y está probado a
+44100/48000/96000, así que no depende de un valor fijo; forzarlo obliga al navegador a
+remuestrear en tiempo real cuando no coincide con el formato nativo del dispositivo. Un búfer
+mínimo dificulta más aún mantener el ritmo cuando el sistema graba y reproduce a la vez. Ahora
+`getAudioContext()` no fija `sampleRate` (usa el nativo del dispositivo) y pide
+`latencyHint: 'playback'` (búfer más grande y estable); el retraso fijo adicional que esto
+añade ya lo absorbe la calibración de latencia existente (`Settings.latencySec`, "Calibrar" en
+Ajustes).
