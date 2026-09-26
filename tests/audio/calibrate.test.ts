@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CALIBRATION_MAX_LATENCY_SEC,
+  CALIBRATION_MAX_MAD_SEC,
   CALIBRATION_MESSAGES,
   CALIBRATION_MIN_LATENCY_SEC,
   CALIBRATION_SETTLE_SEC,
@@ -168,11 +169,15 @@ describe('computeLatency', () => {
     expect(computeLatency([0.08, 0.08, 0.08, 0.08, 0.08]).latencySec).toBeCloseTo(0.08, 9);
   });
 
-  it('accepts a median absolute deviation of exactly 0.04 s and rejects above it', () => {
-    expect(computeLatency([0.1, 0.14, 0.06, 0.14, 0.06]).latencySec).toBeCloseTo(0.1, 9);
-    expect(() => computeLatency([0.1, 0.15, 0.05, 0.15, 0.05])).toThrow('Demasiada variación, repite la calibración');
+  it('accepts a median absolute deviation of exactly the limit and rejects just above it', () => {
+    const m = CALIBRATION_MAX_MAD_SEC;
+    expect(computeLatency([0.1, 0.1 + m, 0.1 - m, 0.1 + m, 0.1 - m]).latencySec).toBeCloseTo(0.1, 9);
+    const over = m + 0.01;
+    expect(() => computeLatency([0.1, 0.1 + over, 0.1 - over, 0.1 + over, 0.1 - over])).toThrow(
+      'Demasiada variación, repite la calibración',
+    );
     try {
-      computeLatency([0.1, 0.15, 0.05, 0.15, 0.05]);
+      computeLatency([0.1, 0.1 + over, 0.1 - over, 0.1 + over, 0.1 - over]);
     } catch (e) {
       expect((e as CalibrationError).code).toBe('unstable');
     }

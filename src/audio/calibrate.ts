@@ -17,8 +17,16 @@ export const CALIBRATION_LEAD_SEC = 1;
 export const CALIBRATION_WINDOW_BEFORE_SEC = 0.15;
 export const CALIBRATION_WINDOW_AFTER_SEC = 0.5;
 export const CALIBRATION_MIN_SAMPLES = 5;
-/** Maximum median absolute deviation of the samples, in seconds. */
-export const CALIBRATION_MAX_MAD_SEC = 0.04;
+/**
+ * Maximum median absolute deviation of the samples, in seconds. The median (and the MAD itself)
+ * already has a 50% breakdown point, so it is inherently robust to a single mistimed strum among
+ * several good ones (see the 'is robust to a single outlier' test); this bound is instead about
+ * how precisely a real beginner can physically strum a guitar on a click — not just tap a button
+ * — across a whole run. 40 ms matched a robot but rejected real, otherwise-consistent players;
+ * 70 ms still catches someone who isn't really following the click at all (the high-variance test
+ * sits at ~150-200 ms) while giving a genuine beginner a realistic chance to pass.
+ */
+export const CALIBRATION_MAX_MAD_SEC = 0.07;
 export const CALIBRATION_MIN_LATENCY_SEC = -0.1;
 export const CALIBRATION_MAX_LATENCY_SEC = 0.5;
 /** The run settles at the latest this long after the last nominal click. */
