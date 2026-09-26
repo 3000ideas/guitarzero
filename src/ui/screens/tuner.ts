@@ -27,6 +27,7 @@ import type { Screen } from '../../types';
 import { getFlag, loadSettings, setFlag } from '../../song/storage';
 import { MicError, MicInput } from '../../audio/mic';
 import { RealFFT } from '../../dsp/fft';
+import { rmsDbOf } from '../../dsp/detector';
 import { detectPitch, type TunerReading } from '../../dsp/tuner';
 import { midiToFreq } from '../../music/notes';
 import { h } from '../dom';
@@ -50,7 +51,6 @@ export const TUNER_CLOSE_CENTS = 15;
 export const TUNER_HOLD_MS = 1000;
 /** How long the last reading is still shown after the note stops ringing loud enough, ms. */
 export const TUNER_READING_TTL_MS = 400;
-export const TUNER_MIN_STRENGTH = 0.15;
 /** Cents range clamped for the needle/meter position (beyond this, only the text says how far off). */
 export const TUNER_METER_RANGE_CENTS = 50;
 
@@ -225,9 +225,15 @@ export const tunerScreen: Screen = {
     }
 
     function onMicFrame(samples: Float32Array): void {
+      // Below the gate the frame is silence / room noise: never produce a reading for it. Without
+      // this, "the loudest peak in the frame" is still a peak even when the frame is silence, so
+      // the tuner reported a phantom note the instant it started listening, before any string was
+      // played. Same gate the chord detector uses (rmsDbOf + settings.gateDb), so "silence" means
+      // the same thing everywhere in the app.
+      if (rmsDbOf(samples) < settings.gateDb) return;
       fft.magnitudes(samples, mag);
       const reading = detectPitch(mag, mic.context.sampleRate, mic.fftSize, { a4: settings.a4 });
-      if (reading && reading.strength >= TUNER_MIN_STRENGTH) {
+      if (reading) {
         lastReading = reading;
         lastReadingAt = performance.now();
       }
