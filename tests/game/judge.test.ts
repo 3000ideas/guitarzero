@@ -280,14 +280,14 @@ describe('judgeEvent: chord verdicts', () => {
     expect(r.expectedScore).toBeGreaterThan(OPTS.minScore);
   });
 
-  it('rule 8 (superset): an extra note louder than the weakest expected note -> wrong', () => {
-    // Full-strength Am7: the G bin ends up above the A and C bins (harmonics), so the
-    // superset rule rejects it.
+  it('rule 8 (superset) with the tie-break margin: a full-strength extra 7th is now forgiven', () => {
+    // Full-strength Am7: the G bin ends up above the A and C bins (harmonics), which used to be
+    // rejected outright. MISMATCH_MARGIN treats this close a call as "close enough" — a real
+    // strum that lets an extra note ring this much should not fail the whole chord.
     const input = inputFor('Am');
     const energy = chordEnergy('Am7');
     const r = judgeEvent(input, evidenceOf(EXPECTED_SEC, energy), OPTS);
-    expect(r.kind).toBe('wrong');
-    expect(r.detected).toBe('Am7');
+    expect(r.kind).toBe('correct');
   });
 
   it('A vs Am: the wrong third is rejected in both directions', () => {
@@ -314,10 +314,11 @@ describe('judgeEvent: chord verdicts', () => {
 
   it('rule 9: the third is checked even when the matcher agrees with the expected chord', () => {
     // Empty vocabulary: the merged expected template is the only candidate, so rules 7/8 pass
-    // and only the third check can reject. C major with Eb louder than E -> Cm.
+    // and only the third check can reject. C major with Eb clearly louder than E -> Cm. The gap
+    // (1 vs 0.3) is well outside MISMATCH_MARGIN, so this is a genuine mismatch, not a close call.
     const energy = energyOf([
       [0, 1],
-      [4, 0.8],
+      [4, 0.3],
       [3, 1],
       [7, 1],
     ]);
@@ -334,16 +335,29 @@ describe('judgeEvent: chord verdicts', () => {
     const ok = energyOf([
       [0, 1],
       [4, 1],
-      [3, 0.8],
+      [3, 0.3],
       [7, 1],
     ]);
     expect(judgeEvent(inputFor('C'), evidenceOf(EXPECTED_SEC, ok), { ...OPTS, templates: [] }).kind).toBe('correct');
   });
 
+  it('rule 9 with the tie-break margin: a third only a little softer than the other is forgiven', () => {
+    // A beginner's chord rarely rings perfectly clean; the wrong third's bin ending up only
+    // slightly louder (not clearly louder) than the right one should not fail the whole chord.
+    const energy = energyOf([
+      [0, 1],
+      [4, 0.8],
+      [3, 1],
+      [7, 1],
+    ]);
+    expect(judgeEvent(inputFor('C'), evidenceOf(EXPECTED_SEC, energy), { ...OPTS, templates: [] }).kind).toBe('correct');
+  });
+
   it('rule 9 keeps the user spelling of the root in the detected name', () => {
+    // Gap well outside MISMATCH_MARGIN (1 vs 0.3): a genuine mismatch, correctly rejected.
     const energy = energyOf([
       [10, 1],
-      [2, 0.8],
+      [2, 0.3],
       [1, 1],
       [5, 1],
     ]);

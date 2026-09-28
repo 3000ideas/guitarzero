@@ -30,6 +30,14 @@ export const ONSET_SKIP_SEC = 0.02;
 export const NEXT_ONSET_GUARD_SEC = 0.02;
 /** Minimum length of the analysis window. */
 export const MIN_WINDOW_SEC = 0.05;
+/**
+ * Tie-break margin for steps 8 and 9 below: `c` is an L2-normalised 12-bin chroma vector (bins
+ * roughly 0..0.6 for a real triad), and both checks used to compare energies with a bare `<`,
+ * zero slack. A real strum's chroma is noisy (string bleed, an imperfectly muted string, the
+ * pick attack) — comparing with no margin flagged "wrong" on strums that were, audibly, the
+ * right chord, just not a textbook-clean one. This margin lets a near-tie resolve as correct.
+ */
+export const MISMATCH_MARGIN = 0.05;
 
 /**
  * Default judge tolerances (SPEC.md section 7): the engine fills the rest from Settings.
@@ -178,17 +186,17 @@ export function judgeEvent(input: JudgeInput, evidence: Evidence, opts: JudgeOpt
     } else {
       d = meanOver(c, difference(E, B)) - meanOver(c, difference(B, E));
     }
-    if (d < 0) {
+    if (d < -MISMATCH_MARGIN) {
       return { eventIndex, kind: 'wrong', timing, timingLabel: null, detected: detectedName, expectedScore };
     }
   }
 
-  // 9. Third check, always: the written third must not be weaker than the other one.
+  // 9. Third check, always: the written third must not be clearly weaker than the other one.
   const third = qualityThird(input.chord.quality);
   if (third !== null && input.chord.root >= 0) {
     const other = third === 4 ? 3 : 4;
     const root = ((input.chord.root % 12) + 12) % 12;
-    if (c[(root + third) % 12] < c[(root + other) % 12]) {
+    if (c[(root + third) % 12] < c[(root + other) % 12] - MISMATCH_MARGIN) {
       return {
         eventIndex,
         kind: 'wrong',
