@@ -61,6 +61,19 @@ describe('planChordTrack', () => {
     const at440 = planChordTrack(song, 440).filter((v) => v.kind === 'note');
     expect(at432[0].kind === 'note' && at432[0].freqHz).toBeLessThan(at440[0].kind === 'note' ? at440[0].freqHz : 0);
   });
+
+  it('transposes by the capo: the shape sounds capo semitones above the written pitch', () => {
+    const plain = parseSong(src('tempo: 120', 'strum: D---', 'C . . . |')).song;
+    const capoed = parseSong(src('tempo: 120', 'capo: 2', 'strum: D---', 'C . . . |')).song;
+    expect(capoed.capo).toBe(2);
+    const plainNotes = planChordTrack(plain).filter((v) => v.kind === 'note');
+    const capoedNotes = planChordTrack(capoed).filter((v) => v.kind === 'note');
+    expect(capoedNotes).toHaveLength(plainNotes.length);
+    capoedNotes.forEach((v, i) => {
+      const plainFreq = plainNotes[i].kind === 'note' ? plainNotes[i].freqHz : 0;
+      expect(v.kind === 'note' && v.freqHz).toBeCloseTo(plainFreq * Math.pow(2, 2 / 12), 6);
+    });
+  });
 });
 
 describe('chordTrackDurationSec', () => {
