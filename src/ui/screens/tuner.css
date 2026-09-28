@@ -285,3 +285,41 @@
   color: var(--muted);
   text-align: center;
 }
+
+.tuner-diag {
+  margin-top: 4px;
+  text-align: left;
+}
+
+.tuner-diag summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.tuner-diag audio {
+  display: block;
+  width: 100%;
+  margin: 8px 0;
+}
+
+.tuner-diag-status {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 8px 0;
+  min-height: 16px;
+}
+
+.tuner-diag-output {
+  margin-top: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
