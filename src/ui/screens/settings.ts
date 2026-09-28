@@ -360,6 +360,29 @@ export const settingsScreen: Screen = {
       onChange: (v) => update({ lateSec: v / 1000 }),
     });
 
+    const CHORD_TOLERANCE_OPTIONS: ReadonlyArray<{ value: Settings['chordTolerance']; label: string }> = [
+      { value: 'normal', label: 'Normal' },
+      { value: 'lenient', label: 'Fácil (más margen)' },
+    ];
+    const difficultySelect = h('select', { class: 'settings-select', 'aria-label': 'Dificultad de reconocimiento del acorde' });
+    for (const opt of CHORD_TOLERANCE_OPTIONS) difficultySelect.appendChild(h('option', { value: opt.value }, opt.label));
+    difficultySelect.value = settings.chordTolerance;
+    difficultySelect.addEventListener('change', () => {
+      const v = difficultySelect.value === 'lenient' ? 'lenient' : 'normal';
+      update({ chordTolerance: v });
+    });
+    const difficultyField = h(
+      'div.settings-field',
+      null,
+      h('label.settings-label', null, h('span', null, 'Dificultad de reconocimiento')),
+      difficultySelect,
+      h(
+        'div.settings-help',
+        null,
+        'En "Fácil" un acorde parecido (aunque no salga del todo limpio) cuenta como acertado — para practicar sin que un rasgueo casi correcto se marque como fallo.',
+      ),
+    );
+
     // ---------------------------------------------------------------- layout
 
     const rootEl = h(
@@ -430,7 +453,7 @@ export const settingsScreen: Screen = {
         ),
       ),
 
-      h('fieldset.settings-group', null, h('legend', null, 'Tolerancias'), earlyField.root, lateField.root),
+      h('fieldset.settings-group', null, h('legend', null, 'Tolerancias'), earlyField.root, lateField.root, difficultyField),
 
       h(
         'fieldset.settings-group',

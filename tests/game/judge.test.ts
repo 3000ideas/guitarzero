@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ChordSymbol, Evidence, JudgeInput, JudgeOpts } from '../../src/types';
 import {
+  CHORD_TOLERANCE_PRESETS,
   DEFAULT_JUDGE_OPTS,
   MIN_WINDOW_SEC,
   NEXT_ONSET_GUARD_SEC,
@@ -418,5 +419,33 @@ describe('judgeEvent: chord verdicts', () => {
     expect(a).toEqual(b);
     expect(JSON.stringify(input)).toBe(before);
     expect(Array.from(energy)).toEqual(Array.from(copy));
+  });
+});
+
+describe('CHORD_TOLERANCE_PRESETS (Settings.chordTolerance)', () => {
+  it('"lenient" is strictly more forgiving than "normal": lower minScore and a wider mismatchMargin', () => {
+    expect(CHORD_TOLERANCE_PRESETS.lenient.minScore).toBeLessThan(CHORD_TOLERANCE_PRESETS.normal.minScore);
+    expect(CHORD_TOLERANCE_PRESETS.lenient.mismatchMargin).toBeGreaterThan(CHORD_TOLERANCE_PRESETS.normal.mismatchMargin);
+  });
+
+  it('DEFAULT_JUDGE_OPTS starts at the "normal" preset', () => {
+    expect(DEFAULT_JUDGE_OPTS.minScore).toBe(CHORD_TOLERANCE_PRESETS.normal.minScore);
+    expect(DEFAULT_JUDGE_OPTS.mismatchMargin).toBe(CHORD_TOLERANCE_PRESETS.normal.mismatchMargin);
+  });
+
+  it('a chord "normal" rejects can be accepted under "lenient"', () => {
+    // The rule-8 superset case (full-strength Am7 for an expected Am) already passes under
+    // "normal" (its own test covers that); build a case just outside normal's margin instead —
+    // a slightly bigger third imbalance than the rule-9 "forgiven" test uses.
+    const energy = energyOf([
+      [0, 1],
+      [4, 0.65],
+      [3, 1],
+      [7, 1],
+    ]);
+    const normalOpts: JudgeOpts = { ...OPTS, ...CHORD_TOLERANCE_PRESETS.normal, templates: [] };
+    const lenientOpts: JudgeOpts = { ...OPTS, ...CHORD_TOLERANCE_PRESETS.lenient, templates: [] };
+    expect(judgeEvent(inputFor('C'), evidenceOf(EXPECTED_SEC, energy), normalOpts).kind).toBe('wrong');
+    expect(judgeEvent(inputFor('C'), evidenceOf(EXPECTED_SEC, energy), lenientOpts).kind).toBe('correct');
   });
 });

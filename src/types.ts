@@ -356,6 +356,8 @@ export interface JudgeOpts {
   analysisWindowSec: number;
   /** Default 0.6. Minimum cosine score of the expected template for 'correct'. */
   minScore: number;
+  /** Tie-break margin for the superset/third checks (judge.ts rules 8-9); scales with difficulty. */
+  mismatchMargin: number;
   /** |timing| <= perfectSec -> 'perfect' (default 0.07); <= goodSec -> 'good' (default 0.15). */
   perfectSec: number;
   goodSec: number;
@@ -461,6 +463,12 @@ export interface Settings {
   backingSource: 'audio' | 'chords';
   /** Ask the browser for echo cancellation on the mic (helps when the backing track plays through speakers). */
   echoCancellation: boolean;
+  /**
+   * How closely a strum must match the expected chord to count as 'correct' (game/judge.ts's
+   * minScore + mismatchMargin). 'normal' already forgives real-world noise; 'lenient' forgives a
+   * lot more — closer to "you're at least attempting the right chord" than a precise match.
+   */
+  chordTolerance: 'normal' | 'lenient';
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -482,4 +490,5 @@ export const DEFAULT_SETTINGS: Settings = {
   backingTrack: true,
   backingSource: 'audio',
   echoCancellation: false,
+  chordTolerance: 'normal',
 };

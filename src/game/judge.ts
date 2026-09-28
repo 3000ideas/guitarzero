@@ -31,28 +31,34 @@ export const NEXT_ONSET_GUARD_SEC = 0.02;
 /** Minimum length of the analysis window. */
 export const MIN_WINDOW_SEC = 0.05;
 /**
- * Tie-break margin for steps 8 and 9 below: `c` is an L2-normalised 12-bin chroma vector (bins
- * roughly 0..0.6 for a real triad), and both checks used to compare energies with a bare `<`,
- * zero slack. A real strum's chroma is noisy (string bleed, an imperfectly muted string, the
- * pick attack) — comparing with no margin flagged "wrong" on strums that were, audibly, the
- * right chord, just not a textbook-clean one. This margin lets a near-tie resolve as correct.
+ * How closely a strum must match the expected chord (Settings.chordTolerance, SPEC.md section 7).
+ * `minScore` is the overall cosine-similarity floor (rule 7); `mismatchMargin` is the tie-break
+ * slack for rules 8-9 below — `c` is an L2-normalised 12-bin chroma vector (bins roughly 0..0.6
+ * for a real triad), and both rules used to compare energies with a bare `<`, zero slack, so any
+ * noise (string bleed, an imperfectly muted string, the pick attack — worse through a weak phone
+ * mic) that tipped the balance flagged "wrong" on a strum that was, audibly, the right chord.
+ * 'normal' already forgives that; a user asked for an explicit, larger "at least I'm attempting
+ * the right chord" level on top of it, hence 'lenient'.
  */
-export const MISMATCH_MARGIN = 0.05;
+export interface ChordTolerance {
+  minScore: number;
+  mismatchMargin: number;
+}
 
-/**
- * Default judge tolerances (SPEC.md section 7): the engine fills the rest from Settings.
- * minScore lowered from 0.6 to 0.5, then to 0.4: a beginner's real strum (extra string noise, an
- * imperfectly muted string, a chord not rung out perfectly cleanly — worse still through a weak
- * phone mic) legitimately scores lower on the cosine match than a clean synthetic one without
- * being a wrong chord. 0.6 marked too many genuinely-correct real strums as 'wrong'; a user
- * confirmed 0.5 still wasn't forgiving enough ("aún no reconoce el acorde... bastante más
- * margen"). 0.4 is still well above what a chord with a different root/quality altogether scores.
- */
-export const DEFAULT_JUDGE_OPTS: Pick<JudgeOpts, 'analysisWindowSec' | 'minScore' | 'perfectSec' | 'goodSec'> = {
+export const CHORD_TOLERANCE_PRESETS: Record<'normal' | 'lenient', ChordTolerance> = {
+  // 0.6 -> 0.5 -> 0.4 across earlier rounds of "still too strict" feedback; 0.4 is the floor
+  // that still keeps a chord of a different root/quality clearly below it.
+  normal: { minScore: 0.4, mismatchMargin: 0.05 },
+  // Explicit "easy" level: closer to "did you strike roughly the right notes" than a real match.
+  lenient: { minScore: 0.25, mismatchMargin: 0.15 },
+};
+
+/** Default judge tolerances (SPEC.md section 7): the engine fills the rest from Settings. */
+export const DEFAULT_JUDGE_OPTS: Pick<JudgeOpts, 'analysisWindowSec' | 'perfectSec' | 'goodSec'> & ChordTolerance = {
   analysisWindowSec: 0.3,
-  minScore: 0.4,
   perfectSec: 0.07,
   goodSec: 0.15,
+  ...CHORD_TOLERANCE_PRESETS.normal,
 };
 
 /** 'perfect' when |timing| <= perfectSec, 'good' when <= goodSec, else 'early' / 'late' by sign. */
@@ -187,7 +193,7 @@ export function judgeEvent(input: JudgeInput, evidence: Evidence, opts: JudgeOpt
     } else {
       d = meanOver(c, difference(E, B)) - meanOver(c, difference(B, E));
     }
-    if (d < -MISMATCH_MARGIN) {
+    if (d < -opts.mismatchMargin) {
       return { eventIndex, kind: 'wrong', timing, timingLabel: null, detected: detectedName, expectedScore };
     }
   }
@@ -197,7 +203,7 @@ export function judgeEvent(input: JudgeInput, evidence: Evidence, opts: JudgeOpt
   if (third !== null && input.chord.root >= 0) {
     const other = third === 4 ? 3 : 4;
     const root = ((input.chord.root % 12) + 12) % 12;
-    if (c[(root + third) % 12] < c[(root + other) % 12] - MISMATCH_MARGIN) {
+    if (c[(root + third) % 12] < c[(root + other) % 12] - opts.mismatchMargin) {
       return {
         eventIndex,
         kind: 'wrong',

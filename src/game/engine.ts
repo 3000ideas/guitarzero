@@ -35,7 +35,7 @@ import { beatToSec, secToBeat } from '../song/tempo';
 import { buildTemplates, compressChroma, templateForPitchClasses } from '../dsp/chroma';
 import { chordPitchClasses } from '../music/notes';
 import { shapePitchClasses } from '../music/chords';
-import { DEFAULT_JUDGE_OPTS, analysisWindow, judgeEvent, timingLabelFor } from './judge';
+import { CHORD_TOLERANCE_PRESETS, DEFAULT_JUDGE_OPTS, analysisWindow, judgeEvent, timingLabelFor } from './judge';
 
 /** The clock is anchored this long after the call that starts a pass. */
 export const ANCHOR_LEAD_SEC = 0.1;
@@ -190,6 +190,7 @@ export class PracticeSession {
     this.frameSeconds = opts.frameSeconds !== undefined && opts.frameSeconds > 0 ? opts.frameSeconds : DEFAULT_FRAME_SECONDS;
     this.judgeOpts = {
       ...DEFAULT_JUDGE_OPTS,
+      ...CHORD_TOLERANCE_PRESETS[this.settings.chordTolerance],
       earlySec: this.settings.earlySec,
       lateSec: this.settings.lateSec,
       templates: buildTemplates(),
@@ -340,6 +341,9 @@ export class PracticeSession {
     this.settings = next;
     this.judgeOpts.earlySec = next.earlySec;
     this.judgeOpts.lateSec = next.lateSec;
+    const tolerance = CHORD_TOLERANCE_PRESETS[next.chordTolerance];
+    this.judgeOpts.minScore = tolerance.minScore;
+    this.judgeOpts.mismatchMargin = tolerance.mismatchMargin;
     if (metronomeWasOn && !next.metronome) this.deps.clicks?.clear();
     this.state.live.listening = this.isListening();
     this.state.live.gateDb = this.currentGateDb();
