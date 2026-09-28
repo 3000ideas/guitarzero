@@ -438,7 +438,7 @@ export interface Screen {
 export interface Settings {
   /** Input latency compensation in wall seconds (added to the expected time / subtracted from onsets). -0.1..0.5 */
   latencySec: number;
-  /** Onset threshold multiplier (spectral flux vs adaptive median). */
+  /** Onset threshold multiplier (spectral flux vs adaptive median). Lower = more sensitive. */
   onsetThreshold: number;
   /** Lower bound of the silence gate in dBFS (effective gate = max(gateDb, noiseFloor + 10)). */
   gateDb: number;
@@ -465,7 +465,10 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   latencySec: 0.06,
-  onsetThreshold: 1.5,
+  // 1.2, not the DSP module's own 1.5 (dsp/detector.ts's DEFAULTS, tuned for its own tests):
+  // a real beginner's strum through a real (often weak/noisy) mic needs a more forgiving default
+  // than a lab-clean signal, so onsets aren't silently missed. Still adjustable in Ajustes.
+  onsetThreshold: 1.2,
   gateDb: -50,
   a4: 440,
   inputDeviceId: null,
