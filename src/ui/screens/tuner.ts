@@ -304,6 +304,7 @@ export const tunerScreen: Screen = {
         staleEl,
         statusRow,
         h('div.tuner-actions', null, startBtn, stopBtn, retryBtn),
+        diagDetails,
         h(
           'p.tuner-help',
           null,
@@ -313,7 +314,6 @@ export const tunerScreen: Screen = {
             'no solo una vez. También puedes cambiar de cuerda con las flechas ← → del teclado. Si nunca se pone verde ' +
             'por poco en ninguna cuerda, prueba primero con un afinador aparte: puede que sea la app, no la guitarra.',
         ),
-        diagDetails,
       ),
     );
     root.appendChild(screen);

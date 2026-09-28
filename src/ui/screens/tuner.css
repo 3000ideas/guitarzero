@@ -287,14 +287,39 @@
 }
 
 .tuner-diag {
-  margin-top: 4px;
+  margin: 8px 0 4px;
   text-align: left;
+  width: 100%;
 }
 
 .tuner-diag summary {
   cursor: pointer;
-  color: var(--muted);
-  font-size: 13px;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  list-style: none;
+}
+
+.tuner-diag summary::-webkit-details-marker {
+  display: none;
+}
+
+.tuner-diag summary::before {
+  content: '▶ ';
+  display: inline-block;
+  transition: transform 0.15s;
+}
+
+.tuner-diag[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.tuner-diag > *:not(summary) {
+  margin-top: 8px;
 }
 
 .tuner-diag audio {
