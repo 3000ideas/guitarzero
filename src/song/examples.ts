@@ -160,6 +160,15 @@ tempo: 64
 C . . . | D . . . | Em*2 - - | Em - - - |
 `;
 
+const SODOMA_INTRO = `title: Sodoma (primera intro)
+artist: Canción personal
+tempo: 80
+strum: D-D-U-U-
+
+D . . . | F#m . . . | D . . . | A . . . |
+D . . . | F#m . . . | D . . . | D . . . |
+`;
+
 const LA_BAMBA = `title: La Bamba
 artist: Tradicional (Veracruz)
 tempo: 150
@@ -194,4 +203,5 @@ export const EXAMPLE_SONGS: StoredSong[] = [
   example('amazing-grace', 'Amazing Grace', 'John Newton (1779), tradicional', AMAZING_GRACE),
   example('balada-em-c-g-d', 'Balada Em C G D', 'Progresión genérica', BALLAD_EM_C_G_D),
   example('la-bamba', 'La Bamba', 'Tradicional (Veracruz)', LA_BAMBA),
+  example('sodoma-intro', 'Sodoma (primera intro)', 'Canción personal', SODOMA_INTRO),
 ];
