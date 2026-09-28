@@ -45,8 +45,16 @@ export const OPEN_STRINGS: ReadonlyArray<{ midi: number; name: string; string: n
 /** Spanish note name for display next to the scientific name, e.g. 'Mi' for E2. */
 const SPANISH_NOTE: Record<string, string> = { E2: 'Mi', A2: 'La', D3: 'Re', G3: 'Sol', B3: 'Si', E4: 'mi' };
 
-export const TUNER_IN_TUNE_CENTS = 5;
-export const TUNER_CLOSE_CENTS = 15;
+/**
+ * ±10 cents, not the ±5 a clip-on piezo tuner can afford: this tuner listens through a room mic
+ * (background noise, other strings ringing, the device's own noise floor) instead of a sensor
+ * clipped to the headstock, a noticeably noisier signal path. A user reported strings a separate
+ * hardware tuner accepted as in tune never reaching "Afinada" here — a more realistic tolerance
+ * for this acquisition method, not a more precise pitch estimate, is the fix (the estimate itself
+ * is already accurate to ~1-2 cents on a clean synthetic signal, see tests/dsp/tuner.test.ts).
+ */
+export const TUNER_IN_TUNE_CENTS = 10;
+export const TUNER_CLOSE_CENTS = 25;
 /** How long a reading must stay within TUNER_IN_TUNE_CENTS before auto-advancing, ms. */
 export const TUNER_HOLD_MS = 1000;
 /** Cents range clamped for the needle/meter position (beyond this, only the text says how far off). */
@@ -55,10 +63,12 @@ export const TUNER_METER_RANGE_CENTS = 50;
 export const TUNER_STALE_MS = 2500;
 /** How long with no audio signal at all after starting before hinting a possible mic problem, ms. */
 export const TUNER_NO_SIGNAL_HINT_MS = 5000;
+/** Weight of each new frame when blending into the smoothed frequency (0..1; lower = steadier but slower to settle). */
+export const TUNER_SMOOTHING = 0.25;
 
 export type TunerZone = 'in-tune' | 'close' | 'off';
 
-/** Colour zone for a cents deviation: within ±5 in tune, within ±15 close, else off. */
+/** Colour zone for a cents deviation: within TUNER_IN_TUNE_CENTS in tune, within TUNER_CLOSE_CENTS close, else off. */
 export function tunerZone(centsOff: number): TunerZone {
   const c = Math.abs(centsOff);
   if (c <= TUNER_IN_TUNE_CENTS) return 'in-tune';
@@ -122,6 +132,13 @@ export const tunerScreen: Screen = {
     /** Last time any frame had real audio above the silence gate (not necessarily a valid pitch). */
     let lastSignalAtMs: number | null = null;
     let startedAtMs: number | null = null;
+    // Smoothing state for the displayed frequency: a mic (room noise, other strings ringing) is a
+    // noisier signal path than a clip-on tuner, so raw frame-to-frame readings jitter a few cents
+    // even for a dead-steady note. Blending them (reset instantly on an actual note change, e.g.
+    // moving to a different string) settles the display instead of letting it "not marcar" green
+    // because a single noisy frame briefly reads outside TUNER_IN_TUNE_CENTS.
+    let smoothedMidi: number | null = null;
+    let smoothedFreqHz: number | null = null;
 
     // ---------------------------------------------------------------- elements
 
@@ -250,6 +267,8 @@ export const tunerScreen: Screen = {
       targetEl.textContent = stringLabel(OPEN_STRINGS[currentIndex]);
       lastReading = null;
       inTuneSinceMs = null;
+      smoothedMidi = null;
+      smoothedFreqHz = null;
       updateNav();
       render();
     }
@@ -329,7 +348,17 @@ export const tunerScreen: Screen = {
       lastSignalAtMs = performance.now();
       fft.magnitudes(samples, mag);
       const reading = detectPitch(mag, mic.context.sampleRate, mic.fftSize, { a4: settings.a4 });
-      if (reading) lastReading = reading;
+      if (!reading) return;
+      // Blend into the running average while the same note keeps sounding; snap instantly to a
+      // fresh value the moment the detected note actually changes (a new pluck, a different
+      // string), so smoothing never makes the display lag behind a real change.
+      if (smoothedMidi === reading.midi && smoothedFreqHz !== null) {
+        smoothedFreqHz += TUNER_SMOOTHING * (reading.freqHz - smoothedFreqHz);
+      } else {
+        smoothedMidi = reading.midi;
+        smoothedFreqHz = reading.freqHz;
+      }
+      lastReading = { ...reading, freqHz: smoothedFreqHz };
     }
 
     async function start(): Promise<void> {

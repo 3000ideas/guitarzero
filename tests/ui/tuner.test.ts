@@ -73,15 +73,17 @@ describe('tunerAdvice', () => {
   });
 
   it('sharp (positive cents) means too tight: tells the player to loosen (aflojar)', () => {
-    expect(tunerAdvice(10)).toMatch(/tensa/i);
-    expect(tunerAdvice(10)).toMatch(/afloja/i);
+    const justOver = TUNER_IN_TUNE_CENTS + 2;
+    expect(tunerAdvice(justOver)).toMatch(/tensa/i);
+    expect(tunerAdvice(justOver)).toMatch(/afloja/i);
     expect(tunerAdvice(40)).toMatch(/tensa/i);
     expect(tunerAdvice(40)).toMatch(/afloja/i);
   });
 
   it('flat (negative cents) means too loose: tells the player to tighten (apretar)', () => {
-    expect(tunerAdvice(-10)).toMatch(/floja/i);
-    expect(tunerAdvice(-10)).toMatch(/aprieta/i);
+    const justUnder = -(TUNER_IN_TUNE_CENTS + 2);
+    expect(tunerAdvice(justUnder)).toMatch(/floja/i);
+    expect(tunerAdvice(justUnder)).toMatch(/aprieta/i);
     expect(tunerAdvice(-40)).toMatch(/floja/i);
     expect(tunerAdvice(-40)).toMatch(/aprieta/i);
   });
