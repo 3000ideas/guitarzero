@@ -498,7 +498,7 @@ export const tunerScreen: Screen = {
       diagMaxRmsDb = -Infinity;
       try {
         if (!diagAlreadyRunning) {
-          await mic.start(settings.inputDeviceId ?? undefined, { echoCancellation: settings.echoCancellation, autoGainControl: true });
+          await mic.start(settings.inputDeviceId ?? undefined, { echoCancellation: settings.echoCancellation });
           if (disposed) return;
         }
         diagRecording = true;
@@ -565,10 +565,8 @@ export const tunerScreen: Screen = {
       try {
         // MicInput owns and resumes its own private capture AudioContext on start() (see
         // audio/mic.ts); the tuner never touches the shared playback context, so it can never
-        // fight a backing track for the audio device. autoGainControl: true (unlike the shared
-        // practice/chord-detection mic) — a single sustained note has no amplitude-judging to
-        // corrupt, and a quiet unamplified acoustic guitar benefits a lot from the boost.
-        await mic.start(settings.inputDeviceId ?? undefined, { echoCancellation: settings.echoCancellation, autoGainControl: true });
+        // fight a backing track for the audio device.
+        await mic.start(settings.inputDeviceId ?? undefined, { echoCancellation: settings.echoCancellation });
         if (disposed) return;
         running = true;
         startedAtMs = performance.now();
