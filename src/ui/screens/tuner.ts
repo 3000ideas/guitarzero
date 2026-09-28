@@ -82,6 +82,14 @@ export const TUNER_CAPTURE_WINDOW_MS = 200;
  */
 export const TUNER_SILENCE_RESET_MS = 150;
 
+/** Range mapped to the live input-level meter (0..100%), same convention as practice.ts. */
+export const TUNER_LEVEL_MIN_DB = -80;
+export const TUNER_LEVEL_MAX_DB = 0;
+
+function clamp(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
 export type TunerZone = 'in-tune' | 'close' | 'off';
 
 /** Colour zone for a cents deviation: within TUNER_IN_TUNE_CENTS in tune, within TUNER_CLOSE_CENTS close, else off. */
@@ -204,10 +212,16 @@ export const tunerScreen: Screen = {
     let diagChunks: Float32Array[] = [];
     let diagMaxRmsDb = -Infinity;
     let diagAutoStopTimer: number | null = null;
+    /** Level of the very last mic frame, silence or not — drives the live "is it hearing me" meter. */
+    let lastRmsDb = -Infinity;
 
     // ---------------------------------------------------------------- elements
 
     const targetEl = h('div.tuner-target', null, stringLabel(OPEN_STRINGS[0]));
+    const levelFill = h('div.tuner-level-fill');
+    const levelGate = h('div.tuner-level-gate', { title: 'Umbral de silencio' });
+    const levelEl = h('div.tuner-level', { title: 'Nivel de entrada del micrófono, en directo' }, levelFill, levelGate);
+    const levelRow = h('div.tuner-level-row', null, h('span.tuner-level-label', null, 'Nivel de entrada:'), levelEl);
     const noteEl = h('div.tuner-note', null, '—');
     const freqEl = h('div.tuner-freq', null, '— Hz');
     const meterFill = h('div.tuner-meter-fill');
@@ -305,6 +319,7 @@ export const tunerScreen: Screen = {
         navRow,
         h('div.tuner-target-label', null, 'Toca esta cuerda:'),
         targetEl,
+        levelRow,
         noteEl,
         freqEl,
         meter,
@@ -378,6 +393,15 @@ export const tunerScreen: Screen = {
       // instant real audio (above the silence gate) comes in — visible proof the mic is alive,
       // independent of whether a note was actually recognised yet.
       ledEl.className = !running ? 'tuner-led' : signalAgeMs < 400 ? 'tuner-led is-signal' : 'tuner-led is-listening';
+      // Live input meter: moves with the RAW level of the very last mic frame, silence or not —
+      // unlike the note/cents display (which only updates once per identified pluck), this proves
+      // in real time whether the microphone is receiving anything at all, no recording required.
+      const rmsForMeter = running ? lastRmsDb : TUNER_LEVEL_MIN_DB;
+      const levelPct = Math.round(clamp((rmsForMeter - TUNER_LEVEL_MIN_DB) / (TUNER_LEVEL_MAX_DB - TUNER_LEVEL_MIN_DB), 0, 1) * 100);
+      levelFill.style.width = `${levelPct}%`;
+      levelFill.classList.toggle('below', rmsForMeter < settings.gateDb);
+      const gatePct = Math.round(clamp((settings.gateDb - TUNER_LEVEL_MIN_DB) / (TUNER_LEVEL_MAX_DB - TUNER_LEVEL_MIN_DB), 0, 1) * 100);
+      levelGate.style.left = `${gatePct}%`;
       const target = OPEN_STRINGS[currentIndex];
       // The reading is kept on screen after the string stops ringing (like a real tuner's needle
       // holding its last position), not cleared after a short timeout: the player needs time to
@@ -447,7 +471,9 @@ export const tunerScreen: Screen = {
       // ringing — treating every single dip as "the note ended" reset the capture window before
       // it ever had a chance to complete, so the tuner never identified anything at all. Only a
       // gap LONGER than TUNER_SILENCE_RESET_MS (checked below) counts as real silence.
-      if (rmsDbOf(samples) < settings.gateDb) return;
+      const rmsDb = rmsDbOf(samples);
+      lastRmsDb = rmsDb; // every frame, silence included: the live meter must show the true level
+      if (rmsDb < settings.gateDb) return;
       const now = performance.now();
       const gapMs = lastSignalAtMs === null ? Infinity : now - lastSignalAtMs;
       lastSignalAtMs = now;
@@ -598,6 +624,7 @@ export const tunerScreen: Screen = {
       inTuneSinceMs = null;
       lastSignalAtMs = null;
       startedAtMs = null;
+      lastRmsDb = -Infinity;
       locked = false;
       captureStartMs = null;
       captured = [];

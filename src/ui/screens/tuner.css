@@ -88,6 +88,52 @@
   color: var(--text);
 }
 
+.tuner-level-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.tuner-level-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tuner-level {
+  position: relative;
+  width: 140px;
+  height: 12px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.tuner-level-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  transition: width 50ms linear;
+}
+
+.tuner-level-fill.below {
+  background: var(--muted);
+}
+
+.tuner-level-gate {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  left: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--warn);
+}
+
 .tuner-note {
   font-size: 64px;
   font-weight: 700;
