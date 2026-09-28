@@ -74,6 +74,13 @@ export const TUNER_NO_SIGNAL_HINT_MS = 5000;
  */
 export const TUNER_CAPTURE_DELAY_MS = 60;
 export const TUNER_CAPTURE_WINDOW_MS = 200;
+/**
+ * A gap shorter than this between above-gate frames is NOT treated as the note ending: a real
+ * ringing string's level pulses (natural beating between the vibration's two polarisations) and
+ * can dip below the gate for a frame or two while still audibly ringing. Only a gap longer than
+ * this — several missed 40 ms mic frames in a row — means the string actually went quiet.
+ */
+export const TUNER_SILENCE_RESET_MS = 150;
 
 export type TunerZone = 'in-tune' | 'close' | 'off';
 
@@ -141,11 +148,11 @@ export const tunerScreen: Screen = {
     /** Last time any frame had real audio above the silence gate (not necessarily a valid pitch). */
     let lastSignalAtMs: number | null = null;
     let startedAtMs: number | null = null;
-    // Capture-once-per-pluck state (see TUNER_CAPTURE_* above): wasAboveGate detects the
-    // silence -> signal edge that starts a new pluck; captured collects readings during the
-    // capture window; locked is true once this pluck's single reading has been decided, so
-    // further frames of the same ringing note are ignored until the next silence.
-    let wasAboveGate = false;
+    // Capture-once-per-pluck state (see TUNER_CAPTURE_*/TUNER_SILENCE_RESET_MS above): a gap of
+    // more than TUNER_SILENCE_RESET_MS since the last above-gate frame (lastSignalAtMs) starts a
+    // new pluck; captured collects readings during its capture window; locked is true once this
+    // pluck's single reading has been decided, so further frames of the same ringing note are
+    // ignored until a real silence gap.
     let locked = false;
     let captureStartMs: number | null = null;
     let captured: TunerReading[] = [];
@@ -277,7 +284,10 @@ export const tunerScreen: Screen = {
       targetEl.textContent = stringLabel(OPEN_STRINGS[currentIndex]);
       lastReading = null;
       inTuneSinceMs = null;
-      wasAboveGate = false;
+      // Force the next above-gate frame to read as a fresh pluck (a large gap), even if the
+      // previous string is still audibly ringing: switching targets must always start a new
+      // capture for the newly-selected string, not silently continue the old one's.
+      lastSignalAtMs = null;
       locked = false;
       captureStartMs = null;
       captured = [];
@@ -351,30 +361,28 @@ export const tunerScreen: Screen = {
     }
 
     function onMicFrame(samples: Float32Array): void {
-      // Below the gate the frame is silence / room noise. This is also what ends a pluck: the
-      // next time the signal rises above the gate is a NEW pluck, ready to be identified again.
-      // Without this, "the loudest peak in the frame" is still a peak even when the frame is
-      // silence, so the tuner reported a phantom note the instant it started listening. Same gate
-      // the chord detector uses (rmsDbOf + settings.gateDb), so "silence" means the same thing
-      // everywhere in the app.
-      const above = rmsDbOf(samples) >= settings.gateDb;
-      if (!above) {
-        wasAboveGate = false;
+      // Below the gate the frame is silence / room noise: ignored, exactly like the chord
+      // detector's own gate (rmsDbOf + settings.gateDb — "silence" means the same thing
+      // everywhere in the app). Without this, "the loudest peak in the frame" is still a peak
+      // even when the frame is silence, so the tuner reported a phantom note before any string
+      // was played. Note this does NOT by itself mean a ringing note just ended: a real string's
+      // level naturally pulses (two slightly different polarisations of the vibration beating
+      // against each other) and can dip below the gate for a frame or two while still audibly
+      // ringing — treating every single dip as "the note ended" reset the capture window before
+      // it ever had a chance to complete, so the tuner never identified anything at all. Only a
+      // gap LONGER than TUNER_SILENCE_RESET_MS (checked below) counts as real silence.
+      if (rmsDbOf(samples) < settings.gateDb) return;
+      const now = performance.now();
+      const gapMs = lastSignalAtMs === null ? Infinity : now - lastSignalAtMs;
+      lastSignalAtMs = now;
+      if (gapMs > TUNER_SILENCE_RESET_MS) {
+        // A real gap since the last audio: this is a genuinely new pluck. Begin its capture window.
         locked = false;
-        captureStartMs = null;
-        captured = [];
-        return;
-      }
-      lastSignalAtMs = performance.now();
-      if (!wasAboveGate) {
-        // Rising edge: a new pluck just started. Begin its capture window.
-        wasAboveGate = true;
-        locked = false;
-        captureStartMs = performance.now();
+        captureStartMs = now;
         captured = [];
       }
       if (locked || captureStartMs === null) return; // this pluck is already identified
-      const elapsedMs = performance.now() - captureStartMs;
+      const elapsedMs = now - captureStartMs;
       if (elapsedMs < TUNER_CAPTURE_DELAY_MS) return; // still inside the noisy pick attack
       fft.magnitudes(samples, mag);
       const reading = detectPitch(mag, mic.context.sampleRate, mic.fftSize, { a4: settings.a4 });
@@ -434,7 +442,6 @@ export const tunerScreen: Screen = {
       inTuneSinceMs = null;
       lastSignalAtMs = null;
       startedAtMs = null;
-      wasAboveGate = false;
       locked = false;
       captureStartMs = null;
       captured = [];
