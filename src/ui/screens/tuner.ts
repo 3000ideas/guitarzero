@@ -63,8 +63,17 @@ export const TUNER_METER_RANGE_CENTS = 50;
 export const TUNER_STALE_MS = 2500;
 /** How long with no audio signal at all after starting before hinting a possible mic problem, ms. */
 export const TUNER_NO_SIGNAL_HINT_MS = 5000;
-/** Weight of each new frame when blending into the smoothed frequency (0..1; lower = steadier but slower to settle). */
-export const TUNER_SMOOTHING = 0.25;
+/**
+ * After a pluck (silence -> signal), the first ms are the noisy pick attack: skipped entirely.
+ * A window of the next TUNER_CAPTURE_WINDOW_MS is then collected and its MEDIAN reading becomes
+ * the one, fixed identification for that pluck — not a continuously live, still-updating number.
+ * A live number that keeps drifting a few cents as the note rings and decays (normal: mic noise,
+ * the note's own natural pitch settling) never visibly "stops", so a truly in-tune string could
+ * look like it is still moving instead of reading as done. One clean reading per pluck, held
+ * until the next pluck, is what "quitar el silencio y solo identificar la cuerda" asks for.
+ */
+export const TUNER_CAPTURE_DELAY_MS = 60;
+export const TUNER_CAPTURE_WINDOW_MS = 200;
 
 export type TunerZone = 'in-tune' | 'close' | 'off';
 
@@ -132,13 +141,14 @@ export const tunerScreen: Screen = {
     /** Last time any frame had real audio above the silence gate (not necessarily a valid pitch). */
     let lastSignalAtMs: number | null = null;
     let startedAtMs: number | null = null;
-    // Smoothing state for the displayed frequency: a mic (room noise, other strings ringing) is a
-    // noisier signal path than a clip-on tuner, so raw frame-to-frame readings jitter a few cents
-    // even for a dead-steady note. Blending them (reset instantly on an actual note change, e.g.
-    // moving to a different string) settles the display instead of letting it "not marcar" green
-    // because a single noisy frame briefly reads outside TUNER_IN_TUNE_CENTS.
-    let smoothedMidi: number | null = null;
-    let smoothedFreqHz: number | null = null;
+    // Capture-once-per-pluck state (see TUNER_CAPTURE_* above): wasAboveGate detects the
+    // silence -> signal edge that starts a new pluck; captured collects readings during the
+    // capture window; locked is true once this pluck's single reading has been decided, so
+    // further frames of the same ringing note are ignored until the next silence.
+    let wasAboveGate = false;
+    let locked = false;
+    let captureStartMs: number | null = null;
+    let captured: TunerReading[] = [];
 
     // ---------------------------------------------------------------- elements
 
@@ -267,8 +277,10 @@ export const tunerScreen: Screen = {
       targetEl.textContent = stringLabel(OPEN_STRINGS[currentIndex]);
       lastReading = null;
       inTuneSinceMs = null;
-      smoothedMidi = null;
-      smoothedFreqHz = null;
+      wasAboveGate = false;
+      locked = false;
+      captureStartMs = null;
+      captured = [];
       updateNav();
       render();
     }
@@ -339,26 +351,45 @@ export const tunerScreen: Screen = {
     }
 
     function onMicFrame(samples: Float32Array): void {
-      // Below the gate the frame is silence / room noise: never produce a reading for it. Without
-      // this, "the loudest peak in the frame" is still a peak even when the frame is silence, so
-      // the tuner reported a phantom note the instant it started listening, before any string was
-      // played. Same gate the chord detector uses (rmsDbOf + settings.gateDb), so "silence" means
-      // the same thing everywhere in the app.
-      if (rmsDbOf(samples) < settings.gateDb) return;
+      // Below the gate the frame is silence / room noise. This is also what ends a pluck: the
+      // next time the signal rises above the gate is a NEW pluck, ready to be identified again.
+      // Without this, "the loudest peak in the frame" is still a peak even when the frame is
+      // silence, so the tuner reported a phantom note the instant it started listening. Same gate
+      // the chord detector uses (rmsDbOf + settings.gateDb), so "silence" means the same thing
+      // everywhere in the app.
+      const above = rmsDbOf(samples) >= settings.gateDb;
+      if (!above) {
+        wasAboveGate = false;
+        locked = false;
+        captureStartMs = null;
+        captured = [];
+        return;
+      }
       lastSignalAtMs = performance.now();
+      if (!wasAboveGate) {
+        // Rising edge: a new pluck just started. Begin its capture window.
+        wasAboveGate = true;
+        locked = false;
+        captureStartMs = performance.now();
+        captured = [];
+      }
+      if (locked || captureStartMs === null) return; // this pluck is already identified
+      const elapsedMs = performance.now() - captureStartMs;
+      if (elapsedMs < TUNER_CAPTURE_DELAY_MS) return; // still inside the noisy pick attack
       fft.magnitudes(samples, mag);
       const reading = detectPitch(mag, mic.context.sampleRate, mic.fftSize, { a4: settings.a4 });
-      if (!reading) return;
-      // Blend into the running average while the same note keeps sounding; snap instantly to a
-      // fresh value the moment the detected note actually changes (a new pluck, a different
-      // string), so smoothing never makes the display lag behind a real change.
-      if (smoothedMidi === reading.midi && smoothedFreqHz !== null) {
-        smoothedFreqHz += TUNER_SMOOTHING * (reading.freqHz - smoothedFreqHz);
-      } else {
-        smoothedMidi = reading.midi;
-        smoothedFreqHz = reading.freqHz;
+      if (reading) captured.push(reading);
+      if (elapsedMs >= TUNER_CAPTURE_DELAY_MS + TUNER_CAPTURE_WINDOW_MS) {
+        // Capture window closed: lock in the median reading (robust to a single noisy frame) as
+        // THE identification for this pluck. Further frames of the same ringing note are ignored
+        // (see the `locked` check above) until the string goes quiet and is plucked again.
+        locked = true;
+        if (captured.length > 0) {
+          const sorted = [...captured].sort((a, b) => a.freqHz - b.freqHz);
+          lastReading = sorted[Math.floor(sorted.length / 2)];
+        }
+        captured = [];
       }
-      lastReading = { ...reading, freqHz: smoothedFreqHz };
     }
 
     async function start(): Promise<void> {
@@ -403,6 +434,10 @@ export const tunerScreen: Screen = {
       inTuneSinceMs = null;
       lastSignalAtMs = null;
       startedAtMs = null;
+      wasAboveGate = false;
+      locked = false;
+      captureStartMs = null;
+      captured = [];
       startBtn.hidden = false;
       stopBtn.hidden = true;
       statusEl.textContent = 'Pulsa Empezar y toca la cuerda señalada arriba.';
