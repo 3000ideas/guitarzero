@@ -860,37 +860,57 @@ export class HighwayRenderer {
     const ctx = this.ctx;
     const midY = (L.stringsTop + L.stringsBottom) / 2;
     const textY0 = L.stringsTop + L.rowGap * 1.2;
+    // Both rings below are fixed at the strike line, NOT eventX(...): detecting a strum, and then
+    // matching its chord, both take a little real time (the audio has to be analysed). By the
+    // time either can be drawn the ball has already moved on and that event's own marker has
+    // scrolled past the strike line — anchoring to the event's scrolling position (or to the
+    // ball, which by verdict time is already mid-flight to the NEXT beat) put the "you just
+    // played something" / "was it right" confirmations visibly behind the ball, over an older
+    // beat: on a different line than the one the player is actually looking at. These are an
+    // instant, at-a-glance acknowledgement, not a historical record (drawEvents' verdict-colour
+    // marker already provides that, correctly anchored to the judged event on the timeline), so
+    // they belong exactly where the player is looking: here.
+    const x = L.strikeX;
     for (let i = from; i < to; i++) {
       const fb = this.feedback.get(i);
-      if (!fb || !fb.hit) continue;
-      const t = (nowMs - fb.firstSeenMs) / HIT_ANIM_MS;
-      if (t < 0 || t >= 1) continue;
-      // Fixed at the strike line, NOT eventX(...): detecting a strum takes a little real time
-      // (the audio has to be analysed), so by the time this ring can be drawn the ball has
-      // already moved on and that event's own marker has scrolled past the strike line. Anchoring
-      // the ring to the event's scrolling position put the "you just hit something" confirmation
-      // visibly behind the ball, over an older beat — i.e. on a different line than the one the
-      // player is actually looking at. This ring is an instant, at-a-glance acknowledgement, not
-      // a historical record (drawEvents' verdict-colour pulse already provides that, correctly
-      // anchored to the judged event), so it belongs exactly where the player is looking: here.
-      const x = L.strikeX;
-      ctx.globalAlpha = 1 - t;
-      ctx.strokeStyle = C.white;
-      ctx.lineWidth = 1 + 2 * (1 - t);
-      ctx.beginPath();
-      ctx.arc(x, midY, L.markerR * 1.4 + 30 * t, 0, TAU);
-      ctx.stroke();
-      const text = timingText(fb.hit.timingLabel);
-      if (text) {
-        ctx.font = FONT_FLOAT;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'bottom';
-        const y = textY0 - 28 * t;
-        ctx.lineWidth = 4;
-        ctx.strokeStyle = C.bg;
-        ctx.strokeText(text, x, y);
-        ctx.fillStyle = C.white;
-        ctx.fillText(text, x, y);
+      if (!fb) continue;
+      if (fb.hit) {
+        const t = (nowMs - fb.firstSeenMs) / HIT_ANIM_MS;
+        if (t >= 0 && t < 1) {
+          ctx.globalAlpha = 1 - t;
+          ctx.strokeStyle = C.white;
+          ctx.lineWidth = 1 + 2 * (1 - t);
+          ctx.beginPath();
+          ctx.arc(x, midY, L.markerR * 1.4 + 30 * t, 0, TAU);
+          ctx.stroke();
+          const text = timingText(fb.hit.timingLabel);
+          if (text) {
+            ctx.font = FONT_FLOAT;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            const y = textY0 - 28 * t;
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = C.bg;
+            ctx.strokeText(text, x, y);
+            ctx.fillStyle = C.white;
+            ctx.fillText(text, x, y);
+          }
+        }
+      }
+      // Chord-correctness confirmation (green/red/grey): timed from when the verdict itself
+      // resolved, up to analysisWindowSec after the hit above — a second, later pulse at the
+      // same spot, not the first one recoloured, since the two events genuinely happen at
+      // different times (rhythm is known instantly, the chord only once it has been analysed).
+      if (fb.verdict && fb.verdict.kind !== 'skipped') {
+        const tv = (nowMs - fb.verdictSeenMs) / HIT_ANIM_MS;
+        if (tv >= 0 && tv < 1) {
+          ctx.globalAlpha = 1 - tv;
+          ctx.strokeStyle = verdictColor(fb.verdict.kind);
+          ctx.lineWidth = 2 + 2 * (1 - tv);
+          ctx.beginPath();
+          ctx.arc(x, midY, L.markerR * 1.8 + 30 * tv, 0, TAU);
+          ctx.stroke();
+        }
       }
     }
     ctx.globalAlpha = 1;
