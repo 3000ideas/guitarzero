@@ -458,7 +458,7 @@ export class HighwayRenderer {
     this.drawStrings();
     this.drawStrikeLine();
     this.drawEvents(state, beat, range.from, range.to, countStart, nowMs);
-    this.drawHitOverlays(beat, range.from, range.to, nowMs);
+    this.drawHitOverlays(range.from, range.to, nowMs);
     if (phase !== 'idle') this.drawBall(state, beat, countIn, nowMs);
     this.ctx.globalAlpha = 1;
   }
@@ -855,10 +855,9 @@ export class HighwayRenderer {
   }
 
   /** Phase 1 feedback: white ring + floating timing text, 1 s from the hit. */
-  private drawHitOverlays(beat: number, from: number, to: number, nowMs: number): void {
+  private drawHitOverlays(from: number, to: number, nowMs: number): void {
     const L = this.layout;
     const ctx = this.ctx;
-    const events = this.song.events;
     const midY = (L.stringsTop + L.stringsBottom) / 2;
     const textY0 = L.stringsTop + L.rowGap * 1.2;
     for (let i = from; i < to; i++) {
@@ -866,7 +865,15 @@ export class HighwayRenderer {
       if (!fb || !fb.hit) continue;
       const t = (nowMs - fb.firstSeenMs) / HIT_ANIM_MS;
       if (t < 0 || t >= 1) continue;
-      const x = eventX(events[i].time, beat, L.strikeX, L.pxPerBeat);
+      // Fixed at the strike line, NOT eventX(...): detecting a strum takes a little real time
+      // (the audio has to be analysed), so by the time this ring can be drawn the ball has
+      // already moved on and that event's own marker has scrolled past the strike line. Anchoring
+      // the ring to the event's scrolling position put the "you just hit something" confirmation
+      // visibly behind the ball, over an older beat — i.e. on a different line than the one the
+      // player is actually looking at. This ring is an instant, at-a-glance acknowledgement, not
+      // a historical record (drawEvents' verdict-colour pulse already provides that, correctly
+      // anchored to the judged event), so it belongs exactly where the player is looking: here.
+      const x = L.strikeX;
       ctx.globalAlpha = 1 - t;
       ctx.strokeStyle = C.white;
       ctx.lineWidth = 1 + 2 * (1 - t);
