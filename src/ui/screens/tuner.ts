@@ -160,6 +160,17 @@ function encodeWavMono(samples: Float32Array, sampleRate: number): Blob {
   return new Blob([buffer], { type: 'audio/wav' });
 }
 
+/** Safety cap on the diagnostic recording if the player forgets to press Parar, seconds. */
+export const DIAG_MAX_SEC = 30;
+
+/** Plain-language read of a diagnostic recording's peak level — no decibels, for a non-technical reader. */
+export function diagLevelDescription(maxRmsDb: number): string {
+  if (maxRmsDb === -Infinity) return 'No se detectó ningún sonido.';
+  if (maxRmsDb >= -20) return 'Se detectó sonido con buen nivel.';
+  if (maxRmsDb >= -40) return 'Se detectó sonido, pero flojo.';
+  return 'Casi no se detectó sonido: muy flojo.';
+}
+
 export const tunerScreen: Screen = {
   mount(root: HTMLElement, _params: Record<string, string>): () => void {
     void _params;
@@ -186,8 +197,13 @@ export const tunerScreen: Screen = {
     let locked = false;
     let captureStartMs: number | null = null;
     let captured: TunerReading[] = [];
-    let diagRunning = false;
+    let diagRecording = false;
     let diagAudioUrl: string | null = null;
+    let diagUnsub: (() => void) | null = null;
+    let diagAlreadyRunning = false;
+    let diagChunks: Float32Array[] = [];
+    let diagMaxRmsDb = -Infinity;
+    let diagAutoStopTimer: number | null = null;
 
     // ---------------------------------------------------------------- elements
 
@@ -250,20 +266,15 @@ export const tunerScreen: Screen = {
     const stopBtn = h('button.btn', { type: 'button', hidden: true, onclick: () => stop() }, 'Detener') as HTMLButtonElement;
     const retryBtn = h('button.btn', { type: 'button', hidden: true, onclick: () => void start() }, 'Reintentar') as HTMLButtonElement;
 
-    // Diagnostic recording: when the identified note looks wrong or never changes, the player
-    // needs to see (and, crucially, HEAR) exactly what the microphone is actually picking up —
-    // it might be the room / a noise source, not the guitar. Same idea as Settings' "Diagnóstico"
-    // panel (a real recording, not a console script), but with audio playback added: a per-frame
-    // table alone cannot tell "the guitar is just too quiet through this mic" from "the algorithm
-    // is wrong" the way actually hearing the recording can.
-    const DIAG_DURATION_SEC = 8;
-    const diagBtn = h(
-      'button.btn.btn-sm',
-      { type: 'button', onclick: () => void runTunerDiagnostic() },
-      `Grabar ${DIAG_DURATION_SEC} s y escuchar`,
-    ) as HTMLButtonElement;
-    const diagStatus = h('div.tuner-diag-status', null, 'Toca varias cuerdas, una por una, mientras graba.');
-    const diagOutput = h('pre.tuner-diag-output', { hidden: true });
+    // Diagnostic recording: two clear steps, nothing technical. 1) Grabar/Parar records exactly
+    // as long as the player wants (no countdown to follow along with). 2) the recording appears
+    // as a normal audio player — press ▶ and LISTEN. That's the whole test: if the guitar is
+    // clearly audible in the playback, the mic is working; if it's mostly silence/hum, the mic
+    // (or its input volume) is the problem, not the app. An earlier version also printed a
+    // per-frame table of dB/Hz numbers; a user explicitly said that was unreadable ("no entiendo
+    // el resultado ni nada") — the one plain-language line below replaces it entirely.
+    const diagBtn = h('button.btn.btn-sm', { type: 'button', onclick: () => void toggleDiagRecording() }, '● Grabar') as HTMLButtonElement;
+    const diagStatus = h('div.tuner-diag-status', null, '');
     const diagAudioEl = h('audio', { controls: true, hidden: true }) as HTMLAudioElement;
     const diagDetails = h(
       'details.tuner-diag',
@@ -272,16 +283,14 @@ export const tunerScreen: Screen = {
       h(
         'p.tuner-help',
         null,
-        'Si el afinador siempre marca la misma nota pase lo que pase, puede que el micrófono esté ' +
-          'oyendo otra cosa (ruido del ordenador, del ventilador…) en vez de la guitarra, sobre todo ' +
-          'si es una guitarra acústica sin amplificar. Graba unos segundos tocando varias cuerdas y ' +
-          'reproduce la grabación: si apenas se oye la guitarra, el problema es el micrófono o su ' +
-          'volumen de entrada, no esta app.',
+        '1. Pulsa Grabar. 2. Toca cada cuerda, una por una (sobre todo si es una guitarra acústica ' +
+          'sin amplificar, acércate al micrófono). 3. Pulsa Parar. 4. Pulsa ▶ en el reproductor y ' +
+          'escucha: si se oye bien la guitarra, el micrófono funciona; si apenas se oye, el problema ' +
+          'es el micrófono o su volumen de entrada, no esta app.',
       ),
       diagBtn,
       diagStatus,
       diagAudioEl,
-      diagOutput,
     );
 
     const screen = h(
@@ -468,78 +477,76 @@ export const tunerScreen: Screen = {
     }
 
     /**
-     * Records DIAG_DURATION_SEC of raw microphone audio, listing every analysed frame's level and
-     * detected note/Hz (like Settings' diagnostic panel), and — the part a table alone can't give
-     * — makes the actual recording playable, so "is the mic even hearing the guitar" can be
-     * answered by listening instead of guessing from numbers. Reuses the running mic session if
-     * the tuner is already listening; otherwise starts (and stops) one just for this recording.
+     * Grabar/Parar: two plain steps. Records raw microphone audio for as long as the player wants
+     * (no countdown to follow), then turns it into a normal, playable recording — "is the mic
+     * even hearing the guitar" is answered by listening, not by reading numbers (an earlier
+     * version printed a per-frame dB/Hz table; a user said outright they could not understand it).
+     * Reuses the tuner's own mic session if it is already listening; otherwise starts (and stops)
+     * one just for this recording. DIAG_MAX_SEC auto-stops it if the player forgets to.
      */
-    async function runTunerDiagnostic(): Promise<void> {
-      if (diagRunning || disposed) return;
-      diagRunning = true;
+    async function toggleDiagRecording(): Promise<void> {
+      if (diagRecording) {
+        stopDiagRecording();
+        return;
+      }
+      if (disposed) return;
       diagBtn.disabled = true;
-      diagOutput.hidden = true;
       diagAudioEl.hidden = true;
       diagStatus.textContent = 'Preparando el micrófono…';
-      const alreadyRunning = running;
-      const diagFft = new RealFFT(mic.fftSize);
-      const diagMag = new Float32Array((mic.fftSize >> 1) + 1);
-      const chunks: Float32Array[] = [];
-      const rows: string[] = [];
-      let maxRmsDb = -Infinity;
+      diagAlreadyRunning = running;
+      diagChunks = [];
+      diagMaxRmsDb = -Infinity;
       try {
-        if (!alreadyRunning) {
+        if (!diagAlreadyRunning) {
           await mic.start(settings.inputDeviceId ?? undefined, { echoCancellation: settings.echoCancellation });
           if (disposed) return;
         }
-        const t0 = performance.now();
-        let lastShownSecLeft = -1;
-        const unsub = mic.onFrame((samples) => {
-          chunks.push(samples);
+        diagRecording = true;
+        diagBtn.textContent = '■ Parar';
+        diagStatus.textContent = 'Grabando… toca cada cuerda, una por una.';
+        diagUnsub = mic.onFrame((samples) => {
+          diagChunks.push(samples);
           const rmsDb = rmsDbOf(samples);
-          if (rmsDb > maxRmsDb) maxRmsDb = rmsDb;
-          diagFft.magnitudes(samples, diagMag);
-          const reading = rmsDb >= settings.gateDb ? detectPitch(diagMag, mic.context.sampleRate, mic.fftSize, { a4: settings.a4 }) : null;
-          const elapsed = (performance.now() - t0) / 1000;
-          rows.push(
-            `${elapsed.toFixed(2).padStart(5)} s   rms ${rmsDb.toFixed(1).padStart(6)} dB   ` +
-              (reading ? `${reading.noteName.padEnd(3)} ${reading.freqHz.toFixed(1).padStart(6)} Hz` : '—'),
-          );
-          const secLeft = Math.max(0, Math.ceil(DIAG_DURATION_SEC - elapsed));
-          if (secLeft !== lastShownSecLeft) {
-            lastShownSecLeft = secLeft;
-            diagStatus.textContent = secLeft > 0 ? `Grabando… toca varias cuerdas, una por una (${secLeft} s)` : 'Grabando…';
-          }
+          if (rmsDb > diagMaxRmsDb) diagMaxRmsDb = rmsDb;
         });
-        await new Promise((resolve) => setTimeout(resolve, DIAG_DURATION_SEC * 1000));
-        unsub();
-        if (disposed) return;
-        diagOutput.textContent = rows.length > 0 ? rows.join('\n') : '(no llegó ningún fotograma del micrófono)';
-        diagOutput.hidden = false;
-        const totalLen = chunks.reduce((n, c) => n + c.length, 0);
-        const merged = new Float32Array(totalLen);
-        let off = 0;
-        for (const c of chunks) {
-          merged.set(c, off);
-          off += c.length;
-        }
-        if (totalLen > 0) {
-          const wav = encodeWavMono(merged, mic.context.sampleRate);
-          if (diagAudioUrl) URL.revokeObjectURL(diagAudioUrl);
-          diagAudioUrl = URL.createObjectURL(wav);
-          diagAudioEl.src = diagAudioUrl;
-          diagAudioEl.hidden = false;
-          diagStatus.textContent = `Nivel máximo: ${maxRmsDb === -Infinity ? '—' : `${maxRmsDb.toFixed(1)} dB`}. Pulsa ▶ para escuchar exactamente lo que oyó el micrófono.`;
-        } else {
-          diagStatus.textContent = 'No se recibió audio del micrófono.';
-        }
+        diagAutoStopTimer = window.setTimeout(() => stopDiagRecording(), DIAG_MAX_SEC * 1000);
       } catch (err) {
-        if (!disposed) diagStatus.textContent = err instanceof MicError ? err.message : 'No se pudo grabar el micrófono';
+        if (!disposed) diagStatus.textContent = err instanceof MicError ? err.message : 'No se pudo acceder al micrófono';
       } finally {
-        if (!alreadyRunning) mic.stop();
-        diagRunning = false;
         if (!disposed) diagBtn.disabled = false;
       }
+    }
+
+    function stopDiagRecording(): void {
+      if (!diagRecording) return;
+      diagRecording = false;
+      diagBtn.textContent = '● Grabar';
+      if (diagAutoStopTimer !== null) {
+        clearTimeout(diagAutoStopTimer);
+        diagAutoStopTimer = null;
+      }
+      diagUnsub?.();
+      diagUnsub = null;
+      if (!diagAlreadyRunning) mic.stop();
+      const totalLen = diagChunks.reduce((n, c) => n + c.length, 0);
+      if (totalLen === 0) {
+        diagStatus.textContent = 'No se recibió audio del micrófono.';
+        diagChunks = [];
+        return;
+      }
+      const merged = new Float32Array(totalLen);
+      let off = 0;
+      for (const c of diagChunks) {
+        merged.set(c, off);
+        off += c.length;
+      }
+      diagChunks = [];
+      const wav = encodeWavMono(merged, mic.context.sampleRate);
+      if (diagAudioUrl) URL.revokeObjectURL(diagAudioUrl);
+      diagAudioUrl = URL.createObjectURL(wav);
+      diagAudioEl.src = diagAudioUrl;
+      diagAudioEl.hidden = false;
+      diagStatus.textContent = `${diagLevelDescription(diagMaxRmsDb)} Pulsa ▶ y escucha la grabación.`;
     }
 
     async function start(): Promise<void> {
@@ -601,6 +608,8 @@ export const tunerScreen: Screen = {
       cancelAnimationFrame(raf);
       mic.stop();
       window.removeEventListener('keydown', handleKeydown);
+      if (diagAutoStopTimer !== null) clearTimeout(diagAutoStopTimer);
+      diagUnsub?.();
       if (diagAudioUrl) URL.revokeObjectURL(diagAudioUrl);
       screen.remove();
     };

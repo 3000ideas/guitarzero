@@ -5,6 +5,7 @@ import {
   TUNER_FAR_CENTS,
   TUNER_IN_TUNE_CENTS,
   centsFromTarget,
+  diagLevelDescription,
   needleFraction,
   stringLabel,
   tunerAdvice,
@@ -118,5 +119,14 @@ describe('OPEN_STRINGS', () => {
     expect(OPEN_STRINGS.map((s) => s.name)).toEqual(['E2', 'A2', 'D3', 'G3', 'B3', 'E4']);
     expect(OPEN_STRINGS.map((s) => s.midi)).toEqual([40, 45, 50, 55, 59, 64]);
     expect(OPEN_STRINGS.map((s) => s.string)).toEqual([6, 5, 4, 3, 2, 1]);
+  });
+});
+
+describe('diagLevelDescription', () => {
+  it('reads a peak level in plain language, no decibels', () => {
+    expect(diagLevelDescription(-Infinity)).toMatch(/no se detectó ningún sonido/i);
+    expect(diagLevelDescription(-15)).toMatch(/buen nivel/i);
+    expect(diagLevelDescription(-30)).toMatch(/flojo/i);
+    expect(diagLevelDescription(-55)).toMatch(/muy flojo/i);
   });
 });
