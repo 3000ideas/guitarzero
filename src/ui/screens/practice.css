@@ -755,7 +755,7 @@
   }
 
   .practice-diagrams {
-    height: clamp(110px, 20vh, 170px);
+    height: clamp(100px, 16vh, 150px);
   }
 
   .practice-diagram.current canvas {
@@ -764,5 +764,58 @@
 
   .practice-diagram.next canvas {
     width: 80px;
+  }
+
+  /*
+   * The header (tempo/speed controls, checkboxes, mic status + level meter, calibration banner)
+   * was measured eating ~42% of a 375x812 viewport before this block, leaving the highway — where
+   * the hit/rhythm judging is actually drawn — only ~27% instead of the ~40% this file documents
+   * as the intent (see the top-of-file comment). A player who can't clearly see whether a strum
+   * landed on time is looking at a canvas that's smaller than designed because these secondary
+   * controls were never compacted for narrow *portrait* phones (only for landscape/short-height).
+   */
+  .practice-header {
+    padding: 4px 10px;
+    gap: 2px 10px;
+  }
+
+  .practice-mic {
+    min-height: 32px;
+    gap: 4px 8px;
+  }
+
+  .practice-mic-label,
+  .practice-mic-status {
+    font-size: 12px;
+  }
+
+  .practice-level {
+    width: 90px;
+    height: 10px;
+  }
+
+  .practice-field,
+  .practice-toggle {
+    min-height: 32px;
+    font-size: 13px;
+  }
+
+  .practice-select {
+    min-height: 30px;
+    font-size: 13px;
+  }
+
+  .practice-chord-live {
+    font-size: 20px;
+  }
+
+  .practice-banner {
+    padding: 4px 10px;
+    gap: 6px;
+    font-size: 12px;
+  }
+
+  .practice-hint {
+    display: none;
   }
 }
