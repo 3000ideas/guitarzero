@@ -25,7 +25,7 @@
 import './tuner.css';
 import type { Screen } from '../../types';
 import { getFlag, loadSettings, setFlag } from '../../song/storage';
-import { MicError, MicInput } from '../../audio/mic';
+import { MIC_CAPTURE_INTERVAL_MS, MicError, MicInput } from '../../audio/mic';
 import { RealFFT } from '../../dsp/fft';
 import { rmsDbOf } from '../../dsp/detector';
 import { detectPitch, type TunerReading } from '../../dsp/tuner';
@@ -504,8 +504,15 @@ export const tunerScreen: Screen = {
         diagRecording = true;
         diagBtn.textContent = '■ Parar';
         diagStatus.textContent = 'Grabando… toca cada cuerda, una por una.';
+        // Each mic frame is the last fftSize samples (~170-190 ms), refreshed every
+        // MIC_CAPTURE_INTERVAL_MS (40 ms) — frames overlap HEAVILY (built for FFT analysis, not
+        // for recording). Concatenating whole frames replays most of each ~40 ms of real audio
+        // 4-5 times over, which is exactly what "se entrecorta" (stutter/warble) sounds like.
+        // Only the newest ~40 ms tail of each frame is genuinely new audio since the last one.
+        const hopSamples = Math.round((MIC_CAPTURE_INTERVAL_MS / 1000) * mic.context.sampleRate);
         diagUnsub = mic.onFrame((samples) => {
-          diagChunks.push(samples);
+          const newPart = samples.length > hopSamples ? samples.subarray(samples.length - hopSamples) : samples;
+          diagChunks.push(newPart);
           const rmsDb = rmsDbOf(samples);
           if (rmsDb > diagMaxRmsDb) diagMaxRmsDb = rmsDb;
         });
