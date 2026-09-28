@@ -61,6 +61,13 @@ export interface MicStartOptions {
    * detection). Useful when the backing track plays through speakers (settings.echoCancellation).
    */
   echoCancellation?: boolean;
+  /**
+   * Ask the browser for automatic gain control (default false: chord/onset detection wants the
+   * raw, untouched amplitude — practice.ts warns if the track reports AGC on). The tuner screen
+   * opts in: a single sustained note has none of the amplitude-judging concerns a strum does, and
+   * a quiet, unamplified acoustic guitar through a laptop mic is exactly the case AGC helps with.
+   */
+  autoGainControl?: boolean;
 }
 
 /** AnalyserNode accepts powers of two in this range. */
@@ -82,6 +89,8 @@ export class MicInput {
   private generation = 0;
   /** echoCancellation the running stream was requested with (to restart when it changes). */
   private echoCancellation = false;
+  /** autoGainControl the running stream was requested with (to restart when it changes). */
+  private autoGainControl = false;
   private readonly onTrackEnded = (): void => this.stop();
 
   constructor(fftSize = 8192) {
@@ -106,17 +115,19 @@ export class MicInput {
   /**
    * Requests the microphone and starts the capture loop. `deviceId` is passed as an "ideal"
    * (bare) constraint, so an unknown id falls back to the default device instead of failing.
-   * `opts.echoCancellation` (default false) is passed to getUserMedia as is. Rejects with a
-   * MicError. Calling it while already running with the same device and options is a no-op;
-   * with a different device or echoCancellation the input is restarted.
+   * `opts.echoCancellation`/`opts.autoGainControl` (both default false) are passed to
+   * getUserMedia as is. Rejects with a MicError. Calling it while already running with the same
+   * device and options is a no-op; with a different device, echoCancellation or autoGainControl
+   * the input is restarted.
    */
   start(deviceId?: string, opts: MicStartOptions = {}): Promise<void> {
     const echoCancellation = opts.echoCancellation ?? false;
+    const autoGainControl = opts.autoGainControl ?? false;
     if (this.starting) return this.starting;
     if (this.isRunning()) {
       const current = this.getTrackSettings()?.deviceId;
       const sameDevice = !deviceId || deviceId === current;
-      if (sameDevice && echoCancellation === this.echoCancellation) return Promise.resolve();
+      if (sameDevice && echoCancellation === this.echoCancellation && autoGainControl === this.autoGainControl) return Promise.resolve();
       this.stop();
     }
     // Resume synchronously, in the SAME tick as the caller's gesture, before the getUserMedia
@@ -126,13 +137,13 @@ export class MicInput {
     // — the mic "hears nothing" even though permission was granted and the track is live.
     const ctx = this.context;
     if (ctx.state !== 'running') void ctx.resume().catch(() => {});
-    this.starting = this.doStart(deviceId, echoCancellation).finally(() => {
+    this.starting = this.doStart(deviceId, echoCancellation, autoGainControl).finally(() => {
       this.starting = null;
     });
     return this.starting;
   }
 
-  private async doStart(deviceId: string | undefined, echoCancellation: boolean): Promise<void> {
+  private async doStart(deviceId: string | undefined, echoCancellation: boolean, autoGainControl: boolean): Promise<void> {
     if (typeof window !== 'undefined' && !window.isSecureContext) throw new MicError('insecure');
     const mediaDevices = typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined;
     if (!mediaDevices || typeof mediaDevices.getUserMedia !== 'function') throw new MicError('unsupported');
@@ -140,7 +151,7 @@ export class MicInput {
     const audio: MediaTrackConstraints = {
       echoCancellation,
       noiseSuppression: false,
-      autoGainControl: false,
+      autoGainControl,
     };
     if (deviceId) audio.deviceId = deviceId; // bare value = ideal, never exact
 
@@ -186,6 +197,7 @@ export class MicInput {
     this.sourceNode = sourceNode;
     this.analyser = analyser;
     this.echoCancellation = echoCancellation;
+    this.autoGainControl = autoGainControl;
     for (const track of stream.getAudioTracks()) track.addEventListener('ended', this.onTrackEnded);
     this.timer = setInterval(() => this.capture(), MIC_CAPTURE_INTERVAL_MS);
   }

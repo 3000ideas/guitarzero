@@ -281,7 +281,11 @@ llamar a `resume()` **antes de cualquier `await`** (iOS). Un contexto `suspended
 
 ### mic.ts
 - `class MicInput { constructor(fftSize = 8192); readonly fftSize; readonly context: AudioContext; start(deviceId?: string): Promise<void>; stop(): void; onFrame(cb: (frame: Float32Array, timeSec: number) => void): () => void; listDevices(): Promise<MediaDeviceInfo[]>; getTrackSettings(): MediaTrackSettings | null; isRunning(): boolean }`.
-- `start`: `getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, deviceId /* valor "ideal", no exact */ } })`.
+- `start(deviceId?, opts?: { echoCancellation?: boolean; autoGainControl?: boolean })`: `getUserMedia({ audio: { echoCancellation: opts.echoCancellation ?? false, noiseSuppression: false, autoGainControl: opts.autoGainControl ?? false, deviceId /* valor "ideal", no exact */ } })`.
+  `noiseSuppression` siempre false. `autoGainControl` false por defecto (practice.ts avisa si el
+  track lo reporta activado: distorsiona la amplitud que usan el juicio de acordes/onsets), pero
+  el afinador (`#/tuner`) lo pide a `true` — una sola nota sostenida no tiene nada de amplitud que
+  juzgar, y una guitarra acústica floja sin amplificar se beneficia mucho del refuerzo automático.
   Rechaza con `class MicError extends Error { code: 'insecure' | 'unsupported' | 'denied' | 'notfound' | 'device' }`
   (`insecure` si `!window.isSecureContext`; `unsupported` si no hay `getUserMedia`; `denied` ←
   `NotAllowedError`/`SecurityError`; `notfound` ← `NotFoundError`; `device` ← el resto).
