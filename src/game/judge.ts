@@ -31,10 +31,17 @@ export const NEXT_ONSET_GUARD_SEC = 0.02;
 /** Minimum length of the analysis window. */
 export const MIN_WINDOW_SEC = 0.05;
 
-/** Default judge tolerances (SPEC.md section 7): the engine fills the rest from Settings. */
+/**
+ * Default judge tolerances (SPEC.md section 7): the engine fills the rest from Settings.
+ * minScore lowered from 0.6: a beginner's real strum (extra string noise, an imperfectly muted
+ * string, a chord not rung out perfectly cleanly) legitimately scores lower on the cosine match
+ * than a clean synthetic one without being a wrong chord — 0.6 marked too many genuinely-correct
+ * real strums as 'wrong'. A user reported the judging as "muy exigente" specifically about chord
+ * correctness ("cuando toca el acorde"), matching this.
+ */
 export const DEFAULT_JUDGE_OPTS: Pick<JudgeOpts, 'analysisWindowSec' | 'minScore' | 'perfectSec' | 'goodSec'> = {
   analysisWindowSec: 0.3,
-  minScore: 0.6,
+  minScore: 0.5,
   perfectSec: 0.07,
   goodSec: 0.15,
 };
