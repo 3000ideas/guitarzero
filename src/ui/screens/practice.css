@@ -200,7 +200,14 @@
 }
 
 .practice-chord-live {
-  min-width: 3ch;
+  /* Fixed width (not min-width): this updates continuously as chords are detected live, and
+     "C" vs "F#dim7" are very different widths — a min-width still let the box grow/shrink with
+     every update, which could change how .practice-mic's row wraps and shift the whole header
+     (and everything below it, including the highway) on every single detection. */
+  width: 6ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-size: 26px;
   font-weight: 700;
   line-height: 1;
