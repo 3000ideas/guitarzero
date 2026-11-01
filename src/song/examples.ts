@@ -169,6 +169,34 @@ D . . . | F#m . . . | D . . . | A . . . |
 D . . . | F#m . . . | D . . . | D . . . |
 `;
 
+const PRUEBA_RASGUEO = `title: Prueba de rasgueo (empieza aquí)
+artist: Ejercicio de comprobación
+tempo: 70
+time: 4/4
+strum: x-x-x-x-
+
+# Para comprobar que la app te oye y mide bien el ritmo, sin preocuparte por los acordes.
+# Cada parte se puede elegir sola en "Sección" (Ajustes de práctica).
+
+[1 Cuerdas apagadas, negras]
+# Apaga las cuerdas con la mano izquierda (apoya los dedos sin pulsar) y rasguea al ritmo de cada bola.
+# Todos cuentan como acertados si entran a tiempo: solo se mide el ritmo.
+Em . . . | Em . . . | Em . . . | Em . . . |
+
+strum: x-xxx-xx
+[2 Cuerdas apagadas, corcheas]
+Em . . . | Em . . . | Em . . . | Em . . . |
+
+strum: D-D-D-D-
+[3 Un solo acorde (Mi menor)]
+# Ahora con la mano izquierda en Em (dos dedos). Un golpe hacia abajo por pulso.
+Em . . . | Em . . . | Em . . . | Em . . . |
+
+strum: D-DUD-DU
+[4 Abajo y arriba (Em y Am)]
+Em . . . | Em . . . | Am . . . | Am . . . |
+`;
+
 const LA_BAMBA = `title: La Bamba
 artist: Tradicional (Veracruz)
 tempo: 150
@@ -196,6 +224,7 @@ C . F . | G*2 - - | C*2 - - |
 // ---------------------------------------------------------------- catalogue
 
 export const EXAMPLE_SONGS: StoredSong[] = [
+  example('prueba-rasgueo', 'Prueba de rasgueo (empieza aquí)', 'Ejercicio de comprobación', PRUEBA_RASGUEO),
   example('pop-c-g-am-f', 'Progresión pop (C G Am F)', 'Progresión genérica', POP_PROGRESSION),
   example('blues-en-a', 'Blues en A (12 compases)', 'Progresión genérica', BLUES_IN_A),
   example('cielito-lindo', 'Cielito Lindo', 'Tradicional (México)', CIELITO_LINDO),
