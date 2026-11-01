@@ -239,7 +239,7 @@ export const tunerScreen: Screen = {
     const heardEl = h('div.tuner-heard', null, '');
     const staleEl = h('div.tuner-stale', null, '');
     const ledEl = h('span.tuner-led', { 'aria-hidden': 'true' });
-    const statusEl = h('div.tuner-status', null, 'Pulsa Empezar y toca la cuerda señalada arriba.');
+    const statusEl = h('div.tuner-status', null, 'Pulsa Empezar y toca la cuerda.');
     const statusRow = h('div.tuner-status-row', null, ledEl, statusEl);
 
     const stringButtons = OPEN_STRINGS.map((s, i) =>
@@ -280,11 +280,11 @@ export const tunerScreen: Screen = {
       diagramRows.forEach((row, i) => row.classList.toggle('is-current', i === currentIndex));
     }
 
+    // Prev/next buttons are not shown (chips + arrow keys cover it) but updateNav() keeps them in sync.
     const prevBtn = h('button.btn.btn-sm', { type: 'button', onclick: () => selectString(currentIndex - 1) }, '← Anterior') as HTMLButtonElement;
     const nextBtn = h('button.btn.btn-sm', { type: 'button', onclick: () => selectString(currentIndex + 1) }, 'Siguiente →') as HTMLButtonElement;
-    const navRow = h('div.tuner-nav', null, prevBtn, nextBtn);
 
-    const startBtn = h('button.btn.btn-primary', { type: 'button', onclick: () => void start() }, 'Empezar') as HTMLButtonElement;
+    const startBtn = h('button.btn.btn-primary.btn-lg', { type: 'button', onclick: () => void start() }, 'Empezar') as HTMLButtonElement;
     const stopBtn = h('button.btn', { type: 'button', hidden: true, onclick: () => stop() }, 'Detener') as HTMLButtonElement;
     const retryBtn = h('button.btn', { type: 'button', hidden: true, onclick: () => void start() }, 'Reintentar') as HTMLButtonElement;
 
@@ -299,17 +299,26 @@ export const tunerScreen: Screen = {
     const diagStatus = h('div.tuner-diag-status', null, '');
     const diagAudioEl = h('audio', { controls: true, hidden: true }) as HTMLAudioElement;
     const diagDownload = h('a', { hidden: true, download: 'afinador-grabacion.wav' }, 'Descargar la grabación (.wav)') as HTMLAnchorElement;
-    const diagDetails = h(
+
+    // Layout, top to bottom, in the order the player acts: 1) start/stop + one status line,
+    // 2) which string (chips; the big note below it names the same string), 3) the reading,
+    // 4) optional help and diagnostics folded away so nothing is repeated or needs scrolling.
+    const diagramDetails = h(
       'details.tuner-diag',
       null,
-      h('summary', null, 'Diagnóstico: grabar y escuchar lo que oye el micrófono'),
+      h('summary', null, '¿Qué cuerda es cuál?'),
+      diagramWrap,
+    );
+    const diagnosticsDetails = h(
+      'details.tuner-diag',
+      null,
+      h('summary', null, 'Si no funciona: diagnóstico del micrófono'),
+      levelRow,
+      probeEl,
       h(
         'p.tuner-help',
         null,
-        '1. Pulsa Grabar. 2. Toca cada cuerda, una por una (sobre todo si es una guitarra acústica ' +
-          'sin amplificar, acércate al micrófono). 3. Pulsa Parar. 4. Pulsa ▶ en el reproductor y ' +
-          'escucha: si se oye bien la guitarra, el micrófono funciona; si apenas se oye, el problema ' +
-          'es el micrófono o su volumen de entrada, no esta app.',
+        'Pulsa Grabar, toca varias cuerdas, pulsa Parar y escucha la grabación: si se oye bien la guitarra, el micrófono funciona.',
       ),
       diagBtn,
       diagStatus,
@@ -324,31 +333,23 @@ export const tunerScreen: Screen = {
       h(
         'div.card.tuner-card',
         null,
-        diagramWrap,
+        h('div.tuner-actions', null, startBtn, stopBtn, retryBtn),
+        statusRow,
         stringsRow,
-        navRow,
-        h('div.tuner-target-label', null, 'Toca esta cuerda:'),
         targetEl,
-        levelRow,
-        probeEl,
         noteEl,
         freqEl,
         meter,
         centsEl,
         heardEl,
         staleEl,
-        statusRow,
-        h('div.tuner-actions', null, startBtn, stopBtn, retryBtn),
-        diagDetails,
         h(
           'p.tuner-help',
           null,
-          'Toca solo la cuerda señalada arriba, sin rasguear las demás. Verde = afinada, ámbar = cerca, rojo = lejos. ' +
-            'Mantenla afinada un segundo y pasa sola a la siguiente. Si giras la clavija y no vuelves a tocar la cuerda, ' +
-            'el número se queda parado en lo último que sonó: toca la cuerda cada pocos segundos mientras la afinas, ' +
-            'no solo una vez. También puedes cambiar de cuerda con las flechas ← → del teclado. Si nunca se pone verde ' +
-            'por poco en ninguna cuerda, prueba primero con un afinador aparte: puede que sea la app, no la guitarra.',
+          'Toca solo la cuerda elegida (también con las flechas del teclado). Cuando esté en verde un segundo, pasa a la siguiente.',
         ),
+        diagramDetails,
+        diagnosticsDetails,
       ),
     );
     root.appendChild(screen);
@@ -419,7 +420,7 @@ export const tunerScreen: Screen = {
       levelGate.style.left = `${gatePct}%`;
       const target = OPEN_STRINGS[currentIndex];
       if (running && now > doneMsgUntilMs && statusEl.textContent?.startsWith('¡Afinada!')) {
-        statusEl.textContent = 'Escuchando… toca la cuerda señalada arriba.';
+        statusEl.textContent = 'Escuchando… toca la cuerda.';
       }
       // The reading is kept on screen after the string stops ringing (like a real tuner's needle
       // holding its last position), not cleared after a short timeout: the player needs time to
@@ -651,7 +652,7 @@ export const tunerScreen: Screen = {
         mic.onFrame(onMicFrame);
         startBtn.hidden = true;
         stopBtn.hidden = false;
-        statusEl.textContent = 'Escuchando… toca la cuerda señalada arriba.';
+        statusEl.textContent = 'Escuchando… toca la cuerda.';
         if (!getFlag('tunerSeen')) setFlag('tunerSeen');
         raf = requestAnimationFrame(frame);
       } catch (err) {
@@ -682,7 +683,7 @@ export const tunerScreen: Screen = {
       capturedStrings = [];
       startBtn.hidden = false;
       stopBtn.hidden = true;
-      statusEl.textContent = 'Pulsa Empezar y toca la cuerda señalada arriba.';
+      statusEl.textContent = 'Pulsa Empezar y toca la cuerda.';
       render();
     }
 
