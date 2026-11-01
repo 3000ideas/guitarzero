@@ -74,6 +74,7 @@ export class MicInput {
   private sourceNode: MediaStreamAudioSourceNode | null = null;
   private analyser: AnalyserNode | null = null;
   private gainNode: GainNode | null = null;
+  private sinkNode: GainNode | null = null;
   /** Digital input gain in dB applied before analysis (phone mics are weak). */
   private gainDb = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -185,6 +186,14 @@ export class MicInput {
       gainNode.gain.value = Math.pow(10, this.gainDb / 20);
       sourceNode.connect(gainNode);
       gainNode.connect(analyser);
+      // Safari/iOS can skip pulling a branch that never reaches the destination, so the analyser
+      // would read silence. A zero-gain sink to the destination keeps the graph alive without
+      // monitoring the mic (it stays silent).
+      const sink = ctx.createGain();
+      sink.gain.value = 0;
+      analyser.connect(sink);
+      sink.connect(ctx.destination);
+      this.sinkNode = sink;
     } catch (err) {
       for (const track of stream.getTracks()) track.stop();
       throw new MicError('device', undefined, { cause: err });
@@ -222,6 +231,14 @@ export class MicInput {
         /* already disconnected */
       }
       this.gainNode = null;
+    }
+    if (this.sinkNode) {
+      try {
+        this.sinkNode.disconnect();
+      } catch {
+        /* already disconnected */
+      }
+      this.sinkNode = null;
     }
     if (this.stream) {
       for (const track of this.stream.getTracks()) {
