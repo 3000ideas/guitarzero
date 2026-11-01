@@ -41,7 +41,7 @@ import { Metronome } from '../../audio/metronome';
 import { BackingTrack } from '../../audio/backing';
 import { renderChordTrack } from '../../audio/chordSynth';
 import { PracticeSession } from '../../game/engine';
-import { HighwayRenderer, countInStartBeat, lowerBound, pxPerBeatFor } from '../highway';
+import { HighwayRenderer, countInStartBeat, lowerBound, pxPerBeatFor, timingText } from '../highway';
 import { drawChordDiagram } from '../chordDiagram';
 import { append, clear, h } from '../dom';
 
@@ -286,6 +286,22 @@ export const practiceScreen: Screen = {
         s.on('ended', ({ summary, reason }) => {
           if (!ignoreEnded && !disposed) showSummary(summary, reason);
         }),
+        s.on('hit', (hit) => {
+          if (disposed) return;
+          const chord = song.events[hit.eventIndex]?.chord.name ?? '';
+          const ms = Math.round(hit.timing * 1000);
+          const label = timingText(hit.timingLabel) || 'Detectado';
+          feedbackVerdictEl.textContent = '';
+          feedbackVerdictEl.className = 'practice-feedback-verdict';
+          showFeedback(`${chord} · ${label} ${ms > 0 ? '+' : ''}${ms} ms`, null);
+        }),
+        s.on('verdict', (v) => {
+          if (disposed) return;
+          const chord = song.events[v.eventIndex]?.chord.name ?? '';
+          if (v.kind === 'skipped') return;
+          const text = v.kind === 'correct' ? `✓ ${chord}` : v.kind === 'wrong' ? `✗ ${chord}: no coincide` : `✗ ${chord}: sin rasgueo`;
+          showFeedback(null, { text, kind: v.kind });
+        }),
         s.on('phase', (phase) => {
           // Internal pause/resume pairs (speed or section change) keep the wake lock.
           if (phase === 'ended' || (phase === 'paused' && !internalPause)) releaseWakeLock();
@@ -391,6 +407,20 @@ export const practiceScreen: Screen = {
           backingStatusEl,
         )
       : null;
+    // Mic latency (same value Ajustes → Calibrar sets). If the strum is credited to the PREVIOUS
+    // chord (or reads "Tarde"), add latency; if it is credited to the NEXT one ("Pronto"), remove it.
+    const latencyLabel = h('span.practice-nudge-label');
+    const showLatency = (): void => {
+      latencyLabel.textContent = `Latencia ${Math.round(settings.latencySec * 1000)} ms`;
+    };
+    const latencyRow = h(
+      'span.practice-nudge',
+      { title: 'Retraso del micrófono. Si marca tu rasgueo en el acorde anterior o dice «Tarde», súbela; si lo marca en el siguiente o dice «Pronto», bájala.' },
+      h('button', { class: 'btn practice-btn-small', type: 'button', onclick: () => onLatency(-0.02) }, '− 20 ms'),
+      latencyLabel,
+      h('button', { class: 'btn practice-btn-small', type: 'button', onclick: () => onLatency(0.02) }, '+ 20 ms'),
+    );
+    showLatency();
     const headphonesWarn = h('div.practice-headphones', { hidden: true }, HEADPHONES_WARNING);
 
     const micStatusEl = h('span.practice-mic-status');
@@ -430,6 +460,7 @@ export const practiceScreen: Screen = {
         backingControls,
         h('label.practice-toggle', null, listenToggle, 'Escuchar con el micrófono'),
         h('div.practice-mic', null, h('span.practice-mic-label', null, 'Micrófono:'), micStatusEl, micRetryBtn, levelEl),
+        latencyRow,
         h('div.practice-hint', null, 'Usa auriculares para que el micrófono no capte el metrónomo · ↓ rasgueo hacia abajo · ↑ hacia arriba'),
         headphonesWarn,
         agcNotice,
@@ -497,7 +528,27 @@ export const practiceScreen: Screen = {
     const overlay = h('div.practice-overlay', null, startBtn, h('div.practice-overlay-hint', null, 'o pulsa Espacio'), testMicBtn, overlayMsg);
     if (!playable) overlayMsg.textContent = 'La canción no tiene compases válidos: edítala desde la biblioteca.';
     const pausedLabel = h('div.practice-paused-label', { hidden: true }, 'Pausa', h('small', null, 'arrastra la autopista (o ← →) para moverte · toca para reanudar'));
-    const stage = h('div.practice-stage', null, canvas, overlay, pausedLabel);
+    // Big, centred read-out of the last strum ("C · Tarde +180 ms" then "✓ C"): the canvas rings sit
+    // near the left edge on a phone, so this is the thing to actually read.
+    const feedbackTimingEl = h('div.practice-feedback-timing');
+    const feedbackVerdictEl = h('div.practice-feedback-verdict');
+    const feedbackEl = h('div.practice-feedback', { hidden: true }, feedbackTimingEl, feedbackVerdictEl);
+    let feedbackTimer: number | null = null;
+    function showFeedback(timing: string | null, verdict: { text: string; kind: string } | null): void {
+      if (timing !== null) feedbackTimingEl.textContent = timing;
+      if (verdict) {
+        feedbackVerdictEl.textContent = verdict.text;
+        feedbackVerdictEl.className = `practice-feedback-verdict is-${verdict.kind}`;
+      }
+      feedbackEl.hidden = false;
+      if (feedbackTimer !== null) clearTimeout(feedbackTimer);
+      feedbackTimer = window.setTimeout(() => {
+        feedbackEl.hidden = true;
+        feedbackTimingEl.textContent = '';
+        feedbackVerdictEl.textContent = '';
+      }, 1300);
+    }
+    const stage = h('div.practice-stage', null, canvas, overlay, feedbackEl, pausedLabel);
     // Scrubbing while paused: drag the highway sideways (or use the bar buttons / ← →) to pick the
     // bar to practise again. Snaps to whole bars because resume() replays a bar in full anyway.
     let dragStartX: number | null = null;
@@ -802,6 +853,14 @@ export const practiceScreen: Screen = {
       }
       const phase = session.getState().phase;
       if (phase === 'countin' || phase === 'playing') syncBacking(session);
+    }
+
+    function onLatency(deltaSec: number): void {
+      const next = clamp(Math.round((settings.latencySec + deltaSec) * 1000) / 1000, -0.1, 0.5);
+      settings = { ...settings, latencySec: next };
+      saveSettings({ latencySec: next });
+      session.setSettings({ latencySec: next });
+      showLatency();
     }
 
     function onNudge(deltaSec: number): void {

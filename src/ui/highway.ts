@@ -458,7 +458,7 @@ export class HighwayRenderer {
     this.drawStrings();
     this.drawStrikeLine();
     this.drawEvents(state, beat, range.from, range.to, countStart, nowMs);
-    this.drawHitOverlays(range.from, range.to, nowMs);
+    this.drawHitOverlays(range.from, range.to, nowMs, beat);
     if (phase !== 'idle') this.drawBall(state, beat, countIn, nowMs);
     this.ctx.globalAlpha = 1;
   }
@@ -855,7 +855,7 @@ export class HighwayRenderer {
   }
 
   /** Phase 1 feedback: white ring + floating timing text, 1 s from the hit. */
-  private drawHitOverlays(from: number, to: number, nowMs: number): void {
+  private drawHitOverlays(from: number, to: number, nowMs: number, beat: number): void {
     const L = this.layout;
     const ctx = this.ctx;
     const midY = (L.stringsTop + L.stringsBottom) / 2;
@@ -907,9 +907,15 @@ export class HighwayRenderer {
           ctx.globalAlpha = 1 - tv;
           ctx.strokeStyle = verdictColor(fb.verdict.kind);
           ctx.lineWidth = 2 + 2 * (1 - tv);
-          ctx.beginPath();
-          ctx.arc(x, midY, L.markerR * 1.8 + 30 * tv, 0, TAU);
-          ctx.stroke();
+          // 'missed' is only decided after the late window closes, by which time the next chord
+          // is at the strike line: a ring there reads as "you missed THIS one" (the wrong chord).
+          // So it stays on the missed event's own marker; correct/wrong keep the strike line.
+          const vx = fb.verdict.kind === 'missed' ? eventX(this.song.events[i].time, beat, L.strikeX, L.pxPerBeat) : x;
+          if (vx > 0) {
+            ctx.beginPath();
+            ctx.arc(vx, midY, L.markerR * 1.8 + 30 * tv, 0, TAU);
+            ctx.stroke();
+          }
         }
       }
     }

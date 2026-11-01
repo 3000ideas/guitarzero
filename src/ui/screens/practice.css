@@ -926,3 +926,35 @@
     white-space: nowrap;
   }
 }
+
+.practice-feedback {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  pointer-events: none;
+  text-align: center;
+  padding: 6px 12px;
+  border-radius: 10px;
+  background: rgba(15, 17, 22, 0.78);
+  max-width: 94%;
+}
+
+.practice-feedback-timing {
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+  white-space: nowrap;
+}
+
+.practice-feedback-verdict {
+  font-size: 18px;
+  font-weight: 800;
+  min-height: 0;
+  white-space: nowrap;
+}
+
+.practice-feedback-verdict.is-correct { color: var(--ok); }
+.practice-feedback-verdict.is-wrong { color: var(--bad); }
+.practice-feedback-verdict.is-missed { color: var(--warn); }
