@@ -307,6 +307,7 @@ export const practiceScreen: Screen = {
           // Internal pause/resume pairs (speed or section change) keep the wake lock.
           if (phase === 'ended' || (phase === 'paused' && !internalPause)) releaseWakeLock();
           // The backing track follows every count-in (start, resume, loop) and stops with the session.
+          if (phase !== 'countin') silentCountIn = false;
           if (phase === 'countin') syncBacking(s);
           else if (phase === 'paused' || phase === 'ended') backing?.stop();
         }),
@@ -825,13 +826,17 @@ export const practiceScreen: Screen = {
      * synthesized chords track has no independent alignment offset (its sample 0 IS song beat 0),
      * unlike the uploaded recording (audio.offsetSec, set by "Sincronizar" in the editor).
      */
+    let silentCountIn = false;
+
     function syncBacking(s: PracticeSession): void {
       if (!backing || !audio || !settings.backingTrack) return;
       const st = s.getState();
-      // During a count-in only the metronome clicks: the music starts on the downbeat of the bar
-      // being practised (not at the count-in's first beat). Later calls (mid-pass: toggling the
-      // track, changing source) restart it from the pass anchor, aligned by wall time.
-      const b = st.phase === 'countin' ? countInStartBeat(st.beat, st.countInBeatsLeft) : st.countInStartBeat;
+      // The very first count-in of a run (Empezar / Reiniciar) is clicks only: the music enters on
+      // the downbeat of the bar being practised. Every other count-in (resume after a pause or a
+      // bar jump, loop restart) keeps the music playing underneath from the count-in's first beat,
+      // so it does not burst in from silence. Mid-pass calls (toggling the track, changing source)
+      // also restart from the pass anchor; everything is aligned by wall time.
+      const b = st.phase === 'countin' && silentCountIn ? countInStartBeat(st.beat, st.countInBeatsLeft) : st.countInStartBeat;
       const posSec = settings.backingSource === 'chords' ? beatToSec(song.tempoSegments, b) : backingPositionSec(audio, song, b);
       backing.stop();
       backing.start(s.wallSec(b), posSec + settings.backingNudgeSec, settings.tempoScale);
@@ -929,6 +934,7 @@ export const practiceScreen: Screen = {
         const run = runs[selectedRun];
         if (run) session.seekBar(run.fromBar);
         applyLoop();
+        silentCountIn = true; // read synchronously by the 'countin' phase handler inside start()
         session.start();
       } finally {
         starting = false;
