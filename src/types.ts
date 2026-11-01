@@ -469,6 +469,8 @@ export interface Settings {
    * lot more — closer to "you're at least attempting the right chord" than a precise match.
    */
   chordTolerance: 'normal' | 'lenient';
+  /** Digital gain (dB, 0..30) applied to the mic before analysis; raises a weak phone mic. */
+  inputGainDb: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -491,4 +493,5 @@ export const DEFAULT_SETTINGS: Settings = {
   backingSource: 'audio',
   echoCancellation: false,
   chordTolerance: 'normal',
+  inputGainDb: 0,
 };

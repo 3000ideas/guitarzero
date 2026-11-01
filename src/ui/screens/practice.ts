@@ -245,6 +245,7 @@ export const practiceScreen: Screen = {
 
     // Audio pipeline. The context is created suspended here and resumed only from gestures.
     const mic = new MicInput();
+    mic.setInputGainDb(settings.inputGainDb);
     const source = new MicDetectorSource(mic, detectorOptsFromSettings(settings));
     source.setTranspose(song.capo + settings.tuningOffset);
     const ctx = getAudioContext();

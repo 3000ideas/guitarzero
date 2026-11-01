@@ -184,6 +184,7 @@ export const tunerScreen: Screen = {
     void _params;
     const settings = loadSettings();
     const mic = new MicInput();
+    mic.setInputGainDb(settings.inputGainDb);
     const fft = new RealFFT(mic.fftSize);
     const mag = new Float32Array((mic.fftSize >> 1) + 1);
 

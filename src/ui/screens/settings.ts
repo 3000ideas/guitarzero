@@ -87,11 +87,13 @@ export const settingsScreen: Screen = {
   mount(root: HTMLElement): () => void {
     let settings: Settings = loadSettings();
     const mic = new MicInput();
+    mic.setInputGainDb(settings.inputGainDb);
     let abort: AbortController | null = null;
     let disposed = false;
 
     function update(patch: Partial<Settings>): void {
       settings = saveSettings(patch);
+      if (patch.inputGainDb !== undefined) mic.setInputGainDb(settings.inputGainDb);
     }
 
     // ---------------------------------------------------------------- input device
@@ -312,6 +314,16 @@ export const settingsScreen: Screen = {
       help: 'Umbral del detector de ataques: más bajo detecta rasgueos más suaves (y más falsos positivos).',
     });
 
+    const gainField = rangeField('Ganancia de entrada (móvil flojo)', {
+      min: 0,
+      max: 30,
+      step: 1,
+      value: Math.round(settings.inputGainDb),
+      format: (v) => `+${v} dB`,
+      onChange: (v) => update({ inputGainDb: v }),
+      help: 'Amplifica el micrófono antes de analizarlo. Súbela si en el diagnóstico el nivel máximo queda por debajo de -30 dB.',
+    });
+
     // ---------------------------------------------------------------- tuning
 
     const a4Input = h('input', {
@@ -403,6 +415,7 @@ export const settingsScreen: Screen = {
         ),
         gateField.root,
         onsetField.root,
+        gainField.root,
       ),
 
       h(

@@ -73,6 +73,9 @@ export class MicInput {
   private stream: MediaStream | null = null;
   private sourceNode: MediaStreamAudioSourceNode | null = null;
   private analyser: AnalyserNode | null = null;
+  private gainNode: GainNode | null = null;
+  /** Digital input gain in dB applied before analysis (phone mics are weak). */
+  private gainDb = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
   /** This capture's own AudioContext (lazy; never shared with playback). See the class doc comment. */
   private captureCtx: AudioContext | null = null;
@@ -160,6 +163,7 @@ export class MicInput {
     let ctx: AudioContext;
     let sourceNode: MediaStreamAudioSourceNode;
     let analyser: AnalyserNode;
+    let gainNode: GainNode;
     try {
       ctx = this.context;
       if (ctx.state !== 'running') {
@@ -176,7 +180,11 @@ export class MicInput {
       analyser = ctx.createAnalyser();
       analyser.fftSize = this.fftSize;
       analyser.smoothingTimeConstant = 0;
-      sourceNode.connect(analyser); // the analyser is NOT connected to the destination (no monitoring)
+      // source -> gain -> analyser. The analyser is NOT connected to the destination (no monitoring).
+      gainNode = ctx.createGain();
+      gainNode.gain.value = Math.pow(10, this.gainDb / 20);
+      sourceNode.connect(gainNode);
+      gainNode.connect(analyser);
     } catch (err) {
       for (const track of stream.getTracks()) track.stop();
       throw new MicError('device', undefined, { cause: err });
@@ -185,6 +193,7 @@ export class MicInput {
     this.stream = stream;
     this.sourceNode = sourceNode;
     this.analyser = analyser;
+    this.gainNode = gainNode;
     this.echoCancellation = echoCancellation;
     for (const track of stream.getAudioTracks()) track.addEventListener('ended', this.onTrackEnded);
     this.timer = setInterval(() => this.capture(), MIC_CAPTURE_INTERVAL_MS);
@@ -206,6 +215,14 @@ export class MicInput {
       this.sourceNode = null;
     }
     this.analyser = null;
+    if (this.gainNode) {
+      try {
+        this.gainNode.disconnect();
+      } catch {
+        /* already disconnected */
+      }
+      this.gainNode = null;
+    }
     if (this.stream) {
       for (const track of this.stream.getTracks()) {
         track.removeEventListener('ended', this.onTrackEnded);
@@ -213,6 +230,12 @@ export class MicInput {
       }
       this.stream = null;
     }
+  }
+
+  /** Sets the digital input gain (dB, 0..30); applies live if already running. */
+  setInputGainDb(db: number): void {
+    this.gainDb = Number.isFinite(db) ? Math.min(30, Math.max(0, db)) : 0;
+    if (this.gainNode) this.gainNode.gain.value = Math.pow(10, this.gainDb / 20);
   }
 
   /** Subscribes to captured frames; returns the unsubscribe function. Frames only flow while running. */

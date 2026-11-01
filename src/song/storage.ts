@@ -344,6 +344,7 @@ export function clampSettings(s: Settings): Settings {
     lateSec: clamp(s.lateSec, 0, 1),
     a4: clamp(s.a4, 415, 466),
     tuningOffset: clamp(s.tuningOffset, -12, 12),
+    inputGainDb: clamp(s.inputGainDb, 0, 30),
   };
 }
 
