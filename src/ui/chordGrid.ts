@@ -45,7 +45,11 @@ export interface ChordGridOpts {
   onChange: (source: string) => void;
   /** The «Escuchar» button was pressed (the host plays or stops the song). */
   onTogglePlay?: () => void;
+  /** The «qué escuchar» choice changed (the host stops a playback in progress). */
+  onSourceChange?: () => void;
 }
+
+export type PlaySource = 'chords' | 'song' | 'both';
 
 export interface ChordGridView {
   el: HTMLElement;
@@ -53,6 +57,10 @@ export interface ChordGridView {
   setSource(source: string, issues: readonly ParseError[]): void;
   /** Marks the cell being played (null = none) without redrawing the grid. */
   setPlayhead(pos: { item: number; bar: number; cell: number } | null): void;
+  /** What «Escuchar» plays: the synthesized chords, the loaded song audio, or both together. */
+  getPlaySource(): PlaySource;
+  /** Enables the audio options when a song track is loaded. */
+  setAudioAvailable(available: boolean): void;
   /** The selected cell (where playback starts), or null. */
   getSelection(): { item: number; bar: number; cell: number } | null;
   /** Switches the «Escuchar» button between play and stop. */
@@ -106,8 +114,18 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
 
   let playhead: Sel | null = null;
   let lastPlayheadBar = '';
+  let audioReady = false;
   const playBtn = h('button.btn.btn-sm.grid-play', { type: 'button', title: 'Reproduce la canción con acordes y marca por dónde va', onclick: () => opts.onTogglePlay?.() }, '▶ Escuchar') as HTMLButtonElement;
-  const transport = h('div.grid-transport', null, playBtn, h('span.muted.small', null, 'Empieza en el compás seleccionado'));
+  const sourceSel = h('select', { 'aria-label': 'Qué escuchar' }) as HTMLSelectElement;
+  const sourceOptions: Array<[PlaySource, string]> = [
+    ['chords', 'Solo acordes'],
+    ['song', 'Canción original'],
+    ['both', 'Canción + acordes'],
+  ];
+  for (const [value, label] of sourceOptions) sourceSel.appendChild(h('option', { value }, label));
+  const audioHint = h('span.muted.small', null, 'Empieza en el compás seleccionado');
+  const transport = h('div.grid-transport', null, playBtn, sourceSel, audioHint);
+  sourceSel.addEventListener('change', () => opts.onSourceChange?.());
   const root = h('div.chord-grid-editor');
   const body = h('div.grid-body');
   const pad = h('div.grid-pad');
@@ -737,6 +755,19 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
         lastPlayheadBar = barKey;
         el.scrollIntoView({ block: 'nearest' });
       }
+    },
+    getPlaySource() {
+      return sourceSel.value as PlaySource;
+    },
+    setAudioAvailable(available) {
+      const wasAvailable = audioReady;
+      audioReady = available;
+      for (const o of Array.from(sourceSel.options)) if (o.value !== 'chords') o.disabled = !available;
+      if (available && !wasAvailable) sourceSel.value = 'both'; // a track was just loaded: compare it with the chords
+      if (!available && sourceSel.value !== 'chords') sourceSel.value = 'chords';
+      audioHint.textContent = available
+        ? 'Empieza en el compás seleccionado · compara tu canción con los acordes'
+        : 'Carga un audio en «Pista de audio» (abajo) para compararlo con los acordes';
     },
     getSelection() {
       return validSel(sel) ? { ...sel } : null;

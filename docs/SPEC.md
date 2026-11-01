@@ -1255,3 +1255,6 @@ recuerda la última en `localStorage` `gz.editorMode`; por defecto Cuadrícula).
   `srcBar` (línea de texto y posición en ella; las repeticiones y secciones reinsertadas comparten
   los mismos), con lo que la reproducción expandida se proyecta sobre la cuadrícula. Se detiene al
   terminar, al editar el texto, al pasar a la vista Texto o al salir.
+  Con una pista de audio cargada, un selector elige qué suena: «Solo acordes», «Canción original»
+  (el audio cargado, desde `offsetSec + beatToSec(compás)`) o «Canción + acordes» (ambos sincronizados
+  a la vez; es lo que se elige por defecto al cargar el audio, para comparar). Sin audio solo hay acordes.

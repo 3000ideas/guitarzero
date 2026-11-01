@@ -1120,7 +1120,7 @@ export const editorScreen: Screen = {
 
     // Two ways to edit the same text: the text itself or the chord grid (SPEC section 22).
     let editMode: EditorMode = loadEditorMode();
-    const gridView = createChordGrid({ onChange: (next) => applyText(next), onTogglePlay: () => void toggleGridPlay() });
+    const gridView = createChordGrid({ onChange: (next) => applyText(next), onTogglePlay: () => void toggleGridPlay(), onSourceChange: () => stopGridPlay() });
     const textTab = h('button.mode-tab', { type: 'button', role: 'tab', onclick: () => setEditMode('text') }, 'Texto') as HTMLButtonElement;
     const gridTab = h('button.mode-tab', { type: 'button', role: 'tab', onclick: () => setEditMode('grid') }, 'Cuadrícula') as HTMLButtonElement;
     const modeTabs = h('div.mode-tabs', { role: 'tablist', 'aria-label': 'Forma de editar' }, gridTab, textTab);
@@ -1458,7 +1458,10 @@ export const editorScreen: Screen = {
 
     /** The chords of the text played as a synthesized track, with the playing cell marked on the grid. */
     interface GridPlay {
-      bt: BackingTrack;
+      /** Synthesized chords (null when only the original audio plays). */
+      bt: BackingTrack | null;
+      /** The loaded song audio is playing too. */
+      original: boolean;
       raf: number;
       whenWall: number;
       posSec: number;
@@ -1474,8 +1477,9 @@ export const editorScreen: Screen = {
       gridPlay = null;
       if (p) {
         cancelAnimationFrame(p.raf);
-        p.bt.stop();
-        p.bt.dispose();
+        p.bt?.stop();
+        p.bt?.dispose();
+        if (p.original) backing?.stop();
       }
       gridView.setPlayhead(null);
       gridView.setPlaying(false);
@@ -1528,17 +1532,26 @@ export const editorScreen: Screen = {
         } catch {
           /* the click that started this allows it; if not, start() still schedules */
         }
-        const buffer = await renderChordTrack(song, ctx.sampleRate);
-        if (unmounted || gridPlay) return;
-        const bt = new BackingTrack(ctx);
-        bt.loadBuffer(buffer);
-        bt.setGain(0.9);
+        const source = gridView.getPlaySource();
+        const original = (source === 'song' || source === 'both') && audio !== null && backing !== null;
+        let bt: BackingTrack | null = null;
+        if (source !== 'song' || !original) {
+          const buffer = await renderChordTrack(song, ctx.sampleRate);
+          if (unmounted || gridPlay) return;
+          bt = new BackingTrack(ctx);
+          bt.loadBuffer(buffer);
+          bt.setGain(original ? 0.6 : 0.9);
+        }
         const sel = gridView.getSelection();
         const from = sel ? song.bars.find((b) => b.srcLine === sel.item + 1 && b.srcBar === sel.bar) : undefined;
         const posSec = from ? beatToSec(song.tempoSegments, from.startBeat) : 0;
         const whenWall = ctx.currentTime + 0.15;
-        bt.start(whenWall, posSec, 1);
-        gridPlay = { bt, raf: 0, whenWall, posSec, song, source: textarea.value, ctx };
+        bt?.start(whenWall, posSec, 1);
+        if (original && audio && backing) {
+          backing.setGain(audio.gain);
+          backing.start(whenWall, audio.offsetSec + posSec, 1); // the song's bar 1 sits at offsetSec in the audio
+        }
+        gridPlay = { bt, original, raf: 0, whenWall, posSec, song, source: textarea.value, ctx };
         gridView.setPlaying(true);
         gridPlay.raf = requestAnimationFrame(gridPlayTick);
       } catch (err) {
@@ -1756,6 +1769,7 @@ export const editorScreen: Screen = {
 
     function updateButtons(): void {
       const ready = backing !== null && !busy;
+      gridView.setAudioAvailable(ready && audio !== null);
       loadBtn.disabled = busy;
       replaceBtn.disabled = busy;
       removeBtn.disabled = busy;
@@ -2427,6 +2441,7 @@ export const editorScreen: Screen = {
       if (!audio || !backing) return false;
       const ctx = getAudioContext();
       void ctx.resume().catch(noop); // synchronously, inside the click handler (iOS)
+      stopGridPlay();
       stopPreview();
       const bars = opts.bars !== undefined && opts.bars > 0 ? Math.round(opts.bars) : PREVIEW_BARS;
       const fromSec = mode === 'metronome' ? previewStartSec(audio.offsetSec, bpm(), beatsPerBar()) : clamp(lastSeekSec, 0, audio.durationSec);
