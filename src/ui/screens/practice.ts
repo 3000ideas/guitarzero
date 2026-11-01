@@ -362,6 +362,24 @@ export const practiceScreen: Screen = {
     backingSourceSelect.appendChild(h('option', { value: 'audio' }, 'Grabación original'));
     backingSourceSelect.appendChild(h('option', { value: 'chords' }, 'Solo acordes (simplificado)'));
     backingSourceSelect.value = settings.backingSource;
+    // Fine sync: nudges the whole backing track (recording or chords) against the highway, in
+    // 20 ms steps; applies from the next count-in. Saved globally (it compensates the device's
+    // audio output delay, not one song).
+    const nudgeLabel = h('span.practice-nudge-label');
+    const showNudge = (): void => {
+      const ms = Math.round(settings.backingNudgeSec * 1000);
+      nudgeLabel.textContent = ms === 0 ? 'Sincronía 0 ms' : `Sincronía ${ms > 0 ? '+' : ''}${ms} ms`;
+    };
+    const nudgeBtn = (label: string, deltaSec: number, title: string): HTMLElement =>
+      h('button', { class: 'btn practice-btn-small', type: 'button', title, onclick: () => onNudge(deltaSec) }, label);
+    const nudgeRow = h(
+      'span.practice-nudge',
+      { title: 'Si la pista suena tarde respecto a la autopista, pulsa «Antes»; si suena pronto, «Después». Se aplica al reanudar.' },
+      nudgeBtn('Pista antes', 0.02, 'La pista suena más pronto'),
+      nudgeLabel,
+      nudgeBtn('Pista después', -0.02, 'La pista suena más tarde'),
+    );
+    showNudge();
     const backingControls = audio
       ? h(
           'div.practice-backing',
@@ -369,6 +387,7 @@ export const practiceScreen: Screen = {
           h('label.practice-toggle', { title: 'Reproducir la pista de la canción' }, backingToggle, 'Pista'),
           backingSourceSelect,
           backingVolume,
+          nudgeRow,
           backingStatusEl,
         )
       : null;
@@ -731,7 +750,7 @@ export const practiceScreen: Screen = {
       const b = s.getState().countInStartBeat;
       const posSec = settings.backingSource === 'chords' ? beatToSec(song.tempoSegments, b) : backingPositionSec(audio, song, b);
       backing.stop();
-      backing.start(s.wallSec(b), posSec, settings.tempoScale);
+      backing.start(s.wallSec(b), posSec + settings.backingNudgeSec, settings.tempoScale);
     }
 
     /** "Pista" toggle: persists the setting and starts/stops the audio in the middle of a pass. */
@@ -751,6 +770,13 @@ export const practiceScreen: Screen = {
       }
       const phase = session.getState().phase;
       if (phase === 'countin' || phase === 'playing') syncBacking(session);
+    }
+
+    function onNudge(deltaSec: number): void {
+      const next = clamp(Math.round((settings.backingNudgeSec + deltaSec) * 1000) / 1000, -0.5, 0.5);
+      settings = { ...settings, backingNudgeSec: next };
+      saveSettings({ backingNudgeSec: next });
+      showNudge();
     }
 
     function onBackingVolume(): void {

@@ -345,6 +345,7 @@ export function clampSettings(s: Settings): Settings {
     a4: clamp(s.a4, 415, 466),
     tuningOffset: clamp(s.tuningOffset, -12, 12),
     inputGainDb: clamp(s.inputGainDb, 0, 30),
+    backingNudgeSec: clamp(s.backingNudgeSec, -0.5, 0.5),
   };
 }
 

@@ -826,3 +826,18 @@
     display: none;
   }
 }
+
+.practice-nudge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.practice-nudge-label {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 84px;
+  text-align: center;
+}

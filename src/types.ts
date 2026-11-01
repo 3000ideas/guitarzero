@@ -471,6 +471,8 @@ export interface Settings {
   chordTolerance: 'normal' | 'lenient';
   /** Digital gain (dB, 0..30) applied to the mic before analysis; raises a weak phone mic. */
   inputGainDb: number;
+  /** Fine sync of the backing track vs the highway, seconds (-0.5..0.5): + plays the track earlier (heard sooner), - later. */
+  backingNudgeSec: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -494,4 +496,5 @@ export const DEFAULT_SETTINGS: Settings = {
   echoCancellation: false,
   chordTolerance: 'normal',
   inputGainDb: 0,
+  backingNudgeSec: 0,
 };
