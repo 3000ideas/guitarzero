@@ -43,12 +43,20 @@ import {
 export interface ChordGridOpts {
   /** Called with the new song text after every change made in the grid. */
   onChange: (source: string) => void;
+  /** The «Escuchar» button was pressed (the host plays or stops the song). */
+  onTogglePlay?: () => void;
 }
 
 export interface ChordGridView {
   el: HTMLElement;
   /** The text changed (or its diagnostics did): re-read it. Cheap when it is the grid's own text. */
   setSource(source: string, issues: readonly ParseError[]): void;
+  /** Marks the cell being played (null = none) without redrawing the grid. */
+  setPlayhead(pos: { item: number; bar: number; cell: number } | null): void;
+  /** The selected cell (where playback starts), or null. */
+  getSelection(): { item: number; bar: number; cell: number } | null;
+  /** Switches the «Escuchar» button between play and stop. */
+  setPlaying(playing: boolean): void;
   dispose(): void;
 }
 
@@ -96,10 +104,14 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
   let headOpen: boolean | null = null;
   let issuesKey = '';
 
+  let playhead: Sel | null = null;
+  let lastPlayheadBar = '';
+  const playBtn = h('button.btn.btn-sm.grid-play', { type: 'button', title: 'Reproduce la canción con acordes y marca por dónde va', onclick: () => opts.onTogglePlay?.() }, '▶ Escuchar') as HTMLButtonElement;
+  const transport = h('div.grid-transport', null, playBtn, h('span.muted.small', null, 'Empieza en el compás seleccionado'));
   const root = h('div.chord-grid-editor');
   const body = h('div.grid-body');
   const pad = h('div.grid-pad');
-  root.append(body, pad);
+  root.append(transport, body, pad);
 
   // ---------------------------------------------------------------- state helpers
 
@@ -232,7 +244,8 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
       'button.grid-cell',
       {
         type: 'button',
-        class: `${kind}${selected ? ' is-selected' : ''}${label.length > 4 ? ' is-long' : ''}`,
+        class: `${kind}${selected ? ' is-selected' : ''}${label.length > 4 ? ' is-long' : ''}${playhead && playhead.item === item && playhead.bar === bar && playhead.cell === cell ? ' is-playing' : ''}`,
+        dataset: { i: String(item), b: String(bar), c: String(cell) },
         'aria-label': `Pulso ${cell + 1}: ${value === '' ? 'sigue el acorde anterior' : value === REST_CELL ? 'silencio' : value}`,
         'aria-pressed': selected ? 'true' : 'false',
         onclick: () => select({ item, bar, cell }),
@@ -707,6 +720,30 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
         if (!validSel(sel)) sel = null;
       }
       render();
+    },
+    setPlayhead(pos) {
+      const old = body.querySelector('.grid-cell.is-playing');
+      if (old) old.classList.remove('is-playing');
+      playhead = pos ? { ...pos } : null;
+      if (!pos) {
+        lastPlayheadBar = '';
+        return;
+      }
+      const el = body.querySelector<HTMLElement>(`.grid-cell[data-i="${pos.item}"][data-b="${pos.bar}"][data-c="${pos.cell}"]`);
+      if (!el) return;
+      el.classList.add('is-playing');
+      const barKey = `${pos.item}:${pos.bar}`;
+      if (barKey !== lastPlayheadBar) {
+        lastPlayheadBar = barKey;
+        el.scrollIntoView({ block: 'nearest' });
+      }
+    },
+    getSelection() {
+      return validSel(sel) ? { ...sel } : null;
+    },
+    setPlaying(playing) {
+      playBtn.textContent = playing ? '■ Parar' : '▶ Escuchar';
+      playBtn.classList.toggle('btn-primary', playing);
     },
     dispose() {
       disposed = true;

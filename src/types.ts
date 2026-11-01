@@ -87,6 +87,9 @@ export interface SongBar {
   startBeat: number;
   beats: number;
   section: string | null;
+  /** 1-based text line the bar was written on, and its position among that line's bars (repeats and recalled sections keep them). */
+  srcLine?: number;
+  srcBar?: number;
   /** Chords held in this bar in order, with their duration in beats. Rests use quality 'nc', name '-'. */
   chords: Array<{ chord: ChordSymbol; startBeat: number; beats: number }>;
 }

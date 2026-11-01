@@ -1249,3 +1249,9 @@ recuerda la última en `localStorage` `gz.editorMode`; por defecto Cuadrícula).
   sección que solo repite otra. Cambiar `time:` reajusta las casillas.
 - Los cambios pasan por `applyText` del editor (autoguardado + «Deshacer»); los errores del parser
   salen bajo la fila afectada.
+- **Escuchar** (cuadrícula): el botón «▶ Escuchar» sintetiza la pista de acordes del texto
+  (`renderChordTrack`) y la reproduce desde el compás seleccionado (o el principio); la casilla
+  que suena se marca en verde (`setPlayhead`, sin redibujar). Cada `SongBar` lleva `srcLine` /
+  `srcBar` (línea de texto y posición en ella; las repeticiones y secciones reinsertadas comparten
+  los mismos), con lo que la reproducción expandida se proyecta sobre la cuadrícula. Se detiene al
+  terminar, al editar el texto, al pasar a la vista Texto o al salir.

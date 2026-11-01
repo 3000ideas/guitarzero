@@ -81,6 +81,9 @@ interface DefBar {
   strum: string;
   charsPerBeat: number;
   groups: Group[];
+  /** 1-based source line and index among the bars of that line (set by parseBarLine). */
+  line: number;
+  indexInLine: number;
 }
 
 interface SectionDef {
@@ -402,12 +405,15 @@ class SongParser {
     }
     const parsed: DefBar[] = [];
     let firstError: string | null = null;
-    for (const seg of segments) {
+    for (let si = 0; si < segments.length; si++) {
+      const seg = segments[si];
       const prev = parsed.length > 0 ? parsed[parsed.length - 1] : this.bars[this.bars.length - 1] ?? null;
       const r = this.parseBar(seg, prev);
       if (typeof r === 'string') {
         if (firstError === null) firstError = r;
       } else {
+        r.line = line;
+        r.indexInLine = si;
         parsed.push(r);
       }
     }
@@ -506,6 +512,8 @@ class SongParser {
       strum: this.strum,
       charsPerBeat,
       groups,
+      line: 0,
+      indexInLine: 0,
     };
   }
 
@@ -524,7 +532,7 @@ class SongParser {
         chords.push({ chord: g.chord, startBeat: s, beats: g.beats });
         s += g.beats;
       }
-      bars.push({ index: bars.length, startBeat: cursor, beats: b.beats, section: b.section, chords });
+      bars.push({ index: bars.length, startBeat: cursor, beats: b.beats, section: b.section, chords, srcLine: b.line, srcBar: b.indexInLine });
       cursor += b.beats;
     }
 

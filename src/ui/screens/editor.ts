@@ -114,6 +114,7 @@ import { getSong, saveSong } from '../../song/storage';
 import { deleteTrack, getTrack, hasIndexedDb, putTrack } from '../../song/audioStore';
 import { getAudioContext } from '../../audio/context';
 import { BackingTrack } from '../../audio/backing';
+import { renderChordTrack } from '../../audio/chordSynth';
 import { Metronome } from '../../audio/metronome';
 import { estimateTempo } from '../../dsp/tempoEstimate';
 import { transcribeChords } from '../../dsp/chordTranscribe';
@@ -1119,7 +1120,7 @@ export const editorScreen: Screen = {
 
     // Two ways to edit the same text: the text itself or the chord grid (SPEC section 22).
     let editMode: EditorMode = loadEditorMode();
-    const gridView = createChordGrid({ onChange: (next) => applyText(next) });
+    const gridView = createChordGrid({ onChange: (next) => applyText(next), onTogglePlay: () => void toggleGridPlay() });
     const textTab = h('button.mode-tab', { type: 'button', role: 'tab', onclick: () => setEditMode('text') }, 'Texto') as HTMLButtonElement;
     const gridTab = h('button.mode-tab', { type: 'button', role: 'tab', onclick: () => setEditMode('grid') }, 'Cuadrícula') as HTMLButtonElement;
     const modeTabs = h('div.mode-tabs', { role: 'tablist', 'aria-label': 'Forma de editar' }, gridTab, textTab);
@@ -1445,11 +1446,106 @@ export const editorScreen: Screen = {
       textarea.hidden = grid;
       textHint.hidden = grid;
       gridView.el.hidden = !grid;
+      if (!grid) stopGridPlay();
       gridTab.classList.toggle('is-active', grid);
       textTab.classList.toggle('is-active', !grid);
       gridTab.setAttribute('aria-selected', String(grid));
       textTab.setAttribute('aria-selected', String(!grid));
       if (grid) gridView.setSource(textarea.value, analysis.issues);
+    }
+
+    // ------------------------------------------------------------ grid playback
+
+    /** The chords of the text played as a synthesized track, with the playing cell marked on the grid. */
+    interface GridPlay {
+      bt: BackingTrack;
+      raf: number;
+      whenWall: number;
+      posSec: number;
+      song: Song;
+      source: string;
+      ctx: AudioContext;
+    }
+    let gridPlay: GridPlay | null = null;
+    let gridPlayStarting = false;
+
+    function stopGridPlay(): void {
+      const p = gridPlay;
+      gridPlay = null;
+      if (p) {
+        cancelAnimationFrame(p.raf);
+        p.bt.stop();
+        p.bt.dispose();
+      }
+      gridView.setPlayhead(null);
+      gridView.setPlaying(false);
+    }
+
+    /** Index of the last bar that starts at or before `beat` (bars are in order). */
+    function barAtBeat(song: Song, beat: number): number {
+      let lo = 0;
+      let hi = song.bars.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (song.bars[mid].startBeat <= beat) lo = mid;
+        else hi = mid - 1;
+      }
+      return lo;
+    }
+
+    function gridPlayTick(): void {
+      const p = gridPlay;
+      if (!p || unmounted) return;
+      const sec = p.posSec + (p.ctx.currentTime - p.whenWall);
+      const last = p.song.bars[p.song.bars.length - 1];
+      const beat = secToBeat(p.song.tempoSegments, Math.max(0, sec));
+      if (beat >= last.startBeat + last.beats) {
+        stopGridPlay();
+        return;
+      }
+      const bar = p.song.bars[barAtBeat(p.song, beat)];
+      if (bar.srcLine !== undefined && bar.srcBar !== undefined) {
+        const cell = Math.min(bar.beats - 1, Math.max(0, Math.floor(beat - bar.startBeat)));
+        gridView.setPlayhead({ item: bar.srcLine - 1, bar: bar.srcBar, cell });
+      }
+      p.raf = requestAnimationFrame(gridPlayTick);
+    }
+
+    async function toggleGridPlay(): Promise<void> {
+      if (gridPlay) {
+        stopGridPlay();
+        return;
+      }
+      if (gridPlayStarting) return;
+      const song = analysis.song;
+      if (song.bars.length === 0) return;
+      stopPreview();
+      gridPlayStarting = true;
+      try {
+        const ctx = getAudioContext();
+        try {
+          await ctx.resume();
+        } catch {
+          /* the click that started this allows it; if not, start() still schedules */
+        }
+        const buffer = await renderChordTrack(song, ctx.sampleRate);
+        if (unmounted || gridPlay) return;
+        const bt = new BackingTrack(ctx);
+        bt.loadBuffer(buffer);
+        bt.setGain(0.9);
+        const sel = gridView.getSelection();
+        const from = sel ? song.bars.find((b) => b.srcLine === sel.item + 1 && b.srcBar === sel.bar) : undefined;
+        const posSec = from ? beatToSec(song.tempoSegments, from.startBeat) : 0;
+        const whenWall = ctx.currentTime + 0.15;
+        bt.start(whenWall, posSec, 1);
+        gridPlay = { bt, raf: 0, whenWall, posSec, song, source: textarea.value, ctx };
+        gridView.setPlaying(true);
+        gridPlay.raf = requestAnimationFrame(gridPlayTick);
+      } catch (err) {
+        console.warn('No se pudo reproducir la canción', err);
+      } finally {
+        gridPlayStarting = false;
+      }
     }
 
     function goToLine(line: number): void {
@@ -1523,6 +1619,7 @@ export const editorScreen: Screen = {
       renderIssues();
       renderChords();
       renderStrum();
+      if (gridPlay && textarea.value !== gridPlay.source) stopGridPlay(); // the audio no longer matches the text
       if (editMode === 'grid') gridView.setSource(textarea.value, analysis.issues);
     }
 
@@ -2469,6 +2566,7 @@ export const editorScreen: Screen = {
       document.removeEventListener('visibilitychange', onVisibility);
       if (waveObserver) waveObserver.disconnect();
       else window.removeEventListener('resize', onWaveResize);
+      stopGridPlay();
       gridView.dispose();
       waveform.dispose();
       backing?.dispose();
