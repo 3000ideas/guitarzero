@@ -297,6 +297,7 @@ export const tunerScreen: Screen = {
     const diagBtn = h('button.btn.btn-sm', { type: 'button', onclick: () => void toggleDiagRecording() }, '● Grabar') as HTMLButtonElement;
     const diagStatus = h('div.tuner-diag-status', null, '');
     const diagAudioEl = h('audio', { controls: true, hidden: true }) as HTMLAudioElement;
+    const diagDownload = h('a', { hidden: true, download: 'afinador-grabacion.wav' }, 'Descargar la grabación (.wav)') as HTMLAnchorElement;
     const diagDetails = h(
       'details.tuner-diag',
       null,
@@ -312,6 +313,7 @@ export const tunerScreen: Screen = {
       diagBtn,
       diagStatus,
       diagAudioEl,
+      diagDownload,
     );
 
     const screen = h(
@@ -559,6 +561,7 @@ export const tunerScreen: Screen = {
       if (disposed) return;
       diagBtn.disabled = true;
       diagAudioEl.hidden = true;
+      diagDownload.hidden = true;
       diagStatus.textContent = 'Preparando el micrófono…';
       diagAlreadyRunning = running;
       diagChunks = [];
@@ -620,6 +623,8 @@ export const tunerScreen: Screen = {
       diagAudioUrl = URL.createObjectURL(wav);
       diagAudioEl.src = diagAudioUrl;
       diagAudioEl.hidden = false;
+      diagDownload.href = diagAudioUrl;
+      diagDownload.hidden = false;
       diagStatus.textContent = `${diagLevelDescription(diagMaxRmsDb)} Pulsa ▶ y escucha la grabación.`;
     }
 
