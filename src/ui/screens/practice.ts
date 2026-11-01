@@ -410,22 +410,49 @@ export const practiceScreen: Screen = {
       sectionSelect.value = '-1';
     }
 
+    // Everything that is a setting lives in a modal; the bar on top only keeps what the player
+    // needs while playing (title, tempo, the chord being heard) so the highway gets the screen.
+    const settingsBtn = h(
+      'button',
+      { class: 'btn practice-settings-btn', type: 'button', title: 'Velocidad, metrónomo, pista, micrófono, secciones…', onclick: () => openSettings() },
+      '⚙ Ajustes',
+    ) as HTMLButtonElement;
+    const closeSettingsBtn = h('button', { class: 'btn btn-primary', type: 'button', onclick: () => settingsDialog.close() }, 'Listo');
+    const settingsDialog = h(
+      'dialog.practice-dialog',
+      { 'aria-label': 'Ajustes de práctica' },
+      h('div.practice-dialog-body', null,
+        h('h2', null, 'Ajustes de práctica'),
+        h('label.practice-field', null, 'Velocidad', speedSelect),
+        h('label.practice-toggle', null, metronomeToggle, 'Metrónomo'),
+        h('label.practice-toggle', { title: 'Atajo: L' }, loopToggle, 'Repetir'),
+        sectionSelect ? h('label.practice-field', null, 'Sección', sectionSelect) : null,
+        backingControls,
+        h('label.practice-toggle', null, listenToggle, 'Escuchar con el micrófono'),
+        h('div.practice-mic', null, h('span.practice-mic-label', null, 'Micrófono:'), micStatusEl, micRetryBtn, levelEl),
+        h('div.practice-hint', null, 'Usa auriculares para que el micrófono no capte el metrónomo · ↓ rasgueo hacia abajo · ↑ hacia arriba'),
+        headphonesWarn,
+        agcNotice,
+        h('div.practice-dialog-actions', null, closeSettingsBtn),
+      ),
+    ) as HTMLDialogElement;
+
     const header = h(
       'header.practice-header',
       null,
       titleEl,
       tempoEl,
-      h('label.practice-field', null, 'Velocidad', speedSelect),
-      h('label.practice-toggle', null, metronomeToggle, 'Metrónomo'),
-      backingControls,
-      h('label.practice-toggle', null, listenToggle, 'Escuchar'),
-      h('div.practice-mic', null, h('span.practice-mic-label', null, 'Micrófono:'), micStatusEl, micRetryBtn, levelEl, liveChordEl, noEvalBadge),
-      h('label.practice-toggle', { title: 'Atajo: L' }, loopToggle, 'Repetir'),
-      sectionSelect ? h('label.practice-field', null, 'Sección', sectionSelect) : null,
-      h('div.practice-hint', null, 'Usa auriculares para que el micrófono no capte el metrónomo · ↓ rasgueo hacia abajo · ↑ hacia arriba'),
-      headphonesWarn,
-      agcNotice,
+      liveChordEl,
+      noEvalBadge,
+      settingsBtn,
+      settingsDialog,
     );
+
+    function openSettings(): void {
+      const phase = session.getState().phase;
+      if (phase === 'countin' || phase === 'playing') session.pause();
+      if (!settingsDialog.open) settingsDialog.showModal();
+    }
 
     let banner: HTMLElement | null = null;
     if (!getFlag('latencyCalibrated') && !bannerDismissed) {
@@ -550,6 +577,7 @@ export const practiceScreen: Screen = {
       const isError = MIC_ERROR_KINDS.includes(kind);
       micStatusEl.textContent = MIC_STATUS_TEXT[kind];
       micStatusEl.classList.toggle('is-error', isError);
+      settingsBtn.classList.toggle('has-alert', isError);
       micRetryBtn.hidden = !MIC_RETRY_KINDS.includes(kind);
       testMicBtn.hidden = kind === 'active' || kind === 'starting';
       if (playable) {
@@ -981,6 +1009,7 @@ export const practiceScreen: Screen = {
     // ---------------------------------------------------------------- keyboard / visibility
 
     const onKeyDown = (e: KeyboardEvent): void => {
+      if (settingsDialog.open) return; // the dialog owns the keyboard (Esc closes it, not the screen)
       if (e.repeat || e.altKey || e.ctrlKey || e.metaKey) return;
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;

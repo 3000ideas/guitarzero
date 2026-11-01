@@ -841,3 +841,64 @@
   min-width: 84px;
   text-align: center;
 }
+
+.practice-settings-btn {
+  margin-left: auto;
+  position: relative;
+}
+
+.practice-settings-btn.has-alert::after {
+  content: '';
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--bad);
+}
+
+.practice-dialog {
+  max-width: min(480px, 94vw);
+  width: 100%;
+  max-height: 88vh;
+  overflow: auto;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.practice-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.practice-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 16px;
+}
+
+.practice-dialog-body h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.practice-dialog-body .practice-backing,
+.practice-dialog-body .practice-mic {
+  flex-wrap: wrap;
+}
+
+.practice-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Compact layouts hide these in the bar; inside the dialog they must stay visible. */
+.practice-dialog .practice-hint,
+.practice-dialog .practice-headphones:not([hidden]),
+.practice-dialog .practice-agc:not([hidden]) {
+  display: block;
+}
