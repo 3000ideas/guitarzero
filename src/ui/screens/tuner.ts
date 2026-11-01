@@ -28,7 +28,7 @@ import { getFlag, loadSettings, setFlag } from '../../song/storage';
 import { MIC_CAPTURE_INTERVAL_MS, MicError, MicInput } from '../../audio/mic';
 import { RealFFT } from '../../dsp/fft';
 import { rmsDbOf } from '../../dsp/detector';
-import { detectPitch, detectPitchNear, type TunerReading } from '../../dsp/tuner';
+import { detectOpenString, type TunerReading } from '../../dsp/tuner';
 import { midiToFreq } from '../../music/notes';
 import { h } from '../dom';
 
@@ -206,6 +206,7 @@ export const tunerScreen: Screen = {
     let locked = false;
     let captureStartMs: number | null = null;
     let captured: TunerReading[] = [];
+    let capturedStrings: number[] = [];
     let diagRecording = false;
     let diagAudioUrl: string | null = null;
     let diagUnsub: (() => void) | null = null;
@@ -388,6 +389,7 @@ export const tunerScreen: Screen = {
       locked = false;
       captureStartMs = null;
       captured = [];
+      capturedStrings = [];
       updateNav();
       render();
     }
@@ -498,28 +500,40 @@ export const tunerScreen: Screen = {
         locked = false;
         captureStartMs = now;
         captured = [];
+        capturedStrings = [];
       }
       if (locked || captureStartMs === null) return; // this pluck is already identified
       const elapsedMs = now - captureStartMs;
       if (elapsedMs < TUNER_CAPTURE_DELAY_MS) return; // still inside the noisy pick attack
       fft.magnitudes(samples, mag);
-      const targetHz = midiToFreq(OPEN_STRINGS[currentIndex].midi, settings.a4);
-      // Guided first (robust to a weak fundamental on phone mics); unguided only to still say
-      // which other note is sounding when the player is on the wrong string.
-      const reading =
-        detectPitchNear(mag, mic.context.sampleRate, mic.fftSize, targetHz, { a4: settings.a4 }) ??
-        detectPitch(mag, mic.context.sampleRate, mic.fftSize, { a4: settings.a4 });
+      // Automatic string identification: the player just plucks, and the tuner works out which
+      // open string it was (and follows it) instead of insisting on the one pre-selected.
+      const targets = OPEN_STRINGS.map((st) => midiToFreq(st.midi, settings.a4));
+      const heard = detectOpenString(mag, mic.context.sampleRate, mic.fftSize, targets, { a4: settings.a4 });
+      if (heard) capturedStrings.push(heard.index);
+      const reading = heard?.reading;
       if (reading) captured.push(reading);
       if (elapsedMs >= TUNER_CAPTURE_DELAY_MS + TUNER_CAPTURE_WINDOW_MS) {
         // Capture window closed: lock in the median reading (robust to a single noisy frame) as
         // THE identification for this pluck. Further frames of the same ringing note are ignored
         // (see the `locked` check above) until the string goes quiet and is plucked again.
-        locked = true;
         if (captured.length > 0) {
-          const sorted = [...captured].sort((a, b) => a.freqHz - b.freqHz);
-          lastReading = sorted[Math.floor(sorted.length / 2)];
+          // Majority vote on the string, then the median frequency among that string's readings.
+          const votes = new Map<number, number>();
+          for (const i of capturedStrings) votes.set(i, (votes.get(i) ?? 0) + 1);
+          const winner = [...votes.entries()].sort((a, b) => b[1] - a[1])[0][0];
+          const sorted = captured
+            .filter((_, k) => capturedStrings[k] === winner)
+            .sort((a, b) => a.freqHz - b.freqHz);
+          const picked = sorted[Math.floor(sorted.length / 2)];
+          if (winner !== currentIndex) selectString(winner);
+          lastReading = picked;
+          lastSignalAtMs = now;
         }
+        locked = true;
+        captureStartMs = captureStartMs ?? now;
         captured = [];
+        capturedStrings = [];
       }
     }
 
@@ -649,6 +663,7 @@ export const tunerScreen: Screen = {
       locked = false;
       captureStartMs = null;
       captured = [];
+      capturedStrings = [];
       startBtn.hidden = false;
       stopBtn.hidden = true;
       statusEl.textContent = 'Pulsa Empezar y toca la cuerda señalada arriba.';

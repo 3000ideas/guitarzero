@@ -186,3 +186,37 @@ export function detectPitchNear(
     strength: globalMax > 0 ? maxPeak / globalMax : 0,
   };
 }
+
+/**
+ * Which open string is sounding, and how far off is it? Tries each target with the guided
+ * detector and keeps the HIGHEST one that fits: a pluck of a higher string also "fits" the
+ * sub-octave candidates (its 2nd/4th harmonics land on their 4th/8th), whereas the true string
+ * is the only one explaining the lowest partials. Falls back to the loudest-peak detector,
+ * snapped to the nearest open string, when no candidate fits (noisy spectrum, very out of tune).
+ */
+export function detectOpenString(
+  mag: Float32Array,
+  sampleRate: number,
+  fftSize: number,
+  targetsHz: readonly number[],
+  opts: { a4?: number } = {},
+): { index: number; reading: TunerReading } | null {
+  let best: { index: number; reading: TunerReading } | null = null;
+  for (let i = 0; i < targetsHz.length; i++) {
+    const r = detectPitchNear(mag, sampleRate, fftSize, targetsHz[i], opts);
+    if (r && (!best || targetsHz[i] > targetsHz[best.index])) best = { index: i, reading: r };
+  }
+  if (best) return best;
+  const r = detectPitch(mag, sampleRate, fftSize, opts);
+  if (!r) return null;
+  let index = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i < targetsHz.length; i++) {
+    const d = Math.abs(1200 * Math.log2(r.freqHz / targetsHz[i]));
+    if (d < bestDist) {
+      bestDist = d;
+      index = i;
+    }
+  }
+  return { index, reading: r };
+}

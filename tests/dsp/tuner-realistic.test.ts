@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectPitch, detectPitchNear } from '../../src/dsp/tuner';
+import { detectOpenString, detectPitch, detectPitchNear } from '../../src/dsp/tuner';
 import { magnitudesAt, synthChord } from '../helpers/synth';
 
 const OPEN = [40, 45, 50, 55, 59, 64]; // E2 A2 D3 G3 B3 E4
@@ -53,5 +53,33 @@ describe('detectPitchNear: weak fundamental (phone mic rolls off the low end)', 
   it('returns null when a different string is played (so the caller can name the heard note)', () => {
     const mag = magnitudesAt(weakFundamental(45, 0), fftSize * 2, fftSize); // A2 played
     expect(detectPitchNear(mag, sampleRate, fftSize, 440 * Math.pow(2, (40 - 69) / 12))).toBeNull(); // target E2
+  });
+});
+
+describe('detectOpenString: which string was plucked, with no string pre-selected', () => {
+  const sampleRate = 44100;
+  const fftSize = 8192;
+  const targets = OPEN.map((m) => 440 * Math.pow(2, (m - 69) / 12));
+
+  it.each(OPEN.map((m, i) => [m, i]))('realistic pluck of MIDI %i is string index %i, in tune', (midi, index) => {
+    const signal = synthChord([midi], sampleRate, 2.5, { dbfs: -18 });
+    for (const tSec of [0.3, 0.6, 1.0]) {
+      const mag = magnitudesAt(signal, Math.round(tSec * sampleRate), fftSize);
+      const r = detectOpenString(mag, sampleRate, fftSize, targets);
+      expect(r?.index, `t=${tSec}`).toBe(index);
+      expect(Math.abs(r!.reading.centsOff)).toBeLessThan(15);
+    }
+  });
+
+  it.each(OPEN.map((m, i) => [m, i]))('weak-fundamental pluck of MIDI %i (±30 cents) is string index %i', (midi, index) => {
+    for (const cents of [-30, 0, 30]) {
+      const f0 = 440 * Math.pow(2, (midi - 69) / 12 + cents / 1200);
+      const n = fftSize * 2;
+      const sig = new Float32Array(n);
+      const amps = [0.05, 1, 0.7, 0.5];
+      for (let h = 1; h <= 4; h++) for (let t = 0; t < n; t++) sig[t] += amps[h - 1] * Math.sin((2 * Math.PI * f0 * h * t) / sampleRate);
+      const r = detectOpenString(magnitudesAt(sig, n, fftSize), sampleRate, fftSize, targets);
+      expect(r?.index, `${cents}c`).toBe(index);
+    }
   });
 });
