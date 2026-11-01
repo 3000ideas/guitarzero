@@ -99,3 +99,18 @@ describe('detectOpenString: no pluck means no string', () => {
     }
   });
 });
+
+describe('detectPitchNear non-strict (guided tuning of a chosen string)', () => {
+  it('reads D3 from a weak fundamental plus a noisy off-harmonic peak, instead of a harmonic', () => {
+    const sampleRate = 44100, fftSize = 8192, n = fftSize * 2;
+    const f0 = 440 * Math.pow(2, (50 - 69) / 12) * Math.pow(2, 12 / 1200);
+    const sig = new Float32Array(n);
+    const amps = [0.1, 1, 0.6, 0.4];
+    for (let h = 1; h <= 4; h++) for (let t = 0; t < n; t++) sig[t] += amps[h - 1] * Math.sin((2 * Math.PI * f0 * h * t) / sampleRate);
+    for (let t = 0; t < n; t++) sig[t] += 0.8 * Math.sin((2 * Math.PI * 261 * t) / sampleRate); // off-harmonic noise tone
+    const mag = magnitudesAt(sig, n, fftSize);
+    const r = detectPitchNear(mag, sampleRate, fftSize, 440 * Math.pow(2, (50 - 69) / 12), { strict: false });
+    expect(r?.midi).toBe(50);
+    expect(Math.abs(r!.centsOff - 12)).toBeLessThan(8);
+  });
+});

@@ -120,9 +120,10 @@ export function detectPitchNear(
   sampleRate: number,
   fftSize: number,
   targetHz: number,
-  opts: { a4?: number } = {},
+  opts: { a4?: number; strict?: boolean } = {},
 ): TunerReading | null {
   if (!(sampleRate > 0) || !(fftSize > 0) || !(targetHz > 0)) return null;
+  const strict = opts.strict ?? true;
   const a4 = opts.a4 ?? 440;
   const df = sampleRate / fftSize;
   const HARMONICS = 4;
@@ -150,18 +151,18 @@ export function detectPitchNear(
   }
   if (maxPeak <= 0) return null;
   // A string rings with several harmonics; a lone tone (mains hum, a whistle) is not one.
-  if (peaks.filter((p) => p.m >= 0.15 * maxPeak).length < 2) return null;
+  if (strict && peaks.filter((p) => p.m >= 0.15 * maxPeak).length < 2) return null;
 
   // Must stand out from the rest of the spectrum, else it is not this string.
   const kLo = Math.max(1, Math.floor(70 / df));
   const kHi = Math.min(mag.length - 2, Math.ceil(1500 / df));
   let globalMax = 0;
   for (let k = kLo; k <= kHi; k++) if (mag[k] > globalMax) globalMax = mag[k];
-  if (maxPeak < 0.25 * globalMax) return null;
+  if (strict && maxPeak < 0.25 * globalMax) return null;
 
   // Every strong peak must sit on a harmonic of f0; otherwise f0 is a sub-harmonic ghost of
   // some other note (e.g. D2's 3rd harmonic matching an A2 pluck's 2nd).
-  for (let k = kLo + 1; k < kHi; k++) {
+  for (let k = kLo + 1; strict && k < kHi; k++) {
     if (!(mag[k] > 0.4 * globalMax && mag[k] > mag[k - 1] && mag[k] >= mag[k + 1])) continue;
     const ratio = (k * df) / f0;
     const h = Math.round(ratio);

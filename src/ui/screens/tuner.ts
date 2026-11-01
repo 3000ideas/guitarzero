@@ -512,7 +512,7 @@ export const tunerScreen: Screen = {
       // misfiring, so the player picks the string (buttons / arrow keys) and the tuner measures it.
       const targetHz = midiToFreq(OPEN_STRINGS[currentIndex].midi, settings.a4);
       const reading =
-        detectPitchNear(mag, mic.context.sampleRate, mic.fftSize, targetHz, { a4: settings.a4 }) ??
+        detectPitchNear(mag, mic.context.sampleRate, mic.fftSize, targetHz, { a4: settings.a4, strict: false }) ??
         detectPitch(mag, mic.context.sampleRate, mic.fftSize, { a4: settings.a4 });
       lastDetect = reading ? `${reading.noteName} ${reading.freqHz.toFixed(1)} Hz` : 'ninguna nota';
       if (reading) {
