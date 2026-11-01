@@ -149,6 +149,8 @@ export function detectPitchNear(
     if (p.m > maxPeak) maxPeak = p.m;
   }
   if (maxPeak <= 0) return null;
+  // A string rings with several harmonics; a lone tone (mains hum, a whistle) is not one.
+  if (peaks.filter((p) => p.m >= 0.15 * maxPeak).length < 2) return null;
 
   // Must stand out from the rest of the spectrum, else it is not this string.
   const kLo = Math.max(1, Math.floor(70 / df));
@@ -201,6 +203,7 @@ export function detectOpenString(
   targetsHz: readonly number[],
   opts: { a4?: number } = {},
 ): { index: number; reading: TunerReading } | null {
+  if (!isTonal(mag, sampleRate / fftSize)) return null;
   let best: { index: number; reading: TunerReading } | null = null;
   for (let i = 0; i < targetsHz.length; i++) {
     const r = detectPitchNear(mag, sampleRate, fftSize, targetsHz[i], opts);
@@ -209,6 +212,11 @@ export function detectOpenString(
   if (best) return best;
   const r = detectPitch(mag, sampleRate, fftSize, opts);
   if (!r) return null;
+  // Same "several harmonics" rule as the guided path: a lone tone is hum or a whistle.
+  const df = sampleRate / fftSize;
+  const fund = peakNear(mag, r.freqHz / df, 3);
+  const second = peakNear(mag, (2 * r.freqHz) / df, 3);
+  if (!fund || !second || second.m < 0.15 * fund.m) return null;
   let index = 0;
   let bestDist = Infinity;
   for (let i = 0; i < targetsHz.length; i++) {
@@ -219,4 +227,20 @@ export function detectOpenString(
     }
   }
   return { index, reading: r };
+}
+
+/**
+ * A plucked string is PEAKY (a few harmonics far above everything else); room noise, hiss and
+ * mains hum with a boosted mic gain are flat or smeared. Without this check a quiet room above
+ * the gate was "recognised" as some string. Ratio of the loudest bin to the median bin in 70-1500 Hz.
+ */
+const TONAL_PEAK_TO_MEDIAN = 12;
+
+export function isTonal(mag: Float32Array, df: number): boolean {
+  const lo = Math.max(1, Math.floor(70 / df));
+  const hi = Math.min(mag.length - 2, Math.ceil(1500 / df));
+  if (hi <= lo) return false;
+  const band = Array.from(mag.subarray(lo, hi + 1)).sort((a, b) => a - b);
+  const median = band[band.length >> 1];
+  return band[band.length - 1] > TONAL_PEAK_TO_MEDIAN * Math.max(median, 1e-12);
 }

@@ -83,3 +83,19 @@ describe('detectOpenString: which string was plucked, with no string pre-selecte
     }
   });
 });
+
+describe('detectOpenString: no pluck means no string', () => {
+  const sampleRate = 44100;
+  const fftSize = 8192;
+  const targets = OPEN.map((m) => 440 * Math.pow(2, (m - 69) / 12));
+  it('white noise, and noise plus 50/100 Hz mains hum, are not a string', () => {
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296) * 2 - 1;
+    const n = fftSize * 2;
+    for (const hum of [0, 0.05]) {
+      const sig = new Float32Array(n);
+      for (let t = 0; t < n; t++) sig[t] = 0.02 * rnd() + hum * Math.sin((2 * Math.PI * 50 * t) / sampleRate) + hum * 0.5 * Math.sin((2 * Math.PI * 100 * t) / sampleRate);
+      expect(detectOpenString(magnitudesAt(sig, n, fftSize), sampleRate, fftSize, targets), `hum ${hum}`).toBeNull();
+    }
+  });
+});
