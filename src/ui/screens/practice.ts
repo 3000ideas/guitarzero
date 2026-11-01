@@ -656,7 +656,10 @@ export const practiceScreen: Screen = {
           backingLoad = null; // toggling "Pista" on again retries
           if (!disposed) {
             console.warn('No se pudo cargar la pista de audio', err);
-            setBackingStatus(BACKING_FAILED_TEXT, true);
+            // Append the real reason (e.g. "No se encontró el archivo de audio…" vs a decode
+            // error) so a phone user can tell a lost file from an unsupported format.
+            const reason = err instanceof Error && err.message ? ` (${err.message})` : '';
+            setBackingStatus(BACKING_FAILED_TEXT + reason, true);
           }
           return false;
         }
