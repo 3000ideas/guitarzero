@@ -208,6 +208,7 @@ export const tunerScreen: Screen = {
     let captured: TunerReading[] = [];
     let capturedStrings: number[] = [];
     let lastDetect = '—';
+    const tunedStrings = new Set<number>(); // strings held in tune this session; all 6 = finished
     let doneMsgUntilMs = 0; // '¡Afinada!' banner is shown only briefly, never left stale on the next string
     let diagRecording = false;
     let diagAudioUrl: string | null = null;
@@ -462,13 +463,20 @@ export const tunerScreen: Screen = {
 
       if (zone === 'in-tune') {
         if (inTuneSinceMs === null) inTuneSinceMs = now;
-        else if (now - inTuneSinceMs >= TUNER_HOLD_MS && currentIndex < OPEN_STRINGS.length - 1) {
-          selectString(currentIndex + 1);
+        else if (now - inTuneSinceMs >= TUNER_HOLD_MS) {
+          tunedStrings.add(currentIndex);
+          if (tunedStrings.size >= OPEN_STRINGS.length) {
+            // Everything tuned: stop listening (nothing more to measure) and say so.
+            stop();
+            statusEl.textContent = '¡Todas afinadas! Ya puedes detener: has terminado.';
+            return;
+          }
+          // Next string still to tune: the first one after this, wrapping to the start.
+          const order = OPEN_STRINGS.map((_, i) => (currentIndex + 1 + i) % OPEN_STRINGS.length);
+          selectString(order.find((i) => !tunedStrings.has(i)) ?? currentIndex);
           statusEl.textContent = '¡Afinada! Siguiente cuerda.';
           doneMsgUntilMs = now + 2500;
           return;
-        } else if (now - inTuneSinceMs >= TUNER_HOLD_MS) {
-          statusEl.textContent = '¡Todas afinadas!';
         }
       } else {
         inTuneSinceMs = null;
@@ -647,6 +655,7 @@ export const tunerScreen: Screen = {
         await mic.start(settings.inputDeviceId ?? undefined, { echoCancellation: settings.echoCancellation });
         if (disposed) return;
         running = true;
+        tunedStrings.clear();
         startedAtMs = performance.now();
         lastSignalAtMs = null;
         mic.onFrame(onMicFrame);
