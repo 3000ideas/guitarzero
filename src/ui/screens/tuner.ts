@@ -215,6 +215,8 @@ export const tunerScreen: Screen = {
     let diagAutoStopTimer: number | null = null;
     /** Level of the very last mic frame, silence or not — drives the live "is it hearing me" meter. */
     let lastRmsDb = -Infinity;
+    let framesSeen = 0;
+    let lastPeak = 0;
 
     // ---------------------------------------------------------------- elements
 
@@ -223,6 +225,8 @@ export const tunerScreen: Screen = {
     const levelGate = h('div.tuner-level-gate', { title: 'Umbral de silencio' });
     const levelEl = h('div.tuner-level', { title: 'Nivel de entrada del micrófono, en directo' }, levelFill, levelGate);
     const levelRow = h('div.tuner-level-row', null, h('span.tuner-level-label', null, 'Nivel de entrada:'), levelEl);
+    // Plain-text probe so a phone user can tell "the mic is dead" from "the signal is just weak".
+    const probeEl = h('div.tuner-help', null, '');
     const noteEl = h('div.tuner-note', null, '—');
     const freqEl = h('div.tuner-freq', null, '— Hz');
     const meterFill = h('div.tuner-meter-fill');
@@ -321,6 +325,7 @@ export const tunerScreen: Screen = {
         h('div.tuner-target-label', null, 'Toca esta cuerda:'),
         targetEl,
         levelRow,
+        probeEl,
         noteEl,
         freqEl,
         meter,
@@ -397,6 +402,9 @@ export const tunerScreen: Screen = {
       // Live input meter: moves with the RAW level of the very last mic frame, silence or not —
       // unlike the note/cents display (which only updates once per identified pluck), this proves
       // in real time whether the microphone is receiving anything at all, no recording required.
+      probeEl.textContent = running
+        ? `Diagnóstico: audio ${mic.context.state}, ${framesSeen} fotogramas, pico ${lastPeak.toFixed(4)}, ${lastRmsDb === -Infinity ? '—' : lastRmsDb.toFixed(0)} dB`
+        : '';
       const rmsForMeter = running ? lastRmsDb : TUNER_LEVEL_MIN_DB;
       const levelPct = Math.round(clamp((rmsForMeter - TUNER_LEVEL_MIN_DB) / (TUNER_LEVEL_MAX_DB - TUNER_LEVEL_MIN_DB), 0, 1) * 100);
       levelFill.style.width = `${levelPct}%`;
@@ -473,6 +481,13 @@ export const tunerScreen: Screen = {
       // it ever had a chance to complete, so the tuner never identified anything at all. Only a
       // gap LONGER than TUNER_SILENCE_RESET_MS (checked below) counts as real silence.
       const rmsDb = rmsDbOf(samples);
+      framesSeen++;
+      let pk = 0;
+      for (let i = 0; i < samples.length; i++) {
+        const a = Math.abs(samples[i]);
+        if (a > pk) pk = a;
+      }
+      lastPeak = pk;
       lastRmsDb = rmsDb; // every frame, silence included: the live meter must show the true level
       if (rmsDb < settings.gateDb) return;
       const now = performance.now();
