@@ -509,7 +509,7 @@ export const tunerScreen: Screen = {
       // Automatic string identification: the player just plucks, and the tuner works out which
       // open string it was (and follows it) instead of insisting on the one pre-selected.
       const targets = OPEN_STRINGS.map((st) => midiToFreq(st.midi, settings.a4));
-      const heard = detectOpenString(mag, mic.context.sampleRate, mic.fftSize, targets, { a4: settings.a4 });
+      const heard = detectOpenString(mag, mic.context.sampleRate, mic.fftSize, targets, { a4: settings.a4, preferIndex: currentIndex });
       if (heard) capturedStrings.push(heard.index);
       const reading = heard?.reading;
       if (reading) captured.push(reading);

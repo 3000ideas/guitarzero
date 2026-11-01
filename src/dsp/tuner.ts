@@ -191,7 +191,7 @@ export function detectPitchNear(
 
 /**
  * Which open string is sounding, and how far off is it? Tries each target with the guided
- * detector and keeps the HIGHEST one that fits: a pluck of a higher string also "fits" the
+ * detector and picks the best-fitting one (see below): a pluck of a higher string also "fits" the
  * sub-octave candidates (its 2nd/4th harmonics land on their 4th/8th), whereas the true string
  * is the only one explaining the lowest partials. Falls back to the loudest-peak detector,
  * snapped to the nearest open string, when no candidate fits (noisy spectrum, very out of tune).
@@ -201,19 +201,36 @@ export function detectOpenString(
   sampleRate: number,
   fftSize: number,
   targetsHz: readonly number[],
-  opts: { a4?: number } = {},
+  opts: { a4?: number; preferIndex?: number } = {},
 ): { index: number; reading: TunerReading } | null {
   if (!isTonal(mag, sampleRate / fftSize)) return null;
-  let best: { index: number; reading: TunerReading } | null = null;
+  const df = sampleRate / fftSize;
+  const lo = Math.max(1, Math.floor(70 / df));
+  const hi = Math.min(mag.length - 2, Math.ceil(1500 / df));
+  const sortedBand = Array.from(mag.subarray(lo, hi + 1)).sort((x, y) => x - y);
+  const median = sortedBand[sortedBand.length >> 1];
+  const fits: Array<{ index: number; reading: TunerReading; hasFundamental: boolean }> = [];
   for (let i = 0; i < targetsHz.length; i++) {
     const r = detectPitchNear(mag, sampleRate, fftSize, targetsHz[i], opts);
-    if (r && (!best || targetsHz[i] > targetsHz[best.index])) best = { index: i, reading: r };
+    if (!r) continue;
+    const fund = peakNear(mag, r.freqHz / df, 2);
+    fits.push({ index: i, reading: r, hasFundamental: !!fund && fund.m > 4 * Math.max(median, 1e-12) });
   }
-  if (best) return best;
+  if (fits.length > 0) {
+    // A higher string's harmonics also fit the sub-octave candidates (and vice versa when a phone
+    // mic drops the fundamental), so the order of preference matters: the lowest candidate whose
+    // own fundamental is really there; else the one already selected (don't jump around); else
+    // the highest fit.
+    const withFund = fits.filter((f) => f.hasFundamental);
+    const pick =
+      withFund.sort((x, y) => x.index - y.index)[0] ??
+      fits.find((f) => f.index === opts.preferIndex) ??
+      fits.sort((x, y) => y.index - x.index)[0];
+    return { index: pick.index, reading: pick.reading };
+  }
   const r = detectPitch(mag, sampleRate, fftSize, opts);
   if (!r) return null;
   // Same "several harmonics" rule as the guided path: a lone tone is hum or a whistle.
-  const df = sampleRate / fftSize;
   const fund = peakNear(mag, r.freqHz / df, 3);
   const second = peakNear(mag, (2 * r.freqHz) / df, 3);
   if (!fund || !second || second.m < 0.15 * fund.m) return null;
