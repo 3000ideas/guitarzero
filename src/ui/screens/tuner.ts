@@ -28,7 +28,7 @@ import { getFlag, loadSettings, setFlag } from '../../song/storage';
 import { MIC_CAPTURE_INTERVAL_MS, MicError, MicInput } from '../../audio/mic';
 import { RealFFT } from '../../dsp/fft';
 import { rmsDbOf } from '../../dsp/detector';
-import { detectOpenString, type TunerReading } from '../../dsp/tuner';
+import { detectPitch, detectPitchNear, type TunerReading } from '../../dsp/tuner';
 import { midiToFreq } from '../../music/notes';
 import { h } from '../dom';
 
@@ -207,6 +207,7 @@ export const tunerScreen: Screen = {
     let captureStartMs: number | null = null;
     let captured: TunerReading[] = [];
     let capturedStrings: number[] = [];
+    let lastDetect = '—';
     let diagRecording = false;
     let diagAudioUrl: string | null = null;
     let diagUnsub: (() => void) | null = null;
@@ -405,7 +406,7 @@ export const tunerScreen: Screen = {
       // unlike the note/cents display (which only updates once per identified pluck), this proves
       // in real time whether the microphone is receiving anything at all, no recording required.
       probeEl.textContent = running
-        ? `Diagnóstico: audio ${mic.context.state}, ${framesSeen} fotogramas, pico ${lastPeak.toFixed(4)}, ${lastRmsDb === -Infinity ? '—' : lastRmsDb.toFixed(0)} dB`
+        ? `Diagnóstico: audio ${mic.context.state}, ${framesSeen} fotogramas, pico ${lastPeak.toFixed(4)}, ${lastRmsDb === -Infinity ? '—' : lastRmsDb.toFixed(0)} dB, oído: ${lastDetect}`
         : '';
       const rmsForMeter = running ? lastRmsDb : TUNER_LEVEL_MIN_DB;
       const levelPct = Math.round(clamp((rmsForMeter - TUNER_LEVEL_MIN_DB) / (TUNER_LEVEL_MAX_DB - TUNER_LEVEL_MIN_DB), 0, 1) * 100);
@@ -506,13 +507,18 @@ export const tunerScreen: Screen = {
       const elapsedMs = now - captureStartMs;
       if (elapsedMs < TUNER_CAPTURE_DELAY_MS) return; // still inside the noisy pick attack
       fft.magnitudes(samples, mag);
-      // Automatic string identification: the player just plucks, and the tuner works out which
-      // open string it was (and follows it) instead of insisting on the one pre-selected.
-      const targets = OPEN_STRINGS.map((st) => midiToFreq(st.midi, settings.a4));
-      const heard = detectOpenString(mag, mic.context.sampleRate, mic.fftSize, targets, { a4: settings.a4, preferIndex: currentIndex });
-      if (heard) capturedStrings.push(heard.index);
-      const reading = heard?.reading;
-      if (reading) captured.push(reading);
+      // Guided by the selected string (always works on a weak phone-mic fundamental); the loudest-peak
+      // fallback only names whatever else is sounding. No automatic string jumping: it kept
+      // misfiring, so the player picks the string (buttons / arrow keys) and the tuner measures it.
+      const targetHz = midiToFreq(OPEN_STRINGS[currentIndex].midi, settings.a4);
+      const reading =
+        detectPitchNear(mag, mic.context.sampleRate, mic.fftSize, targetHz, { a4: settings.a4 }) ??
+        detectPitch(mag, mic.context.sampleRate, mic.fftSize, { a4: settings.a4 });
+      lastDetect = reading ? `${reading.noteName} ${reading.freqHz.toFixed(1)} Hz` : 'ninguna nota';
+      if (reading) {
+        captured.push(reading);
+        capturedStrings.push(currentIndex);
+      }
       if (elapsedMs >= TUNER_CAPTURE_DELAY_MS + TUNER_CAPTURE_WINDOW_MS) {
         // Capture window closed: lock in the median reading (robust to a single noisy frame) as
         // THE identification for this pluck. Further frames of the same ringing note are ignored
