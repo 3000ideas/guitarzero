@@ -1150,14 +1150,27 @@ se compararía silenciosamente con la cuerda vecina equivocada). El jugador elig
 (6ª a 1ª); mantenerla afinada ~1 s pasa sola a la siguiente.
 
 - `dsp/tuner.ts` (puro, testeable): `detectPitch(mag, sampleRate, fftSize, opts)` — pico más
-  fuerte en [70, 400] Hz (cubre las 6 cuerdas al aire con margen), refinado por interpolación
-  parabólica (igual que `chroma.ts`), convertido a MIDI/cents. Monofónico a propósito (una
-  cuerda a la vez, como cualquier afinador).
+  fuerte en [70, 400] Hz, interpolación parabólica, convertido a MIDI/cents. Falla con micrófonos
+  de móvil/portátil que atenúan los graves (el armónico es más fuerte que la fundamental y se lee
+  una octava o quinta arriba), así que la pantalla usa primero `detectPitchNear(mag, sr, fftSize,
+  targetHz, {strict})`: dentro de ±3 semitonos de la cuerda elegida busca el f0 cuyos 4 primeros
+  armónicos suman más energía y mide la frecuencia en el armónico más bajo claramente presente
+  (dividida por su orden). `strict: false` (el que usa la pantalla) no exige que destaque sobre el
+  resto del espectro; `strict: true` (por defecto) además rechaza picos fuertes fuera de la serie
+  armónica y tonos aislados (zumbido). `detectOpenString` + `isTonal` (identificar la cuerda sola
+  y rechazar ruido plano) existen y están testeados, pero la pantalla NO los usa: el salto
+  automático de cuerda fallaba con micrófonos reales y se retiró; el jugador elige la cuerda.
 - `ui/screens/tuner.ts`: reutiliza `MicInput` directamente (no el Worker de
   `micDetector.ts` — una sola nota es mucho más simple que reconocer acordes) con su propio
   `AudioContext` de captura. Filtro de silencio: `rmsDbOf(samples) < settings.gateDb` descarta
   el fotograma entero (sin esto, "el pico más fuerte del fotograma" sigue siendo un pico aunque
   sea silencio, y el afinador "oía" una nota fantasma nada más empezar a escuchar).
+- Una pulsación se identifica UNA vez: tras `TUNER_CAPTURE_DELAY_MS` (60 ms de ataque) se
+  acumulan lecturas `TUNER_CAPTURE_WINDOW_MS` (200 ms) y se fija la mediana; un hueco de señal
+  mayor que `TUNER_SILENCE_RESET_MS` (150 ms) marca una pulsación nueva (las caídas breves de
+  nivel de una cuerda viva no reinician la captura). El aviso "¡Afinada!" caduca a los 2,5 s.
+- Diagnóstico: medidor de nivel con marca de la puerta, línea "Diagnóstico: audio …, N
+  fotogramas, pico, dB, oído: nota Hz", y Grabar/Parar con reproducción y descarga .wav.
 - La última lectura se queda fija en pantalla (no se borra a los 400 ms) para dar tiempo a leer
   el consejo; un piloto (punto de color junto al estado: gris parado, pulsando mientras escucha,
   verde en cuanto hay señal real) y un aviso "sin sonido ahora" cuando la lectura lleva más de
@@ -1183,12 +1196,11 @@ autopista), para practicar controlando el ritmo y los acordes sin el ruido de la
     en esa digitación y genera una nota por cuerda, de grave a aguda para un rasgueo hacia abajo
     y de aguda a grave para uno hacia arriba, cada una desplazada `CHORD_SYNTH_STRING_STAGGER_SEC`
     (10 ms) respecto a la anterior (el "barrido" de un rasgueo real, no todas las cuerdas a la vez).
-  - `renderChordTrack(song, sampleRate, a4): Promise<AudioBuffer>` — `OfflineAudioContext`;
-    cada nota es un oscilador `triangle` con envolvente rápida (4 ms de ataque, decaimiento
+  - `renderChordTrack(song, sampleRate, a4): Promise<AudioBuffer>` — síntesis directa por muestras
+    (un `OfflineAudioContext` se colgaba con canciones largas); cada nota es una onda `triangle` con envolvente rápida (4 ms de ataque, decaimiento
     exponencial τ = 0.35 s); cada golpe mudo es una ráfaga corta de ruido blanco filtrada en
     banda (~2200 Hz); todo pasa por un único filtro paso-bajo maestro (3500 Hz) para un timbre
-    cálido con muy pocos nodos. Requiere navegador real (`OfflineAudioContext` no existe en
-    Node/Vitest); verificado a mano — sin errores, pico y RMS dentro de rango, sin saturar.
+    cálido con muy pocos nodos. Requiere navegador real (`AudioBuffer`); verificado a mano — sin errores, pico y RMS dentro de rango, sin saturar.
 - `audio/backing.ts`: `BackingTrack.loadBuffer(buffer: AudioBuffer)` — como `load(blob)` pero
   para un `AudioBuffer` ya decodificado, reutilizando toda la lógica de sincronización/ganancia
   existente.
@@ -1196,3 +1208,18 @@ autopista), para practicar controlando el ritmo y los acordes sin el ruido de la
   original" / "Solo acordes (simplificado)" en Practicar, solo visible cuando la canción tiene
   audio subido. La pista sintetizada se renderiza una vez por canción y se cachea; a diferencia
   del audio subido, su muestra 0 ES el beat 0 exacto (sin `audio.offsetSec` propio).
+
+## 21. Ajustes añadidos para móvil, dificultad y publicación
+
+- **Dificultad de acordes**: `Settings.chordTolerance: 'normal' | 'lenient'`;
+  `CHORD_TOLERANCE_PRESETS` (game/judge.ts) fija `minScore` y `mismatchMargin` (reglas 7-9 del
+  juez). `analysisWindowSec` = 0,3: el acierto de tiempo es instantáneo y el del acorde llega
+  hasta 300 ms después del rasgueo. El anillo de acierto se dibuja siempre en la línea de golpeo.
+- **Ganancia de entrada**: `Settings.inputGainDb` (0..30 dB) → `MicInput.setInputGainDb`. Grafo
+  de captura: fuente → ganancia → analizador → nodo de ganancia 0 → destino (iOS Safari no
+  "tira" de un grafo sin salida). Sin cancelación de ruido ni AGC por defecto.
+- **Pista de audio en iPhone**: Safari falla al guardar `Blob` en IndexedDB; `audioStore` guarda
+  un `ArrayBuffer` (con respaldo en memoria si IndexedDB falla) y el aviso muestra el motivo real.
+  Los `<input type=file>` van ocultos visualmente, no con `display:none`.
+- **Publicación**: GitHub Pages desde `.github/workflows/deploy.yml` al hacer push a `master`
+  (repo público); `vite.config.ts` usa `base: './'`. Micrófono en móvil exige HTTPS.
