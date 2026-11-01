@@ -249,6 +249,7 @@ export const practiceScreen: Screen = {
     const source = new MicDetectorSource(mic, detectorOptsFromSettings(settings));
     source.setTranspose(song.capo + settings.tuningOffset);
     const ctx = getAudioContext();
+    mic.setTimeBase(() => ctx.currentTime); // mic frames in the engine's clock (see MicInput.setTimeBase)
     const metronome = new Metronome(ctx);
     metronome.setEnabled(settings.metronome);
     const clock = { now: () => ctx.currentTime };

@@ -1,7 +1,10 @@
 /**
  * MicInput: getUserMedia + AnalyserNode + a ~40 ms capture loop that hands every subscriber a
- * NEW Float32Array of the last `fftSize` samples, stamped with the RAW AudioContext time of the
- * end of the frame (never latency-corrected here; only the practice engine applies latencySec).
+ * NEW Float32Array of the last `fftSize` samples, stamped with the RAW time of the end of the
+ * frame (never latency-corrected here; only the practice engine applies latencySec). The stamp is
+ * read from `setTimeBase()`'s clock when set — the practice engine, metronome and backing track
+ * run on the SHARED playback context, and two AudioContexts' currentTime have unrelated, random
+ * origins (measured: 0.6-0.7 s apart), so frames must be stamped in the playback context's time.
  *
  * Capture runs on its OWN private AudioContext, never shared with playback (the backing track /
  * metronome use the separate shared context from audio/context.ts). A single AudioContext that
@@ -79,6 +82,7 @@ export class MicInput {
   private gainDb = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
   /** This capture's own AudioContext (lazy; never shared with playback). See the class doc comment. */
+  private timeBase: (() => number) | null = null;
   private captureCtx: AudioContext | null = null;
   private readonly subscribers = new Set<MicFrameCallback>();
   private starting: Promise<void> | null = null;
@@ -255,6 +259,15 @@ export class MicInput {
     if (this.gainNode) this.gainNode.gain.value = Math.pow(10, this.gainDb / 20);
   }
 
+  /**
+   * Stamps every frame with `now()` (seconds) instead of this capture context's own currentTime.
+   * Pass the playback context's clock so mic onsets and the engine's expected times share one time
+   * base. Without it the two differ by an arbitrary per-session offset.
+   */
+  setTimeBase(now: (() => number) | null): void {
+    this.timeBase = now;
+  }
+
   /** Subscribes to captured frames; returns the unsubscribe function. Frames only flow while running. */
   onFrame(cb: MicFrameCallback): () => void {
     this.subscribers.add(cb);
@@ -288,7 +301,7 @@ export class MicInput {
     if (!analyser || this.subscribers.size === 0) return;
     const frame = new Float32Array(this.fftSize); // a new buffer per frame: subscribers may keep it
     analyser.getFloatTimeDomainData(frame);
-    const timeSec = this.context.currentTime; // RAW wall time of the end of the frame
+    const timeSec = this.timeBase ? this.timeBase() : this.context.currentTime; // RAW time of the end of the frame
     for (const cb of Array.from(this.subscribers)) {
       try {
         cb(frame, timeSec);

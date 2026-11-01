@@ -180,6 +180,7 @@ export const settingsScreen: Screen = {
       try {
         await mic.start(settings.inputDeviceId ?? undefined, { echoCancellation: settings.echoCancellation });
         if (disposed || signal.aborted) throw new CalibrationError('cancelled');
+        mic.setTimeBase(() => ctx.currentTime); // same clock as the clicks scheduled below
         source = new MicDetectorSource(mic, detectorOptsFromSettings(settings));
         metronome = new Metronome(ctx);
         calibProgress.textContent = `Rasguea con cada clic · 0/${total}`;

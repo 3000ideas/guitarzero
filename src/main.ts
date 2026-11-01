@@ -11,7 +11,8 @@
  * the bootstrap only runs when a DOM with `#app` exists.
  */
 import type { Screen } from './types';
-import { getSong, isValidId } from './song/storage';
+import { getFlag, getSong, isValidId, saveSettings, setFlag } from './song/storage';
+import { DEFAULT_SETTINGS } from './types';
 import { libraryScreen } from './ui/screens/library';
 import { editorScreen } from './ui/screens/editor';
 import { practiceScreen } from './ui/screens/practice';
@@ -127,7 +128,20 @@ export function createRouter(root: HTMLElement): () => void {
   };
 }
 
+/**
+ * One-off: latency values saved before mic frames were stamped in the playback clock embed a random
+ * clock offset between the two AudioContexts, so they are meaningless now. Reset to the default and
+ * ask for a fresh calibration.
+ */
+export function migrateClockBase(): void {
+  if (getFlag('clockBaseV1')) return;
+  saveSettings({ latencySec: DEFAULT_SETTINGS.latencySec });
+  setFlag('latencyCalibrated', false);
+  setFlag('clockBaseV1');
+}
+
 function boot(): void {
+  migrateClockBase();
   const root = document.getElementById('app');
   if (!root) throw new Error('No se encontró el elemento #app');
   const render = createRouter(root);
