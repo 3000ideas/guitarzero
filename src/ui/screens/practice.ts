@@ -41,7 +41,7 @@ import { Metronome } from '../../audio/metronome';
 import { BackingTrack } from '../../audio/backing';
 import { renderChordTrack } from '../../audio/chordSynth';
 import { PracticeSession } from '../../game/engine';
-import { HighwayRenderer, countInStartBeat, lowerBound } from '../highway';
+import { HighwayRenderer, countInStartBeat, lowerBound, pxPerBeatFor } from '../highway';
 import { drawChordDiagram } from '../chordDiagram';
 import { append, clear, h } from '../dom';
 
@@ -450,9 +450,41 @@ export const practiceScreen: Screen = {
     const overlayMsg = h('div.practice-overlay-msg');
     const overlay = h('div.practice-overlay', null, startBtn, h('div.practice-overlay-hint', null, 'o pulsa Espacio'), testMicBtn, overlayMsg);
     if (!playable) overlayMsg.textContent = 'La canción no tiene compases válidos: edítala desde la biblioteca.';
-    const pausedLabel = h('div.practice-paused-label', { hidden: true }, 'Pausa', h('small', null, 'toca la autopista para reanudar'));
+    const pausedLabel = h('div.practice-paused-label', { hidden: true }, 'Pausa', h('small', null, 'arrastra la autopista (o ← →) para moverte · toca para reanudar'));
     const stage = h('div.practice-stage', null, canvas, overlay, pausedLabel);
-    canvas.addEventListener('click', () => onCanvasTap());
+    // Scrubbing while paused: drag the highway sideways (or use the bar buttons / ← →) to pick the
+    // bar to practise again. Snaps to whole bars because resume() replays a bar in full anyway.
+    let dragStartX: number | null = null;
+    let dragStartBeat = 0;
+    let dragged = false;
+    canvas.addEventListener('pointerdown', (e) => {
+      const st = session.getState();
+      if (st.phase !== 'paused' && st.phase !== 'idle') return;
+      dragStartX = e.clientX;
+      dragStartBeat = st.beat;
+      dragged = false;
+      canvas.setPointerCapture?.(e.pointerId);
+    });
+    canvas.addEventListener('pointermove', (e) => {
+      if (dragStartX === null) return;
+      const dx = e.clientX - dragStartX;
+      if (!dragged && Math.abs(dx) < 8) return;
+      dragged = true;
+      const beat = dragStartBeat - dx / pxPerBeatFor(canvas.clientWidth || 1);
+      seekToBar(barIndexAt(song, Math.max(0, beat)));
+    });
+    const endDrag = (): void => {
+      dragStartX = null;
+    };
+    canvas.addEventListener('pointerup', endDrag);
+    canvas.addEventListener('pointercancel', endDrag);
+    canvas.addEventListener('click', () => {
+      if (dragged) {
+        dragged = false; // the drag that just ended is not a tap
+        return;
+      }
+      onCanvasTap();
+    });
 
     const lyricsCurrent = h('div.practice-lyrics-current');
     const lyricsNext = h('div.practice-lyrics-next');
@@ -463,6 +495,8 @@ export const practiceScreen: Screen = {
     const passEl = h('span.practice-stat', { hidden: true });
     const progressFill = h('div.practice-progress-fill');
     const pauseBtn = h('button', { class: 'btn', type: 'button', disabled: true, onclick: () => togglePause() }, 'Pausa');
+    const prevBarBtn = h('button', { class: 'btn', type: 'button', hidden: true, title: 'Compás anterior (←)', onclick: () => seekRelative(-1) }, '◀ Compás');
+    const nextBarBtn = h('button', { class: 'btn', type: 'button', hidden: true, title: 'Compás siguiente (→)', onclick: () => seekRelative(1) }, 'Compás ▶');
     const restartBtn = h('button', { class: 'btn', type: 'button', disabled: true, title: 'Atajo: R', onclick: () => void restart() }, 'Reiniciar');
     const exitBtn = h('button', { class: 'btn', type: 'button', title: 'Atajo: Esc', onclick: () => exit() }, 'Salir');
     const footer = h(
@@ -472,7 +506,7 @@ export const practiceScreen: Screen = {
       h('span.practice-stat', null, 'Racha', streakEl),
       passEl,
       h('div.practice-progress', { title: 'Progreso' }, progressFill),
-      h('div.practice-footer-buttons', null, pauseBtn, restartBtn, exitBtn),
+      h('div.practice-footer-buttons', null, prevBarBtn, pauseBtn, nextBarBtn, restartBtn, exitBtn),
     );
 
     const playView = h(
@@ -816,6 +850,21 @@ export const practiceScreen: Screen = {
       else if (phase === 'ended') void restart();
     }
 
+    /** Moves the paused/idle position to bar `n` (kept inside the loop section when looping). */
+    function seekToBar(n: number): void {
+      const st = session.getState();
+      if (st.phase !== 'paused' && st.phase !== 'idle') return;
+      const lo = st.loop ? st.loop.fromBar : 0;
+      const hi = st.loop ? st.loop.toBar : song.bars.length - 1;
+      const bar = clamp(n, lo, hi);
+      if (bar !== barIndexAt(song, st.beat)) session.seekBar(bar);
+    }
+
+    function seekRelative(delta: number): void {
+      const st = session.getState();
+      seekToBar(barIndexAt(song, Math.max(0, st.beat)) + delta);
+    }
+
     function onCanvasTap(): void {
       const phase = session.getState().phase;
       if (phase === 'countin' || phase === 'playing') session.pause();
@@ -919,6 +968,9 @@ export const practiceScreen: Screen = {
       if (e.key === ' ' || e.code === 'Space') {
         e.preventDefault();
         togglePause();
+      } else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && session.getState().phase === 'paused') {
+        e.preventDefault();
+        seekRelative(e.key === 'ArrowLeft' ? -1 : 1);
       } else if (e.key === 'r' || e.key === 'R') {
         e.preventDefault();
         void restart();
@@ -1020,6 +1072,8 @@ export const practiceScreen: Screen = {
         hud.phase = phase;
         overlay.hidden = phase !== 'idle';
         pausedLabel.hidden = phase !== 'paused';
+        prevBarBtn.hidden = phase !== 'paused';
+        nextBarBtn.hidden = phase !== 'paused';
         pauseBtn.textContent = phase === 'paused' ? 'Reanudar' : 'Pausa';
         pauseBtn.disabled = phase === 'idle';
         restartBtn.disabled = phase === 'idle';
