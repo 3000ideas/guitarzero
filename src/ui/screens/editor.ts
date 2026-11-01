@@ -106,6 +106,7 @@ import {
   type SimplifyResult,
   type WeightedChord,
 } from '../../music/simplify';
+import { createChordGrid } from '../chordGrid';
 import { parseSong } from '../../song/parser';
 import { beatToSec, secToBeat, songDurationSec } from '../../song/tempo';
 import { isExampleId } from '../../song/examples';
@@ -162,6 +163,28 @@ export const SIMPLIFY_FOR_BEGINNERS_LABEL = 'Simplificar para principiantes';
 export const SUMMARY_MAX_SECTION_LABELS = 6;
 /** `barTempos` whose spread (max − min, relative to the slowest bar) reaches this fraction is reported as "tempo variable". */
 export const VARIABLE_TEMPO_THRESHOLD = 0.015;
+
+// ---------------------------------------------------------------- edit mode (text | grid)
+
+export type EditorMode = 'text' | 'grid';
+export const EDITOR_MODE_KEY = 'gz.editorMode';
+
+/** The way of editing the user chose last ('grid' the first time). Never throws. */
+export function loadEditorMode(): EditorMode {
+  try {
+    return localStorage.getItem(EDITOR_MODE_KEY) === 'text' ? 'text' : 'grid';
+  } catch {
+    return 'grid';
+  }
+}
+
+export function saveEditorMode(mode: EditorMode): void {
+  try {
+    localStorage.setItem(EDITOR_MODE_KEY, mode);
+  } catch {
+    /* storage unavailable: the choice only lasts for this screen */
+  }
+}
 
 // ---------------------------------------------------------------- pure helpers
 
@@ -1094,6 +1117,13 @@ export const editorScreen: Screen = {
     });
     textarea.value = stored.source;
 
+    // Two ways to edit the same text: the text itself or the chord grid (SPEC section 22).
+    let editMode: EditorMode = loadEditorMode();
+    const gridView = createChordGrid({ onChange: (next) => applyText(next) });
+    const textTab = h('button.mode-tab', { type: 'button', role: 'tab', onclick: () => setEditMode('text') }, 'Texto') as HTMLButtonElement;
+    const gridTab = h('button.mode-tab', { type: 'button', role: 'tab', onclick: () => setEditMode('grid') }, 'Cuadrícula') as HTMLButtonElement;
+    const modeTabs = h('div.mode-tabs', { role: 'tablist', 'aria-label': 'Forma de editar' }, gridTab, textTab);
+
     const titleEl = h('h2.editor-title', null, displayTitle(analysis.song.title));
     const statusEl = h('span.save-status', null, 'Guardado');
     const caretEl = h('span', null, 'Línea 1');
@@ -1408,7 +1438,22 @@ export const editorScreen: Screen = {
       caretEl.textContent = `Línea ${lineOfOffset(textarea.value, textarea.selectionStart)}`;
     }
 
+    function setEditMode(mode: EditorMode): void {
+      editMode = mode;
+      saveEditorMode(mode);
+      const grid = mode === 'grid';
+      textarea.hidden = grid;
+      textHint.hidden = grid;
+      gridView.el.hidden = !grid;
+      gridTab.classList.toggle('is-active', grid);
+      textTab.classList.toggle('is-active', !grid);
+      gridTab.setAttribute('aria-selected', String(grid));
+      textTab.setAttribute('aria-selected', String(!grid));
+      if (grid) gridView.setSource(textarea.value, analysis.issues);
+    }
+
     function goToLine(line: number): void {
+      if (editMode === 'grid') setEditMode('text');
       const { start, end } = lineRange(textarea.value, line);
       textarea.focus();
       textarea.setSelectionRange(start, end);
@@ -1478,6 +1523,7 @@ export const editorScreen: Screen = {
       renderIssues();
       renderChords();
       renderStrum();
+      if (editMode === 'grid') gridView.setSource(textarea.value, analysis.issues);
     }
 
     /** The song as it should be persisted right now (text + backing track metadata). */
@@ -2357,13 +2403,8 @@ export const editorScreen: Screen = {
       ),
     );
 
-    const main = h(
-      'div.editor-main',
-      null,
-      textarea,
-      h('div.editor-hint', null, caretEl, h('span', null, 'Ctrl+S guarda al instante'), h('span', null, 'Pulsa en un error para ir a su línea')),
-      audioPanel,
-    );
+    const textHint = h('div.editor-hint', null, caretEl, h('span', null, 'Ctrl+S guarda al instante'), h('span', null, 'Pulsa en un error para ir a su línea'));
+    const main = h('div.editor-main', null, modeTabs, textarea, gridView.el, textHint, audioPanel);
 
     const panel = h(
       'aside.editor-panel',
@@ -2397,6 +2438,7 @@ export const editorScreen: Screen = {
     renderIssues();
     renderChords();
     renderStrum();
+    setEditMode(editMode);
     setStatus('saved');
     updateCaret();
     renderTrackInfo();
@@ -2427,6 +2469,7 @@ export const editorScreen: Screen = {
       document.removeEventListener('visibilitychange', onVisibility);
       if (waveObserver) waveObserver.disconnect();
       else window.removeEventListener('resize', onWaveResize);
+      gridView.dispose();
       waveform.dispose();
       backing?.dispose();
       backing = null;

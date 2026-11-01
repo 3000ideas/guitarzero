@@ -540,3 +540,381 @@
 .editor .strum-record-status.is-error {
   color: var(--bad);
 }
+
+/* ---------------------------------------------------------------- Mode tabs + chord grid (SPEC section 22) */
+.editor .mode-tabs {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+
+.editor .mode-tab {
+  min-height: 36px;
+  padding: 4px 16px;
+  border-radius: 9px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.editor .mode-tab.is-active {
+  background: var(--accent);
+  color: #06222a;
+}
+
+.chord-grid-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.chord-grid-editor .grid-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chord-grid-editor input[type='text'],
+.chord-grid-editor select {
+  min-height: 36px;
+  padding: 4px 10px;
+  min-width: 0;
+}
+
+.chord-grid-editor .grid-head {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 12px;
+  background: var(--panel-2);
+}
+
+.chord-grid-editor .grid-head summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.chord-grid-editor .grid-head-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 8px;
+}
+
+.chord-grid-editor .grid-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.chord-grid-editor .is-narrow {
+  width: 6em;
+}
+
+.chord-grid-editor .grid-section {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.chord-grid-editor .grid-section-name {
+  font-weight: 700;
+  flex: 1 1 8em;
+  max-width: 16em;
+  color: var(--accent);
+}
+
+.chord-grid-editor .grid-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chord-grid-editor .grid-bars {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(calc(var(--cells, 4) * 36px + 16px), 1fr));
+  gap: 8px;
+}
+
+.chord-grid-editor .grid-bar {
+  position: relative;
+  padding: 14px 4px 4px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+
+.chord-grid-editor .grid-bar.is-selected {
+  border-color: var(--accent);
+}
+
+.chord-grid-editor .grid-bar-num {
+  position: absolute;
+  top: 1px;
+  left: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.chord-grid-editor .grid-cells {
+  display: grid;
+  grid-template-columns: repeat(var(--cells, 4), minmax(0, 1fr));
+  gap: 2px;
+}
+
+.chord-grid-editor .grid-cell {
+  position: relative;
+  min-height: 48px;
+  padding: 0 2px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg, #0f1218);
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  scroll-margin-bottom: 320px;
+  cursor: pointer;
+}
+
+.chord-grid-editor .grid-beat {
+  position: absolute;
+  top: 1px;
+  left: 3px;
+  font-size: 9px;
+  color: var(--muted);
+}
+
+.chord-grid-editor .grid-chord {
+  font-weight: 700;
+  font-size: 15px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.chord-grid-editor .grid-cell.is-long .grid-chord {
+  font-size: 11px;
+}
+
+.chord-grid-editor .grid-cell.is-hold .grid-chord,
+.chord-grid-editor .grid-cell.is-rest .grid-chord {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.chord-grid-editor .grid-cell.is-chord {
+  background: rgba(34, 211, 238, 0.1);
+  border-color: rgba(34, 211, 238, 0.45);
+}
+
+.chord-grid-editor .grid-cell.is-nc .grid-chord {
+  color: var(--warn);
+}
+
+.chord-grid-editor .grid-cell.is-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.chord-grid-editor .grid-row-tools,
+.chord-grid-editor .grid-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.chord-grid-editor .grid-lyric {
+  flex: 1 1 10em;
+}
+
+.chord-grid-editor .grid-comment {
+  font-size: 12px;
+  color: var(--muted);
+  max-width: 14em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chord-grid-editor .grid-mini {
+  min-height: 32px;
+  min-width: 32px;
+  padding: 2px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.chord-grid-editor .grid-mini:disabled {
+  opacity: 0.4;
+}
+
+.chord-grid-editor .grid-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chord-grid-editor .grid-stepper-value {
+  min-width: 2.2em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.chord-grid-editor .grid-inline-header,
+.chord-grid-editor .grid-raw {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.chord-grid-editor .grid-raw-input {
+  flex: 1 1 14em;
+  font-family: var(--mono);
+}
+
+.chord-grid-editor .grid-text-comment {
+  font-size: 12px;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.chord-grid-editor .grid-issue {
+  flex-basis: 100%;
+  font-size: 13px;
+}
+
+.chord-grid-editor .grid-issue.error {
+  color: var(--bad);
+}
+
+.chord-grid-editor .grid-issue.warning {
+  color: var(--warn);
+}
+
+/* Pad: sticks to the bottom of the screen while the grid is scrolled. */
+.chord-grid-editor .grid-pad {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  margin: 0 -4px;
+  border-radius: 12px 12px 0 0;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  box-shadow: 0 -6px 16px rgba(0, 0, 0, 0.35);
+}
+
+.chord-grid-editor .pad-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.chord-grid-editor .pad-where {
+  font-weight: 700;
+}
+
+.chord-grid-editor .pad-advance {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+
+.chord-grid-editor .pad-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.chord-grid-editor .pad-scroll {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.chord-grid-editor .pad-btn {
+  flex: 1 0 auto;
+  min-height: 40px;
+  min-width: 40px;
+  padding: 2px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chord-grid-editor .pad-roots .pad-btn {
+  flex: 1 1 0;
+  padding: 2px 0;
+}
+
+.chord-grid-editor .pad-btn.is-on {
+  background: var(--accent);
+  color: #06222a;
+  border-color: var(--accent);
+}
+
+.chord-grid-editor .pad-btn.is-used {
+  border-color: rgba(34, 211, 238, 0.5);
+}
+
+.chord-grid-editor .pad-btn:disabled {
+  opacity: 0.4;
+}
+
+.chord-grid-editor .pad-input {
+  flex: 1 1 8em;
+  min-width: 6em;
+}
+
+.chord-grid-editor .pad-notice {
+  color: var(--bad);
+  font-size: 13px;
+}
+
+@media (max-width: 600px) {
+  .chord-grid-editor .grid-chord {
+    font-size: 14px;
+  }
+}
+
+.chord-grid-editor .pad-roots .pad-btn {
+  min-width: 0;
+}
+
+.chord-grid-editor .pad-roots .pad-toggle {
+  flex: 0 0 34px;
+}
+
+@media (max-width: 600px) {
+  .chord-grid-editor .pad-btn {
+    min-height: 36px;
+    padding: 2px 8px;
+  }
+}

@@ -1223,3 +1223,29 @@ autopista), para practicar controlando el ritmo y los acordes sin el ruido de la
   Los `<input type=file>` van ocultos visualmente, no con `display:none`.
 - **Publicación**: GitHub Pages desde `.github/workflows/deploy.yml` al hacer push a `master`
   (repo público); `vite.config.ts` usa `base: './'`. Micrófono en móvil exige HTTPS.
+
+## 22. Editor por cuadrícula de acordes
+
+El editor tiene dos formas de editar **el mismo texto**: pestañas «Cuadrícula» y «Texto» (se
+recuerda la última en `localStorage` `gz.editorMode`; por defecto Cuadrícula). El texto es la
+única fuente de verdad; ambas vistas conviven y se pueden alternar en cualquier momento.
+
+- **Modelo** (`src/song/grid.ts`): `parseGrid` lee el texto línea a línea (cabeceras, secciones,
+  líneas de compases, letras, comentarios) y `serializeGrid` lo escribe. Cada compás son
+  `beatsPerBar` casillas; casilla vacía = sigue el acorde anterior (el `.` del texto). Cada
+  compás se interpreta con el **parser real** (`parseSong`), así que cuadrícula y práctica no
+  pueden discrepar. Una línea sin editar conserva su texto original (`orig`); solo se reescribe
+  la que se toca. Las líneas que la cuadrícula no puede representar (inválidas, acordes en medios
+  tiempos, un `.` al inicio de la canción) quedan como «Línea de texto» y se escriben intactas.
+- **Vista** (`src/ui/chordGrid.ts`): compases como cajas de N casillas; panel inferior fijo con
+  los acordes ya usados, raíces C–B con ♭/♯ y tipo, campo de texto, Mantener / Silencio / N.C. y
+  acciones de compás (duplicar, insertar, mover, eliminar). Repetición `×n` por línea y por
+  sección, letra por línea, datos de la canción (título, artista, tempo, compás, cejilla).
+  «Luego» elige a dónde va la selección tras escribir (siguiente compás, pulso o quedarse). Teclado:
+  flechas, A–G, Supr/`.` (mantener), `-` (silencio).
+- **Seguridad del texto**: los textos libres se limpian de `#` tras espacio; una cabecera vaciada
+  se elimina; borrar la última línea de una sección quita también su título y su letra; una línea
+  nueva al inicio lleva un `C` para no empezar con un «mantener»; no se añaden compases tras una
+  sección que solo repite otra. Cambiar `time:` reajusta las casillas.
+- Los cambios pasan por `applyText` del editor (autoguardado + «Deshacer»); los errores del parser
+  salen bajo la fila afectada.
