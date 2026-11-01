@@ -769,13 +769,17 @@ export const practiceScreen: Screen = {
     }
 
     /**
-     * Restarts the audio so that the count-in start beat of `s` is heard at its wall time. The
+     * Restarts the audio so that the bar's first beat (after the count-in) is heard at its wall time. The
      * synthesized chords track has no independent alignment offset (its sample 0 IS song beat 0),
      * unlike the uploaded recording (audio.offsetSec, set by "Sincronizar" in the editor).
      */
     function syncBacking(s: PracticeSession): void {
       if (!backing || !audio || !settings.backingTrack) return;
-      const b = s.getState().countInStartBeat;
+      const st = s.getState();
+      // During a count-in only the metronome clicks: the music starts on the downbeat of the bar
+      // being practised (not at the count-in's first beat). Later calls (mid-pass: toggling the
+      // track, changing source) restart it from the pass anchor, aligned by wall time.
+      const b = st.phase === 'countin' ? countInStartBeat(st.beat, st.countInBeatsLeft) : st.countInStartBeat;
       const posSec = settings.backingSource === 'chords' ? beatToSec(song.tempoSegments, b) : backingPositionSec(audio, song, b);
       backing.stop();
       backing.start(s.wallSec(b), posSec + settings.backingNudgeSec, settings.tempoScale);

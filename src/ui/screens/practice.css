@@ -473,6 +473,7 @@
 
 .practice-footer-buttons {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-left: auto;
 }
@@ -901,4 +902,27 @@
 .practice-dialog .practice-headphones:not([hidden]),
 .practice-dialog .practice-agc:not([hidden]) {
   display: block;
+}
+
+/* Phones in portrait: the button row gets the whole width and every button stays visible. */
+@media (max-width: 600px) and (orientation: portrait) {
+  .practice-footer {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+
+  .practice-footer-buttons {
+    flex: 1 1 100%;
+    margin-left: 0;
+    gap: 6px;
+  }
+
+  .practice-footer-buttons .btn {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 0 3px;
+    min-height: 44px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
 }
