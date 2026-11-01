@@ -208,6 +208,7 @@ export const tunerScreen: Screen = {
     let captured: TunerReading[] = [];
     let capturedStrings: number[] = [];
     let lastDetect = '—';
+    let doneMsgUntilMs = 0; // '¡Afinada!' banner is shown only briefly, never left stale on the next string
     let diagRecording = false;
     let diagAudioUrl: string | null = null;
     let diagUnsub: (() => void) | null = null;
@@ -417,6 +418,9 @@ export const tunerScreen: Screen = {
       const gatePct = Math.round(clamp((settings.gateDb - TUNER_LEVEL_MIN_DB) / (TUNER_LEVEL_MAX_DB - TUNER_LEVEL_MIN_DB), 0, 1) * 100);
       levelGate.style.left = `${gatePct}%`;
       const target = OPEN_STRINGS[currentIndex];
+      if (running && now > doneMsgUntilMs && statusEl.textContent?.startsWith('¡Afinada!')) {
+        statusEl.textContent = 'Escuchando… toca la cuerda señalada arriba.';
+      }
       // The reading is kept on screen after the string stops ringing (like a real tuner's needle
       // holding its last position), not cleared after a short timeout: the player needs time to
       // actually read the advice text. selectString() clears it when moving to another string.
@@ -460,6 +464,7 @@ export const tunerScreen: Screen = {
         else if (now - inTuneSinceMs >= TUNER_HOLD_MS && currentIndex < OPEN_STRINGS.length - 1) {
           selectString(currentIndex + 1);
           statusEl.textContent = '¡Afinada! Siguiente cuerda.';
+          doneMsgUntilMs = now + 2500;
           return;
         } else if (now - inTuneSinceMs >= TUNER_HOLD_MS) {
           statusEl.textContent = '¡Todas afinadas!';
