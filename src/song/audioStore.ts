@@ -166,15 +166,32 @@ function isTrack(v: unknown): v is StoredTrack {
 
 /** Stores (or replaces) the audio file of `songId`. */
 export async function putTrack(songId: string, blob: Blob, meta: TrackMeta): Promise<void> {
-  const record: StoredTrack = { songId, blob, name: meta.name, type: meta.type, size: meta.size, addedAt: Date.now() };
+  // A File from a phone's picker is only a reference to a file the OS owns; several mobile
+  // browsers (notably iOS Safari) fail to put such a File into IndexedDB. Copy the bytes into a
+  // plain in-memory Blob first, which stores everywhere.
+  let stored: Blob = blob;
+  try {
+    stored = new Blob([await blob.arrayBuffer()], { type: meta.type || blob.type });
+  } catch {
+    /* keep the original blob */
+  }
+  const record: StoredTrack = { songId, blob: stored, name: meta.name, type: meta.type, size: meta.size, addedAt: Date.now() };
   const db = await openDb();
   if (!db) {
     memory.set(songId, record);
     return;
   }
-  await withStore<void>(db, 'readwrite', 'No se pudo guardar la pista de audio', (store) => {
-    store.put(record);
-  });
+  try {
+    await withStore<void>(db, 'readwrite', 'No se pudo guardar la pista de audio', (store) => {
+      store.put(record);
+    });
+  } catch (err) {
+    // Real out-of-space still reports; any other failure (private mode, mobile quirks) falls back
+    // to memory so the song works for this session instead of the whole import being lost.
+    if (err instanceof Error && /espacio suficiente/.test(err.message)) throw err;
+    console.warn('No se pudo guardar el audio en IndexedDB; se guarda solo en memoria', err);
+    memory.set(songId, record);
+  }
 }
 
 /** The audio file of `songId`, or null when the song has none. */

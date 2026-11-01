@@ -364,19 +364,23 @@ describe('backing track metadata (audio)', () => {
     expect(hasIndexedDb()).toBe(false);
     const blob = new Blob(['audio-bytes'], { type: 'audio/mpeg' });
     await putTrack('s_blob', blob, { name: AUDIO.name, type: AUDIO.type, size: AUDIO.size });
-    expect(await getTrack('s_blob')).toBe(blob);
+    // putTrack stores a byte-for-byte copy (a plain Blob), not the same object, for mobile pickers.
+    const back = await getTrack('s_blob');
+    expect(back?.size).toBe(blob.size);
+    expect(back?.type).toBe('audio/mpeg');
+    expect(await back?.text()).toBe('audio-bytes');
     expect(await getTrack('s_none')).toBeNull();
     expect(await copyTrack('s_none', 's_other')).toBe(false);
 
     saveSong({ ...song('s_blob'), audio: AUDIO });
     const copy = duplicateSong('s_blob');
     await settle();
-    expect(await getTrack(copy.id)).toBe(blob);
+    expect(await (await getTrack(copy.id))?.text()).toBe("audio-bytes");
 
     expect(deleteSong('s_blob')).toBe(true);
     await settle();
     expect(await getTrack('s_blob')).toBeNull();
-    expect(await getTrack(copy.id)).toBe(blob);
+    expect(await (await getTrack(copy.id))?.text()).toBe("audio-bytes");
     await deleteTrack(copy.id);
     expect(await getTrack(copy.id)).toBeNull();
     await deleteTrack(copy.id); // idempotent
