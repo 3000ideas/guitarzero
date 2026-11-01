@@ -15,6 +15,7 @@ import { getAudioContext } from '../../audio/context';
 import { MicError, MicInput } from '../../audio/mic';
 import { MicDetectorSource, detectorOptsFromSettings } from '../../audio/micDetector';
 import { Metronome } from '../../audio/metronome';
+import { APP_VERSION, checkForUpdate, reloadFresh } from '../../version';
 import { CALIBRATION_DEFAULT_CLICKS, CalibrationError, runCalibration } from '../../audio/calibrate';
 import { clear, h } from '../dom';
 
@@ -397,6 +398,23 @@ export const settingsScreen: Screen = {
 
     // ---------------------------------------------------------------- layout
 
+    const updateStatus = h('div.settings-note', null, '');
+    const updateBtn = h('button', { class: 'btn btn-primary', type: 'button', onclick: () => void doUpdate() }, 'Buscar actualización') as HTMLButtonElement;
+    const reloadBtn = h('button', { class: 'btn', type: 'button', title: 'Vacía la memoria de la app y la vuelve a cargar', onclick: () => void reloadFresh() }, 'Recargar la app');
+    async function doUpdate(): Promise<void> {
+      updateBtn.disabled = true;
+      updateStatus.textContent = 'Buscando…';
+      const r = await checkForUpdate();
+      if (disposed) return;
+      if (r.kind === 'current') updateStatus.textContent = '✓ Ya tienes la última versión.';
+      else if (r.kind === 'newer') {
+        updateStatus.textContent = `Hay una versión nueva (${r.version}). Actualizando…`;
+        await reloadFresh();
+        return;
+      } else updateStatus.textContent = `No se pudo comprobar: ${r.message}`;
+      updateBtn.disabled = false;
+    }
+
     const rootEl = h(
       'section.settings',
       null,
@@ -493,6 +511,15 @@ export const settingsScreen: Screen = {
           (v) => update({ echoCancellation: v }),
           'Pide al navegador que elimine del micrófono lo que sale por los altavoces (pista y metrónomo). Con auriculares déjala desactivada: la señal sin procesar detecta mejor los acordes.',
         ),
+      ),
+
+      h(
+        'fieldset.settings-group',
+        null,
+        h('legend', null, 'Versión de la app'),
+        h('div.settings-note', null, `Instalada: ${APP_VERSION}`),
+        updateStatus,
+        h('div.settings-row', null, updateBtn, reloadBtn),
       ),
 
       h(
