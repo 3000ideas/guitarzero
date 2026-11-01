@@ -25,7 +25,10 @@ export interface TrackMeta {
 /** Record stored under `songId` in the `tracks` object store. */
 export interface StoredTrack extends TrackMeta {
   songId: string;
-  blob: Blob;
+  /** In-memory fallback keeps the Blob; IndexedDB records keep `data` instead (see putTrack). */
+  blob?: Blob;
+  /** Raw bytes. iOS Safari fails or loses Blobs stored in IndexedDB; an ArrayBuffer is reliable. */
+  data?: ArrayBuffer;
   addedAt: number;
 }
 
@@ -158,51 +161,61 @@ function withStore<T>(
 
 function isTrack(v: unknown): v is StoredTrack {
   if (typeof v !== 'object' || v === null) return false;
-  const blob = (v as { blob?: unknown }).blob;
+  const { blob, data } = v as { blob?: unknown; data?: unknown };
+  if (data instanceof ArrayBuffer) return true;
   return typeof Blob !== 'undefined' ? blob instanceof Blob : typeof blob === 'object' && blob !== null;
+}
+
+function blobOf(record: StoredTrack): Blob {
+  return record.blob ?? new Blob([record.data as ArrayBuffer], { type: record.type });
 }
 
 // ---------------------------------------------------------------- API
 
 /** Stores (or replaces) the audio file of `songId`. */
 export async function putTrack(songId: string, blob: Blob, meta: TrackMeta): Promise<void> {
-  // A File from a phone's picker is only a reference to a file the OS owns; several mobile
-  // browsers (notably iOS Safari) fail to put such a File into IndexedDB. Copy the bytes into a
-  // plain in-memory Blob first, which stores everywhere.
-  let stored: Blob = blob;
+  // A File from a phone's picker is only a reference to a file the OS owns, and iOS Safari also
+  // fails or silently loses Blobs kept in IndexedDB. Read the bytes once: IndexedDB gets the raw
+  // ArrayBuffer, the in-memory fallback a plain Blob.
+  let data: ArrayBuffer | undefined;
   try {
-    stored = new Blob([await blob.arrayBuffer()], { type: meta.type || blob.type });
+    data = await blob.arrayBuffer();
   } catch {
     /* keep the original blob */
   }
-  const record: StoredTrack = { songId, blob: stored, name: meta.name, type: meta.type, size: meta.size, addedAt: Date.now() };
+  const base = { songId, name: meta.name, type: meta.type, size: meta.size, addedAt: Date.now() };
+  const memRecord: StoredTrack = { ...base, blob: data ? new Blob([data], { type: meta.type || blob.type }) : blob };
   const db = await openDb();
   if (!db) {
-    memory.set(songId, record);
+    memory.set(songId, memRecord);
     return;
   }
+  const idbRecord: StoredTrack = data ? { ...base, data } : { ...base, blob };
   try {
     await withStore<void>(db, 'readwrite', 'No se pudo guardar la pista de audio', (store) => {
-      store.put(record);
+      store.put(idbRecord);
     });
   } catch (err) {
     // Real out-of-space still reports; any other failure (private mode, mobile quirks) falls back
     // to memory so the song works for this session instead of the whole import being lost.
     if (err instanceof Error && /espacio suficiente/.test(err.message)) throw err;
     console.warn('No se pudo guardar el audio en IndexedDB; se guarda solo en memoria', err);
-    memory.set(songId, record);
+    memory.set(songId, memRecord);
   }
 }
 
 /** The audio file of `songId`, or null when the song has none. */
 export async function getTrack(songId: string): Promise<Blob | null> {
   const db = await openDb();
-  if (!db) return memory.get(songId)?.blob ?? null;
+  if (!db) {
+    const m = memory.get(songId);
+    return m ? blobOf(m) : null;
+  }
   const record = await withStore<unknown>(db, 'readonly', 'No se pudo leer la pista de audio', (store, done) => {
     const req = store.get(songId);
     req.onsuccess = () => done(req.result);
   });
-  return isTrack(record) ? record.blob : null;
+  return isTrack(record) ? blobOf(record) : null;
 }
 
 /** Removes the audio file of `songId` (no error when there is none). */
