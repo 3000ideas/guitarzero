@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectPitch } from '../../src/dsp/tuner';
+import { detectPitch, detectPitchNear } from '../../src/dsp/tuner';
 import { magnitudesAt, synthChord } from '../helpers/synth';
 
 const OPEN = [40, 45, 50, 55, 59, 64]; // E2 A2 D3 G3 B3 E4
@@ -23,5 +23,35 @@ describe('detectPitch on a realistic (harmonic-rich) plucked string, not a pure 
       expect(reading.midi, `t=${tSec}s midi ${midi}: got ${reading.noteName} (${reading.freqHz.toFixed(1)} Hz) instead`).toBe(midi);
       expect(Math.abs(reading.centsOff)).toBeLessThan(15);
     }
+  });
+});
+
+describe('detectPitchNear: weak fundamental (phone mic rolls off the low end)', () => {
+  const sampleRate = 44100;
+  const fftSize = 8192;
+  /** Harmonics 2-4 strong, fundamental almost absent, detuned by `cents`. */
+  function weakFundamental(midi: number, cents: number): Float32Array {
+    const f0 = 440 * Math.pow(2, (midi - 69) / 12 + cents / 1200);
+    const n = fftSize * 2;
+    const out = new Float32Array(n);
+    const amps = [0.04, 1, 0.7, 0.5];
+    for (let h = 1; h <= 4; h++) for (let t = 0; t < n; t++) out[t] += amps[h - 1] * Math.sin((2 * Math.PI * f0 * h * t) / sampleRate);
+    return out;
+  }
+
+  it.each(OPEN)('string MIDI %i: finds the true note and cents even with almost no fundamental', (midi) => {
+    for (const cents of [0, 20, -20]) {
+      const mag = magnitudesAt(weakFundamental(midi, cents), fftSize * 2, fftSize);
+      const targetHz = 440 * Math.pow(2, (midi - 69) / 12);
+      const r = detectPitchNear(mag, sampleRate, fftSize, targetHz);
+      expect(r, `midi ${midi} ${cents}c`).not.toBeNull();
+      const got = 1200 * Math.log2(r!.freqHz / targetHz);
+      expect(Math.abs(got - cents)).toBeLessThan(8);
+    }
+  });
+
+  it('returns null when a different string is played (so the caller can name the heard note)', () => {
+    const mag = magnitudesAt(weakFundamental(45, 0), fftSize * 2, fftSize); // A2 played
+    expect(detectPitchNear(mag, sampleRate, fftSize, 440 * Math.pow(2, (40 - 69) / 12))).toBeNull(); // target E2
   });
 });

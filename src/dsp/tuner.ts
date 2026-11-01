@@ -82,3 +82,107 @@ export function detectPitch(mag: Float32Array, sampleRate: number, fftSize: numb
     strength: maxMagInRange > 0 ? bestMag / maxMagInRange : 0,
   };
 }
+
+function magAt(mag: Float32Array, bin: number): number {
+  const i = Math.floor(bin);
+  if (i < 0 || i + 1 >= mag.length) return 0;
+  const t = bin - i;
+  return mag[i] * (1 - t) + mag[i + 1] * t;
+}
+
+/** Interpolated peak of `mag` near `bin`: strongest local maximum within ±halfWidth bins. */
+function peakNear(mag: Float32Array, bin: number, halfWidth: number): { k: number; m: number } | null {
+  const lo = Math.max(1, Math.floor(bin - halfWidth));
+  const hi = Math.min(mag.length - 2, Math.ceil(bin + halfWidth));
+  let bestK = -1;
+  let bestM = 0;
+  for (let k = lo; k <= hi; k++) {
+    if (mag[k] > mag[k - 1] && mag[k] >= mag[k + 1] && mag[k] > bestM) {
+      bestM = mag[k];
+      bestK = k;
+    }
+  }
+  return bestK < 0 ? null : { k: bestK, m: bestM };
+}
+
+/**
+ * Guided pitch detection for a KNOWN target string (the tuner always names one). Phone and laptop
+ * mics roll off the low end, so on E2/A2/D3 the fundamental can be much weaker than its 2nd-4th
+ * harmonics — and "loudest peak" then reads a harmonic as the note (the wrong note, an octave
+ * or a fifth up). Instead, within ±3 semitones of the target it picks the f0 whose first four
+ * harmonics carry the most energy, then reads the exact frequency off the lowest harmonic that is
+ * clearly present (divided back down), so the cents are accurate too.
+ * Returns null when nothing harmonic near the target stands out against the rest of the
+ * spectrum (e.g. another string was played), so the caller can fall back to detectPitch().
+ */
+export function detectPitchNear(
+  mag: Float32Array,
+  sampleRate: number,
+  fftSize: number,
+  targetHz: number,
+  opts: { a4?: number } = {},
+): TunerReading | null {
+  if (!(sampleRate > 0) || !(fftSize > 0) || !(targetHz > 0)) return null;
+  const a4 = opts.a4 ?? 440;
+  const df = sampleRate / fftSize;
+  const HARMONICS = 4;
+
+  let bestC = 0;
+  let bestS = -1;
+  for (let c = -300; c <= 300; c += 5) {
+    const f = targetHz * Math.pow(2, c / 1200);
+    let sum = 0;
+    for (let h = 1; h <= HARMONICS; h++) sum += magAt(mag, (h * f) / df);
+    if (sum > bestS) {
+      bestS = sum;
+      bestC = c;
+    }
+  }
+  const f0 = targetHz * Math.pow(2, bestC / 1200);
+
+  const peaks: Array<{ h: number; k: number; m: number }> = [];
+  let maxPeak = 0;
+  for (let h = 1; h <= HARMONICS; h++) {
+    const p = peakNear(mag, (h * f0) / df, 3);
+    if (!p) continue;
+    peaks.push({ h, ...p });
+    if (p.m > maxPeak) maxPeak = p.m;
+  }
+  if (maxPeak <= 0) return null;
+
+  // Must stand out from the rest of the spectrum, else it is not this string.
+  const kLo = Math.max(1, Math.floor(70 / df));
+  const kHi = Math.min(mag.length - 2, Math.ceil(1500 / df));
+  let globalMax = 0;
+  for (let k = kLo; k <= kHi; k++) if (mag[k] > globalMax) globalMax = mag[k];
+  if (maxPeak < 0.25 * globalMax) return null;
+
+  // Every strong peak must sit on a harmonic of f0; otherwise f0 is a sub-harmonic ghost of
+  // some other note (e.g. D2's 3rd harmonic matching an A2 pluck's 2nd).
+  for (let k = kLo + 1; k < kHi; k++) {
+    if (!(mag[k] > 0.4 * globalMax && mag[k] > mag[k - 1] && mag[k] >= mag[k + 1])) continue;
+    const ratio = (k * df) / f0;
+    const h = Math.round(ratio);
+    if (h < 1 || Math.abs(1200 * Math.log2(ratio / h)) > 40) return null;
+  }
+
+  // Lowest harmonic that is clearly present: least inharmonic stretch, then divide back to f0.
+  const chosen = peaks.find((p) => p.m >= 0.5 * maxPeak) ?? peaks[0];
+  const a = Math.log(mag[chosen.k - 1] + 1e-12);
+  const b = Math.log(mag[chosen.k] + 1e-12);
+  const g = Math.log(mag[chosen.k + 1] + 1e-12);
+  const den = a - 2 * b + g;
+  const d = den === 0 ? 0 : Math.max(-0.5, Math.min(0.5, (0.5 * (a - g)) / den));
+  const freqHz = ((chosen.k + d) * df) / chosen.h;
+  if (!(freqHz > 0)) return null;
+
+  const midiFloat = freqToMidi(freqHz, a4);
+  const midi = Math.round(midiFloat);
+  return {
+    midi,
+    noteName: noteName(midi),
+    freqHz,
+    centsOff: Math.max(-50, Math.min(50, (midiFloat - midi) * 100)),
+    strength: globalMax > 0 ? maxPeak / globalMax : 0,
+  };
+}

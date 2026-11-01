@@ -28,7 +28,7 @@ import { getFlag, loadSettings, setFlag } from '../../song/storage';
 import { MIC_CAPTURE_INTERVAL_MS, MicError, MicInput } from '../../audio/mic';
 import { RealFFT } from '../../dsp/fft';
 import { rmsDbOf } from '../../dsp/detector';
-import { detectPitch, type TunerReading } from '../../dsp/tuner';
+import { detectPitch, detectPitchNear, type TunerReading } from '../../dsp/tuner';
 import { midiToFreq } from '../../music/notes';
 import { h } from '../dom';
 
@@ -503,7 +503,12 @@ export const tunerScreen: Screen = {
       const elapsedMs = now - captureStartMs;
       if (elapsedMs < TUNER_CAPTURE_DELAY_MS) return; // still inside the noisy pick attack
       fft.magnitudes(samples, mag);
-      const reading = detectPitch(mag, mic.context.sampleRate, mic.fftSize, { a4: settings.a4 });
+      const targetHz = midiToFreq(OPEN_STRINGS[currentIndex].midi, settings.a4);
+      // Guided first (robust to a weak fundamental on phone mics); unguided only to still say
+      // which other note is sounding when the player is on the wrong string.
+      const reading =
+        detectPitchNear(mag, mic.context.sampleRate, mic.fftSize, targetHz, { a4: settings.a4 }) ??
+        detectPitch(mag, mic.context.sampleRate, mic.fftSize, { a4: settings.a4 });
       if (reading) captured.push(reading);
       if (elapsedMs >= TUNER_CAPTURE_DELAY_MS + TUNER_CAPTURE_WINDOW_MS) {
         // Capture window closed: lock in the median reading (robust to a single noisy frame) as
