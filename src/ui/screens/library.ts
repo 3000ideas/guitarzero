@@ -192,7 +192,16 @@ export const libraryScreen: Screen = {
     let unmounted = false;
 
     // "Desde audio…" elements: hidden file input + inline status card
-    const audioInput = h('input', { type: 'file', accept: 'audio/*', hidden: true, 'aria-label': 'Archivo de audio', onchange: () => void onAudioChosen() });
+    // Visually hidden, NOT display:none ([hidden]): several mobile browsers refuse to open the
+    // file picker from .click() on a display:none input, so the button did nothing on phones.
+    const audioInput = h('input', {
+      type: 'file',
+      class: 'visually-hidden-input',
+      accept: 'audio/*,.mp3,.m4a,.wav,.ogg,.aac,.flac',
+      tabIndex: -1,
+      'aria-label': 'Archivo de audio',
+      onchange: () => void onAudioChosen(),
+    });
     const fromAudioBtn = h(
       'button.btn',
       { type: 'button', title: 'Crea una canción a partir de un archivo de audio: detecta el tempo y los acordes', onclick: () => audioInput.click() },

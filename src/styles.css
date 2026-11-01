@@ -453,3 +453,13 @@ details[open] > summary::before {
     animation: none !important;
   }
 }
+
+/* File inputs opened from a button via .click(): kept in layout but invisible (display:none breaks the picker on many phones). */
+.visually-hidden-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+}

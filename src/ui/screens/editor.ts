@@ -1109,7 +1109,15 @@ export const editorScreen: Screen = {
     const chordGrid = h('div.chord-grid');
 
     // Audio panel elements
-    const fileInput = h('input', { type: 'file', accept: 'audio/*', hidden: true, 'aria-label': 'Archivo de audio', onchange: () => void onFileChosen() });
+    // Visually hidden, not display:none: mobile browsers often ignore .click() on a display:none file input.
+    const fileInput = h('input', {
+      type: 'file',
+      class: 'visually-hidden-input',
+      accept: 'audio/*,.mp3,.m4a,.wav,.ogg,.aac,.flac',
+      tabIndex: -1,
+      'aria-label': 'Archivo de audio',
+      onchange: () => void onFileChosen(),
+    });
     const loadBtn = h('button.btn.btn-primary', { type: 'button', onclick: () => fileInput.click() }, 'Cargar audio…') as HTMLButtonElement;
     const emptyView = h(
       'div.audio-empty',
