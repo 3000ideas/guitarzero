@@ -1424,3 +1424,25 @@ el estudio muestra un aviso amarillo con el hueco y el botón «Añadir N compá
 silencios hasta el pulso donde entra el audio y después el primer acorde de la canción (`- D . .`);
 el inicio del audio se mueve N compases (`offsetSec` puede quedar negativo: el compás 1 empieza antes
 del audio). Sirve para cualquier canción y para copias editadas que no se actualizan solas.
+
+## 24. Aprender por niveles
+
+Para canciones difíciles: tarjeta «Aprender por niveles» en el editor (`src/song/levels.ts`). Cada nivel
+es una **copia** de la canción (id `<canción>-n<N>`, con el mismo audio copiado, el mismo inicio y el
+mismo tempo por línea, así que encaja con la grabación) con los acordes reducidos a los N más usados
+(el resto pasa al más parecido de ellos, `simplifyChart`) y **un solo rasgueo sencillo** para toda la
+canción (los cambios de `strum:` a mitad de canción se quitan):
+
+| Nivel | Acordes | Rasgueo |
+|---|---|---|
+| 1 Solo el pulso | los de la canción (no importan) | cuerdas apagadas, un golpe por tiempo (`x-x-x-x-`) |
+| 2 | 2 | un ↓ por compás (`D---`) |
+| 3 | 3 | ↓ en el 1 y el 3 (`D-D-`) |
+| 4 | 4 | un ↓ por tiempo (`D-D-D-D-`) |
+| (5) | la canción completa | la original |
+
+El orden recomendado (el de un profesor): escuchar y tararear sobre el pulso, nivel 1 cantando,
+nivel 2 hasta cambiar sin parar, niveles 3 y 4, y por último la canción completa; subir de nivel cuando
+salga limpio dos veces seguidas. «Crear» / «Volver a crear» regenera la copia desde el texto actual
+(si se vuelve a crear se pierden los cambios hechos a mano en esa copia). Cada fila ofrece «Practicar»
+y «Editar».

@@ -118,7 +118,8 @@ import { parseSong } from '../../song/parser';
 import { beatToSec, secToBeat, songDurationSec } from '../../song/tempo';
 import { isExampleId } from '../../song/examples';
 import { getSong, saveSong } from '../../song/storage';
-import { deleteTrack, getTrack, hasIndexedDb, putTrack } from '../../song/audioStore';
+import { copyTrack, deleteTrack, getTrack, hasIndexedDb, putTrack } from '../../song/audioStore';
+import { LEVELS, buildLevelSource, levelSongId, type LevelSpec } from '../../song/levels';
 import { getAudioContext } from '../../audio/context';
 import { BackingTrack } from '../../audio/backing';
 import { renderChordTrack } from '../../audio/chordSynth';
@@ -1369,6 +1370,74 @@ export const editorScreen: Screen = {
     const cancelSimplifyBtn = h('button.btn', { type: 'button', onclick: () => hideSimplifyPreview() }, 'Cancelar') as HTMLButtonElement;
     const simplifyPreview = h('div.simplify-preview', { hidden: true });
     const checkLabel = (input: HTMLInputElement, text: string): HTMLElement => h('label.audio-check-label', null, input, text);
+    // ------------------------------------------------------------ learning levels
+    const levelsList = h('div.levels-list');
+    const levelsStatus = h('div.muted.small.levels-status');
+    const levelsCard = h(
+      'div.card.levels-card',
+      null,
+      h('div.card-title', null, 'Aprender por niveles'),
+      h('p.muted.small', null, 'Una canción difícil se aprende por pasos. Cada nivel es una copia más sencilla, con el mismo audio y el mismo tempo: primero el pulso y cantar encima, luego pocos acordes con pocos golpes, y se va añadiendo.'),
+      levelsList,
+      levelsStatus,
+      h(
+        'details.levels-help',
+        null,
+        h('summary', null, 'Cómo estudiarla (el orden de un profesor)'),
+        h('ol', null,
+          h('li', null, 'Escúchala varias veces y tararea la melodía sobre el pulso. Sin guitarra.'),
+          h('li', null, 'Nivel 1: sigue el pulso con las cuerdas apagadas mientras cantas. Si el ritmo no sale, los acordes no van a salir.'),
+          h('li', null, 'Nivel 2: solo dos acordes y un golpe por compás. Practica el cambio hasta hacerlo sin parar.'),
+          h('li', null, 'Niveles 3 y 4: añade un acorde y más golpes. Sube de nivel cuando salga limpio dos veces seguidas.'),
+          h('li', null, 'Al final, la canción completa. Si falla un compás, repítelo en bucle («Comprobar» → «Repetir el compás»).'),
+        ),
+      ),
+    );
+
+    function renderLevels(): void {
+      clear(levelsList);
+      for (const level of LEVELS) {
+        const levelId = levelSongId(id, level.n);
+        const exists = getSong(levelId) !== null;
+        levelsList.appendChild(
+          h(
+            'div.level-row',
+            null,
+            h('div.level-name', null, h('strong', null, `Nivel ${level.n}`), ` · ${level.title}`),
+            h('div.muted.small', null, level.summary),
+            h(
+              'div.level-actions',
+              null,
+              h('button.btn.btn-sm', { type: 'button', onclick: () => void createLevel(level) }, exists ? 'Volver a crear' : 'Crear'),
+              exists ? h('a.btn.btn-sm.btn-primary', { href: `#/play/${levelId}` }, 'Practicar') : null,
+              exists ? h('a.btn.btn-sm', { href: `#/edit/${levelId}` }, 'Editar') : null,
+            ),
+          ),
+        );
+      }
+    }
+
+    /** Writes (or rewrites) the copy of this song for one level, with the same audio. */
+    async function createLevel(level: LevelSpec): Promise<void> {
+      flush();
+      const baseTitle = (analysis.song.title.trim() || storedTitle || 'Sin título').replace(/\s*·\s*Nivel \d.*$/, '');
+      const title = `${baseTitle} · Nivel ${level.n}: ${level.title}`;
+      const levelId = levelSongId(id, level.n);
+      const { source, chords } = buildLevelSource(textarea.value, level, title);
+      saveSong({ id: levelId, title, artist: analysis.song.artist, source, updatedAt: 0, audio: audio ? { ...audio } : null });
+      if (audio) {
+        try {
+          await copyTrack(id, levelId);
+        } catch (err) {
+          levelsStatus.textContent = `Se creó el nivel, pero no se pudo copiar el audio: ${errorMessage(err, 'error desconocido')}`;
+          renderLevels();
+          return;
+        }
+      }
+      levelsStatus.textContent = `Nivel ${level.n} listo con ${chords.length === 1 ? '1 acorde' : `${chords.length} acordes`}: ${chords.join(' ')}`;
+      renderLevels();
+    }
+
     const simplifyCard = h(
       'div.card.simplify-card',
       null,
@@ -3221,6 +3290,7 @@ export const editorScreen: Screen = {
       h('div.card', null, chordsHeading, chordGrid),
       strumCard,
       simplifyCard,
+      levelsCard,
       formatHelp(),
     );
 
@@ -3247,6 +3317,7 @@ export const editorScreen: Screen = {
     renderIssues();
     renderChords();
     renderStrum();
+    renderLevels();
     setEditMode(editMode);
     setStatus('saved');
     updateCaret();
