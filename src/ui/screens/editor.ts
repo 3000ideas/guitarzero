@@ -108,7 +108,7 @@ import {
 } from '../../music/simplify';
 import { createChordGrid } from '../chordGrid';
 import { createBarCheck } from '../barCheck';
-import { applyTempoMap, expandRepeats, parseGrid, restrumBar, retimeBar, serializeGrid, strumAt } from '../../song/grid';
+import { applyTempoMap, expandRepeats, parseGrid, restrumBar, retimeBar, serializeGrid, startPartAt, strumAt } from '../../song/grid';
 import { followAudio, type Stretch, type TempoMap } from '../../dsp/tempoMap';
 import type { FollowAction } from '../barCheck';
 import { barDrift, driftJumps, fitSync, type DriftJump, type SyncFit } from '../../dsp/syncFit';
@@ -1140,6 +1140,7 @@ export const editorScreen: Screen = {
       onFixJump: (j) => fixJump(j),
       onFollowRun: () => runFollow(),
       onUseRhythm: (barIndex, pattern) => useBarRhythm(barIndex, pattern),
+      onNewPart: (barIndex, o) => newPartAt(barIndex, o),
       getPlayBeat: () => {
         const sec = gridPlaySec();
         return gridPlay && sec !== null ? secToBeat(gridPlay.song.tempoSegments, Math.max(0, sec - gridView.getVisualDelaySec())) : null;
@@ -1965,6 +1966,27 @@ export const editorScreen: Screen = {
         const drift = barDrift(backing.monoSamples(), sampleRate, audio.offsetSec, analysis.song);
         checkView.setDrift(drift, driftJumps(drift));
       }, 30);
+    }
+
+    /** A new part of the song starts at this bar: its own section, optional silence before it and its own strum. */
+    function newPartAt(barIndex: number, o: { label: string; silenceBeats: number; strum: string | null }): void {
+      const song = analysis.song;
+      const bar = song.bars[barIndex];
+      const say = (text: string, bad = true): void => checkView.setFollow({ text, bad, actions: [] });
+      if (!bar || bar.srcLine === undefined || bar.srcBar === undefined) return;
+      if (song.bars.filter((b) => b.srcLine === bar.srcLine && b.srcBar === bar.srcBar).length !== 1) {
+        say(`El compás ${barIndex + 1} se repite en la canción (x<n> o sección reutilizada): usa antes «Seguir el audio» → «Escribir las repeticiones».`);
+        return;
+      }
+      let bpmHere = song.tempoSegments[0].bpm;
+      for (const seg of song.tempoSegments) if (seg.fromBeat <= bar.startBeat + 1e-9) bpmHere = seg.bpm;
+      const chart = parseGrid(textarea.value);
+      if (!startPartAt(chart, bar.srcLine - 1, bar.srcBar, { label: o.label, silenceBeats: o.silenceBeats, strum: o.strum, bpm: bpmHere })) {
+        say(`No se pudo crear la parte en el compás ${barIndex + 1} (¿la línea se repite, o el silencio necesita un tempo fuera de 20–400?). Hazlo a mano en la vista Texto.`);
+        return;
+      }
+      applyText(serializeGrid(chart)); // undoable with «Deshacer»
+      say(`Parte nueva «${o.label.trim() || 'Parte nueva'}» en el compás ${barIndex + 1}${o.silenceBeats > 0 ? ` con ${o.silenceBeats} pulso${o.silenceBeats > 1 ? 's' : ''} de silencio antes` : ''}. Pulsa «Seguir el audio» para que cada parte tome su tempo.`, false);
     }
 
     /** Gives ONE bar the rhythm the audio plays in it (a `strum:` before it and the previous pattern after it). */

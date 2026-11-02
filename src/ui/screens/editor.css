@@ -1201,3 +1201,22 @@
 .bar-check .rhythm-audio.is-diff {
   color: #fb923c;
 }
+
+.bar-check .check-part {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 12px;
+  background: var(--panel-2);
+}
+
+.bar-check .check-part summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.bar-check .part-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 8px 0;
+}

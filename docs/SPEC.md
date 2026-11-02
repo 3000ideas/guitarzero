@@ -1347,3 +1347,10 @@ ruido). `src/dsp/tempoMap.ts` (`followAudio`) sigue la grabación **una sola vez
   restaura el anterior justo después (`restrumBar` / `strumAt`, `src/song/grid.ts`; no se ofrece en
   líneas con `x<n>` o secciones reutilizadas: antes «Escribir las repeticiones»). Es la salida cuando
   el audio no repite un único patrón (el detector global da «confianza baja»).
+- **Empezar aquí una parte nueva** (Comprobar, desplegable): en el compás mostrado escribe una
+  sección nueva (`[Parte 2]`) con, si se pide, un **silencio** justo antes (1…n pulsos, hasta un
+  compás) y su **propio rasgueo** (el mismo / un ↓ por pulso / D-DU-UDU). `startPartAt`
+  (`src/song/grid.ts`) parte la línea de compases ahí; el silencio es un compás de silencios tocado
+  a `bpm × pulsos / N` (así dura exactamente N pulsos del tempo vigente) y el tempo vuelve a su valor
+  justo después. No se ofrece en líneas con `x<n>` (antes «Escribir las repeticiones»). Después,
+  «Seguir el audio» da a cada parte su tempo.

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseSong } from '../../src/song/parser';
+import { beatToSec } from '../../src/song/tempo';
 import { EXAMPLE_SONGS } from '../../src/song/examples';
 import {
   applyTempoMap,
@@ -21,6 +22,7 @@ import {
   parseGrid,
   retimeBar,
   serializeGrid,
+  startPartAt,
   setCell,
   setHeader,
   setLineRepeat,
@@ -373,5 +375,40 @@ describe('expandRepeats', () => {
     expect(expandRepeats(parseGrid('[A]\nC . . . |\n[B] x2\n'))).toBe(false); // recall of an undefined section
     expect(expandRepeats(parseGrid('[A]\nC . . . |\nstrum: D-D-U-U-\n[A]\n'))).toBe(false); // strum change in the middle
     expect(expandRepeats(parseGrid('[A]\nC . . |\n'))).toBe(false); // a line the grid cannot read
+  });
+});
+
+describe('startPartAt', () => {
+  const SODOMA = 'tempo: 80\nstrum: D-D-U-U-\nD . . . | F#m . . . | D . . . | A . . . |\nD . . . | F#m . . . | D . . . | D . . . |\n';
+
+  it('starts a new section at a bar, with its own strum', () => {
+    const chart = parseGrid(SODOMA);
+    expect(startPartAt(chart, 3, 0, { label: 'Parte 2', silenceBeats: 0, strum: 'D-DU-UDU', bpm: 80 })).toBe(true);
+    const out = serializeGrid(chart);
+    expect(out).toBe('tempo: 80\nstrum: D-D-U-U-\nD . . . | F#m . . . | D . . . | A . . . |\n[Parte 2]\nstrum: D-DU-UDU\nD . . . | F#m . . . | D . . . | D . . . |\n');
+    const { song, errors } = parseSong(out);
+    expect(errors.filter((e) => e.severity === 'error')).toEqual([]);
+    expect(song.bars.map((b) => b.section)).toEqual([null, null, null, null, 'Parte 2', 'Parte 2', 'Parte 2', 'Parte 2']);
+    expect(musical(out)).toEqual(musical(SODOMA));
+  });
+
+  it('splits a line in the middle and leaves a silence of exactly N beats before the part', () => {
+    const chart = parseGrid(SODOMA);
+    expect(startPartAt(chart, 2, 2, { label: 'Puente', silenceBeats: 2, strum: null, bpm: 80 })).toBe(true);
+    const out = serializeGrid(chart);
+    const { song, errors } = parseSong(out);
+    expect(errors.filter((e) => e.severity === 'error')).toEqual([]);
+    expect(song.bars).toHaveLength(9); // 8 bars + the silent one
+    const silent = song.bars[2];
+    expect(silent.chords.every((c) => c.chord.quality === 'nc')).toBe(true);
+    // 4 beats at 160 bpm = 1.5 s = exactly 2 beats of the song's 80 bpm
+    expect(beatToSec(song.tempoSegments, silent.startBeat + silent.beats) - beatToSec(song.tempoSegments, silent.startBeat)).toBeCloseTo(1.5, 3);
+    expect(song.bars.map((x) => x.section)).toEqual([null, null, null, 'Puente', 'Puente', 'Puente', 'Puente', 'Puente', 'Puente']);
+    expect(song.tempoSegments.map((t) => t.bpm)).toEqual([80, 160, 80]);
+  });
+
+  it('refuses repeated lines and silences that need an impossible tempo', () => {
+    expect(startPartAt(parseGrid('tempo: 80\nC . . . | G . . . | x2\n'), 1, 1, { label: 'X', silenceBeats: 0, strum: null, bpm: 80 })).toBe(false);
+    expect(startPartAt(parseGrid('tempo: 300\nC . . . | G . . . |\n'), 1, 1, { label: 'X', silenceBeats: 1, strum: null, bpm: 300 })).toBe(false);
   });
 });

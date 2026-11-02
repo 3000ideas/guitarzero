@@ -440,6 +440,53 @@ export function retimeBar(chart: GridChart, itemIndex: number, barIndex: number,
   return isolateBar(chart, itemIndex, barIndex, header(bpm), restoreBpm === null ? null : header(restoreBpm));
 }
 
+export interface NewPartOpts {
+  /** Name of the new section. */
+  label: string;
+  /** Beats of silence to leave before it (0 = none; at most one bar). */
+  silenceBeats: number;
+  /** Strum pattern of the new part (null = it keeps the one in effect). */
+  strum: string | null;
+  /** Tempo in effect at that bar (the silence is made with a quick tempo change and goes back to this). */
+  bpm: number;
+}
+
+/**
+ * Starts a new part of the song at one bar: the bar line is split there, `[label]` is written (with
+ * its own `strum:` when given) and, when asked, a silence of `silenceBeats` beats is left just before
+ * it. The silence is a bar of rests played at `bpm × beats / silenceBeats` so it lasts exactly that
+ * many beats, and the tempo goes back right after it. Refuses a line that repeats (`x2`).
+ */
+export function startPartAt(chart: GridChart, itemIndex: number, barIndex: number, o: NewPartOpts): boolean {
+  const item = barsItem(chart, itemIndex);
+  if (!item || item.repeat !== 1 || !item.bars[barIndex]) return false;
+  const beats = item.beats;
+  const silence = Math.round(o.silenceBeats);
+  if (silence < 0 || silence > beats) return false;
+  let silenceBpm = 0;
+  if (silence > 0) {
+    silenceBpm = (o.bpm * beats) / silence;
+    if (!(silenceBpm >= 20 && silenceBpm <= 400)) return false;
+  }
+  const label = cleanText(o.label.replace(/[\][]/g, '')) || 'Parte nueva';
+  const fmt = (v: number): string => String(Math.round(v * 100) / 100);
+  const header = (key: GridHeaderKey, value: string): GridItem => ({ kind: 'header', key, value, comment: '', orig: null });
+  const part = (bars: GridBar[], comment: string): GridItem => ({ kind: 'bars', bars, repeat: 1, comment, beats, orig: null });
+  const head = item.bars.slice(0, barIndex);
+  const tail = item.bars.slice(barIndex);
+  const pieces: GridItem[] = [];
+  if (head.length > 0) pieces.push(part(head, ''));
+  if (silence > 0) {
+    const rest = emptyBar(beats, REST_CELL);
+    pieces.push(header('tempo', fmt(silenceBpm)), part([rest], ''), header('tempo', fmt(o.bpm)));
+  }
+  pieces.push({ kind: 'section', label, repeat: 1, comment: '', orig: null });
+  if (o.strum) pieces.push(header('strum', o.strum));
+  pieces.push(part(tail, item.comment));
+  chart.items.splice(itemIndex, 1, ...pieces);
+  return true;
+}
+
 /** The strum pattern in effect at item `itemIndex` (the last `strum:` header before it), or null when none was written (the default applies). */
 export function strumAt(chart: GridChart, itemIndex: number): string | null {
   let value: string | null = null;

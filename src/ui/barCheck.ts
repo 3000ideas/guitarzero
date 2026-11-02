@@ -47,6 +47,8 @@ export interface BarCheckOpts {
   onFixJump: (jump: DriftJump) => void;
   /** «Usar el ritmo del audio en este compás»: the host writes `strum:` for that bar only. */
   onUseRhythm: (barIndex: number, pattern: string) => void;
+  /** «Empezar aquí una parte nueva»: the host writes the section (and its silence / strum) at that bar. */
+  onNewPart: (barIndex: number, o: { label: string; silenceBeats: number; strum: string | null }) => void;
   /** «Seguir el audio»: compute a tempo for every line (the result and what to do next come back through `setFollow`). */
   onFollowRun: () => void;
 }
@@ -138,6 +140,25 @@ export function createBarCheck(opts: BarCheckOpts): BarCheckView {
     h('div.rhythm-row', null, h('span.rhythm-label', null, 'En el audio'), rhythmAudio),
     h('div.rhythm-row', null, rhythmUse, h('span.muted.small', null, 'D = ↓ (en el pulso), U = ↑ (entre pulsos), - = nada. Cuatro huecos por pulso.')),
   );
+  const partName = h('input', { type: 'text', value: 'Parte 2', 'aria-label': 'Nombre de la parte nueva', autocomplete: 'off', spellcheck: false }) as HTMLInputElement;
+  const partSilence = h('select', { 'aria-label': 'Silencio antes de la parte nueva' }) as HTMLSelectElement;
+  const partStrum = h('select', { 'aria-label': 'Rasgueo de la parte nueva' }) as HTMLSelectElement;
+  for (const [v, l] of [['same', 'el mismo que ahora'], ['beats', 'sencillo: un ↓ por pulso'], ['pop', 'abajo y arriba (D-DU-UDU)']]) partStrum.appendChild(h('option', { value: v }, l));
+  const partBtn = h('button.btn.btn-sm', { type: 'button' }, 'Crear la parte nueva aquí') as HTMLButtonElement;
+  partBtn.onclick = () => {
+    if (!song || song.bars.length === 0) return;
+    const n = song.bars[bar].beats;
+    const strum = partStrum.value === 'beats' ? 'D-'.repeat(n) : partStrum.value === 'pop' && n === 4 ? 'D-DU-UDU' : null;
+    opts.onNewPart(bar, { label: partName.value, silenceBeats: Number(partSilence.value), strum });
+  };
+  const partBox = h(
+    'details.check-part',
+    null,
+    h('summary', null, '🎼 Empezar aquí una parte nueva (con su propio ritmo)'),
+    h('p.muted.small', null, 'Si en este compás cambia la canción (otra sección, un silencio, otro rasgueo), márcalo: se escribe una sección nueva a partir de este compás y, si quieres, un silencio justo antes. Después pulsa «Seguir el audio» para que cada parte tenga su tempo.'),
+    h('div.part-row', null, h('label.grid-field', null, h('span', null, 'Nombre'), partName), h('label.grid-field', null, h('span', null, 'Silencio antes'), partSilence), h('label.grid-field', null, h('span', null, 'Rasgueo de la parte'), partStrum)),
+    partBtn,
+  );
   const legend = h(
     'ul.check-legend',
     null,
@@ -167,6 +188,7 @@ export function createBarCheck(opts: BarCheckOpts): BarCheckView {
     wrap,
     legend,
     rhythmBox,
+    partBox,
     note,
     nudges,
     help,
@@ -349,6 +371,17 @@ export function createBarCheck(opts: BarCheckOpts): BarCheckView {
   /** The rhythm of the text and of the audio for the shown bar, and the button that copies the audio's. */
   function refreshRhythm(): void {
     if (!song || song.bars.length === 0) return;
+    // Silence choices follow the meter: «ninguno», 1…n-1 beats, or a whole bar.
+    const n = song.bars[bar].beats;
+    const wanted = ['0', ...Array.from({ length: n }, (_, i) => String(i + 1))].join(',');
+    if (partSilence.dataset.n !== wanted) {
+      partSilence.dataset.n = wanted;
+      partSilence.replaceChildren(
+        h('option', { value: '0' }, 'ninguno'),
+        ...Array.from({ length: n }, (_, i) => h('option', { value: String(i + 1) }, i + 1 === n ? 'un compás entero' : `${i + 1} pulso${i ? 's' : ''}`)),
+      );
+    }
+    partBtn.textContent = `Crear la parte nueva en el compás ${bar + 1}`;
     const written = textRhythm(song, bar);
     rhythmText.textContent = written ? spacedRhythm(written) : '—';
     const heard = audio ? audioRhythm(song, bar, attacks, audio.offsetSec) : '';
