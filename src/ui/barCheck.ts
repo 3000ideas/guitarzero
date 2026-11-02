@@ -10,8 +10,11 @@ import type { Song } from '../types';
 import { h } from './dom';
 import { beatToSec, secToBeat } from '../song/tempo';
 import {
+  audioRhythm,
   barCells,
   barStrums,
+  spacedRhythm,
+  textRhythm,
   barWindow,
   energyAttacks,
   strumCaption,
@@ -42,6 +45,8 @@ export interface BarCheckOpts {
   onAnalyzeDrift: () => void;
   /** «Corregir» a jump with a tempo change of its bar. */
   onFixJump: (jump: DriftJump) => void;
+  /** «Usar el ritmo del audio en este compás»: the host writes `strum:` for that bar only. */
+  onUseRhythm: (barIndex: number, pattern: string) => void;
   /** «Seguir el audio»: compute a tempo for every line (the result and what to do next come back through `setFollow`). */
   onFollowRun: () => void;
 }
@@ -123,6 +128,16 @@ export function createBarCheck(opts: BarCheckOpts): BarCheckView {
     driftStrip,
     driftText,
   );
+  const rhythmText = h('code.rhythm-text');
+  const rhythmAudio = h('code.rhythm-audio');
+  const rhythmUse = h('button.btn.btn-sm', { type: 'button' }) as HTMLButtonElement;
+  const rhythmBox = h(
+    'div.check-rhythm',
+    null,
+    h('div.rhythm-row', null, h('span.rhythm-label', null, 'Tu texto'), rhythmText),
+    h('div.rhythm-row', null, h('span.rhythm-label', null, 'En el audio'), rhythmAudio),
+    h('div.rhythm-row', null, rhythmUse, h('span.muted.small', null, 'D = ↓ (en el pulso), U = ↑ (entre pulsos), - = nada. Cuatro huecos por pulso.')),
+  );
   const legend = h(
     'ul.check-legend',
     null,
@@ -151,6 +166,7 @@ export function createBarCheck(opts: BarCheckOpts): BarCheckView {
     driftBox,
     wrap,
     legend,
+    rhythmBox,
     note,
     nudges,
     help,
@@ -330,6 +346,20 @@ export function createBarCheck(opts: BarCheckOpts): BarCheckView {
     if (!audio) sourceSel.value = 'chords';
   }
 
+  /** The rhythm of the text and of the audio for the shown bar, and the button that copies the audio's. */
+  function refreshRhythm(): void {
+    if (!song || song.bars.length === 0) return;
+    const written = textRhythm(song, bar);
+    rhythmText.textContent = written ? spacedRhythm(written) : '—';
+    const heard = audio ? audioRhythm(song, bar, attacks, audio.offsetSec) : '';
+    rhythmAudio.textContent = heard ? spacedRhythm(heard) : audio ? '(sin golpes claros)' : '(sin audio)';
+    const differs = heard !== '' && heard !== written;
+    rhythmUse.hidden = !differs;
+    rhythmUse.textContent = 'Usar el ritmo del audio en este compás';
+    rhythmUse.onclick = () => opts.onUseRhythm(bar, heard);
+    rhythmAudio.classList.toggle('is-diff', differs);
+  }
+
   function recompute(): void {
     attacks = [];
     if (song && audio) {
@@ -343,6 +373,7 @@ export function createBarCheck(opts: BarCheckOpts): BarCheckView {
       }
     }
     refreshTexts();
+    refreshRhythm();
     draw();
   }
 

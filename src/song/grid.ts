@@ -407,28 +407,58 @@ export function endsWithRecall(chart: GridChart): boolean {
 }
 
 /**
- * Gives ONE bar its own tempo: the bar line is split so that `tempo: bpm` comes right before the
- * bar and `tempo: restoreBpm` right after it (null = nothing follows, no restore). Used when the
- * audio's bar lasts longer or shorter than the text says. Refuses a line that repeats (`x2`).
+ * Splits a bar line around one bar so a header can apply to that bar only: `before` goes right
+ * before the bar, `after` (when not null) right after it. Refuses a line that repeats (`x2`).
  */
-export function retimeBar(chart: GridChart, itemIndex: number, barIndex: number, bpm: number, restoreBpm: number | null): boolean {
+function isolateBar(chart: GridChart, itemIndex: number, barIndex: number, before: GridItem, after: GridItem | null): boolean {
   const item = barsItem(chart, itemIndex);
-  if (!item || item.repeat !== 1 || !item.bars[barIndex] || !(bpm >= 20 && bpm <= 400)) return false;
-  const header = (v: number): GridItem => ({ kind: 'header', key: 'tempo', value: String(Math.round(v * 100) / 100), comment: '', orig: null });
+  if (!item || item.repeat !== 1 || !item.bars[barIndex]) return false;
   const part = (bars: GridBar[], comment: string): GridItem => ({ kind: 'bars', bars, repeat: 1, comment, beats: item.beats, orig: null });
-  const before = item.bars.slice(0, barIndex);
-  const after = item.bars.slice(barIndex + 1);
+  const head = item.bars.slice(0, barIndex);
+  const tail = item.bars.slice(barIndex + 1);
   const pieces: GridItem[] = [];
-  if (before.length > 0) pieces.push(part(before, ''));
-  pieces.push(header(bpm), part([item.bars[barIndex]], after.length === 0 ? item.comment : ''));
-  if (after.length > 0) {
-    if (restoreBpm !== null) pieces.push(header(restoreBpm));
-    pieces.push(part(after, item.comment));
-  } else if (restoreBpm !== null) {
-    pieces.push(header(restoreBpm));
+  if (head.length > 0) pieces.push(part(head, ''));
+  pieces.push(before, part([item.bars[barIndex]], tail.length === 0 ? item.comment : ''));
+  if (tail.length > 0) {
+    if (after) pieces.push(after);
+    pieces.push(part(tail, item.comment));
+  } else if (after) {
+    pieces.push(after);
   }
   chart.items.splice(itemIndex, 1, ...pieces);
   return true;
+}
+
+/**
+ * Gives ONE bar its own tempo: `tempo: bpm` right before the bar and `tempo: restoreBpm` right
+ * after it (null = nothing follows, no restore). Used when the audio's bar lasts longer or shorter
+ * than the text says. Refuses a line that repeats (`x2`).
+ */
+export function retimeBar(chart: GridChart, itemIndex: number, barIndex: number, bpm: number, restoreBpm: number | null): boolean {
+  if (!(bpm >= 20 && bpm <= 400)) return false;
+  const header = (v: number): GridItem => ({ kind: 'header', key: 'tempo', value: String(Math.round(v * 100) / 100), comment: '', orig: null });
+  return isolateBar(chart, itemIndex, barIndex, header(bpm), restoreBpm === null ? null : header(restoreBpm));
+}
+
+/** The strum pattern in effect at item `itemIndex` (the last `strum:` header before it), or null when none was written (the default applies). */
+export function strumAt(chart: GridChart, itemIndex: number): string | null {
+  let value: string | null = null;
+  for (let i = 0; i < itemIndex && i < chart.items.length; i++) {
+    const it = chart.items[i];
+    if (it.kind === 'header' && it.key === 'strum') value = it.value.replace(/\s+/g, '');
+    if (it.kind === 'header' && it.key === 'time') value = null; // a new meter resets the default
+  }
+  return value;
+}
+
+/**
+ * Gives ONE bar its own strum pattern (`strum: pattern` before it, the previous pattern after it;
+ * `restore` null = write no restore: the bar is the last of the song). Refuses a line that repeats.
+ */
+export function restrumBar(chart: GridChart, itemIndex: number, barIndex: number, pattern: string, restore: string | null): boolean {
+  if (!/^[DUx-]+$/.test(pattern)) return false;
+  const header = (v: string): GridItem => ({ kind: 'header', key: 'strum', value: v, comment: '', orig: null });
+  return isolateBar(chart, itemIndex, barIndex, header(pattern), restore === null ? null : header(restore));
 }
 
 /**

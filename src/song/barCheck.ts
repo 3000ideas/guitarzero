@@ -3,7 +3,7 @@
  * (chords and strum) can be checked against the waveform of the audio. Testable in Node.
  */
 import type { Song } from '../types';
-import { beatToSec } from './tempo';
+import { beatToSec, secToBeat } from './tempo';
 
 /** Beats of context shown before and after the bar. */
 export const CONTEXT_BEATS = 1;
@@ -159,4 +159,50 @@ export function strumCaption(strums: readonly BarStrum[]): string {
   if (strums.length === 0) return 'Sin golpes en este compás';
   const sym = { down: '↓', up: '↑', muted: '✕' } as const;
   return strums.map((s) => `${sym[s.kind]} pulso ${Math.round(s.beatInBar * 100) / 100 + 1} (${s.chord})`).join(' · ');
+}
+
+/** Slots per beat of the rhythm strings (sixteenths). */
+export const RHYTHM_SLOTS_PER_BEAT = 4;
+
+/** The strikes of the text as a string of sixteenth slots: D / U / x where there is one, - elsewhere. */
+export function textRhythm(song: Pick<Song, 'bars' | 'events'>, barIndex: number): string {
+  const bar = song.bars[barIndex];
+  if (!bar) return '';
+  const slots = Array.from({ length: bar.beats * RHYTHM_SLOTS_PER_BEAT }, () => '-');
+  for (const s of barStrums(song, barIndex)) {
+    const at = Math.round(s.beatInBar * RHYTHM_SLOTS_PER_BEAT);
+    if (at >= 0 && at < slots.length) slots[at] = s.kind === 'down' ? 'D' : s.kind === 'up' ? 'U' : 'x';
+  }
+  return slots.join('');
+}
+
+/**
+ * The rhythm the audio plays in a bar, from its attacks (audio seconds): each attack goes to the
+ * nearest sixteenth when it is within a third of a slot of it; ↓ on the beats, ↑ in between (the
+ * usual strumming reading). Empty string when the bar has no attacks.
+ */
+export function audioRhythm(
+  song: Pick<Song, 'bars' | 'tempoSegments'>,
+  barIndex: number,
+  attackSecs: readonly number[],
+  offsetSec: number,
+): string {
+  const bar = song.bars[barIndex];
+  if (!bar) return '';
+  const total = bar.beats * RHYTHM_SLOTS_PER_BEAT;
+  const slots = Array.from({ length: total }, () => '-');
+  let any = false;
+  for (const sec of attackSecs) {
+    const x = (secToBeat(song.tempoSegments, sec - offsetSec) - bar.startBeat) * RHYTHM_SLOTS_PER_BEAT;
+    const at = Math.round(x);
+    if (at < 0 || at >= total || Math.abs(x - at) > 0.34) continue;
+    slots[at] = at % RHYTHM_SLOTS_PER_BEAT === 0 ? 'D' : 'U';
+    any = true;
+  }
+  return any ? slots.join('') : '';
+}
+
+/** «D--- D--- U--- U---»: one group per beat, easier to read. */
+export function spacedRhythm(pattern: string): string {
+  return pattern.replace(new RegExp(`(.{${RHYTHM_SLOTS_PER_BEAT}})(?=.)`, 'g'), '$1 ');
 }

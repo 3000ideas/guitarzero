@@ -108,7 +108,7 @@ import {
 } from '../../music/simplify';
 import { createChordGrid } from '../chordGrid';
 import { createBarCheck } from '../barCheck';
-import { applyTempoMap, expandRepeats, parseGrid, retimeBar, serializeGrid } from '../../song/grid';
+import { applyTempoMap, expandRepeats, parseGrid, restrumBar, retimeBar, serializeGrid, strumAt } from '../../song/grid';
 import { followAudio, type Stretch, type TempoMap } from '../../dsp/tempoMap';
 import type { FollowAction } from '../barCheck';
 import { barDrift, driftJumps, fitSync, type DriftJump, type SyncFit } from '../../dsp/syncFit';
@@ -1139,6 +1139,7 @@ export const editorScreen: Screen = {
       onAnalyzeDrift: () => runDrift(),
       onFixJump: (j) => fixJump(j),
       onFollowRun: () => runFollow(),
+      onUseRhythm: (barIndex, pattern) => useBarRhythm(barIndex, pattern),
       getPlayBeat: () => {
         const sec = gridPlaySec();
         return gridPlay && sec !== null ? secToBeat(gridPlay.song.tempoSegments, Math.max(0, sec - gridView.getVisualDelaySec())) : null;
@@ -1812,7 +1813,7 @@ export const editorScreen: Screen = {
         const current = currentStrumHeader(textarea.value, n);
         const usable = isValidStrumPattern(result.pattern, n) && result.confidence >= STRUM_CONFIDENCE_THRESHOLD;
         if (!usable) {
-          checkView.setFollow({ text: `No se distingue un patrón de rasgueo claro en el audio (${formatStrumDetection(result)}). Prueba a grabarlo tocando en el cuadro «Rasgueo» de la derecha.`, bad: true, actions: [] });
+          checkView.setFollow({ text: `El audio no repite un único patrón de rasgueo (${formatStrumDetection(result)}): cambia de un compás a otro. Mira el ritmo compás a compás debajo de la onda («En el audio») y copia el que quieras con «Usar el ritmo del audio en este compás».`, bad: true, actions: [] });
           return;
         }
         if (result.pattern === current) {
@@ -1941,6 +1942,27 @@ export const editorScreen: Screen = {
         const drift = barDrift(backing.monoSamples(), sampleRate, audio.offsetSec, analysis.song);
         checkView.setDrift(drift, driftJumps(drift));
       }, 30);
+    }
+
+    /** Gives ONE bar the rhythm the audio plays in it (a `strum:` before it and the previous pattern after it). */
+    function useBarRhythm(barIndex: number, pattern: string): void {
+      const song = analysis.song;
+      const bar = song.bars[barIndex];
+      const say = (text: string): void => checkView.setFollow({ text, bad: true, actions: [] });
+      if (!bar || bar.srcLine === undefined || bar.srcBar === undefined || !isValidStrumPattern(pattern, bar.beats)) return;
+      if (song.bars.filter((b) => b.srcLine === bar.srcLine && b.srcBar === bar.srcBar).length !== 1) {
+        say(`El compás ${barIndex + 1} se repite en la canción (x<n> o sección reutilizada): usa antes «Seguir el audio» → «Escribir las repeticiones», o cambia el rasgueo a mano en la vista Texto.`);
+        return;
+      }
+      const chart = parseGrid(textarea.value);
+      const last = barIndex === song.bars.length - 1;
+      const restore = strumAt(chart, bar.srcLine - 1) ?? 'D-'.repeat(bar.beats);
+      if (!restrumBar(chart, bar.srcLine - 1, bar.srcBar, pattern, last ? null : restore)) {
+        say(`No se pudo escribir el rasgueo del compás ${barIndex + 1}: hazlo a mano en la vista Texto (strum: ${pattern}).`);
+        return;
+      }
+      applyText(serializeGrid(chart)); // undoable with «Deshacer»
+      checkView.setFollow({ text: `Compás ${barIndex + 1}: ahora toca ${pattern}. Se puede deshacer con «Deshacer».`, actions: [] });
     }
 
     /** Writes a tempo change around the bar whose audio length differs from the text, so the bars after it line up again. */

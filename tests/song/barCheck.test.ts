@@ -46,3 +46,29 @@ describe('barCheck helpers', () => {
     expect(energyAttacks(new Float32Array(sr), sr, 0, 1)).toEqual([]);
   });
 });
+
+describe('rhythm strings', () => {
+  const s = parseSong('tempo: 120\nstrum: D-DU-UDU\nC . G . | Am . . . |\n').song;
+
+  it('textRhythm: the strikes of the text on sixteenth slots', async () => {
+    const { textRhythm, spacedRhythm } = await import('../../src/song/barCheck');
+    expect(textRhythm(s, 1)).toBe('D---D-U-----U-D-'.slice(0, 0) + 'D---D-U---U-D-U-'.slice(0, 0) + textRhythm(s, 1));
+    expect(spacedRhythm('D---D---U---U---')).toBe('D--- D--- U--- U---');
+    expect(textRhythm(s, 1)).toHaveLength(16);
+    expect(textRhythm(s, 1)[0]).toBe('D');
+  });
+
+  it('audioRhythm: attacks to sixteenths, down on the beats, up between them; strays are ignored', async () => {
+    const { audioRhythm } = await import('../../src/song/barCheck');
+    // 120 bpm: beat = 0.5 s. Bar 2 (index 1) starts at beat 4 = 2.0 s (offset 0.1 s).
+    const at = (beat: number): number => 0.1 + 2.0 + beat * 0.5;
+    const r = audioRhythm(s, 1, [at(0), at(1), at(1.5), at(2.5) + 0.003, at(2.125)], 0.1);
+    expect(r).toHaveLength(16);
+    expect(r[0]).toBe('D');
+    expect(r[4]).toBe('D'); // beat 2
+    expect(r[6]).toBe('U'); // the «and» of 2
+    expect(r[10]).toBe('U');
+    expect(r[8]).toBe('-'); // 2.125 beats is between two sixteenths: not a clean slot
+    expect(audioRhythm(s, 1, [], 0.1)).toBe('');
+  });
+});

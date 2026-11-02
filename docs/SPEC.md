@@ -1340,3 +1340,10 @@ ruido). `src/dsp/tempoMap.ts` (`followAudio`) sigue la grabación **una sola vez
   líneas ilegibles, secciones sin definir o `time:` / `strum:` a mitad de canción). Si ya no mejora
   y queda < 90 % (típico: desfases de ±½ pulso porque el audio rasguea distinto del texto), ofrece
   «Detectar el rasgueo del audio» (`detectStrumPattern`) y «Usar este rasgueo y volver a seguir».
+- **Ritmo compás a compás** (Comprobar): bajo la onda se muestran «Tu texto» y «En el audio» como
+  cadenas de semicorcheas (`D--- D--- U--- U---`: 4 huecos por pulso; D en el pulso, U entre pulsos,
+  `-` nada), a partir de los ataques del audio (`audioRhythm`, `textRhythm` en `src/song/barCheck.ts`).
+  Si difieren, «Usar el ritmo del audio en este compás» escribe `strum:` solo para ese compás y
+  restaura el anterior justo después (`restrumBar` / `strumAt`, `src/song/grid.ts`; no se ofrece en
+  líneas con `x<n>` o secciones reutilizadas: antes «Escribir las repeticiones»). Es la salida cuando
+  el audio no repite un único patrón (el detector global da «confianza baja»).

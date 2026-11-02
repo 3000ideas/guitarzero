@@ -1167,3 +1167,37 @@
   border: 1px solid var(--warn);
   background: rgba(250, 204, 21, 0.08);
 }
+
+.bar-check .check-rhythm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+
+.bar-check .rhythm-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+
+.bar-check .rhythm-label {
+  min-width: 6em;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.bar-check .rhythm-text,
+.bar-check .rhythm-audio {
+  font-family: var(--mono);
+  font-size: 16px;
+  letter-spacing: 0.08em;
+}
+
+.bar-check .rhythm-audio.is-diff {
+  color: #fb923c;
+}
