@@ -82,7 +82,9 @@ export interface ChordGridView {
   /** Offers (or, with null, hides) the lead-in banner: the audio sounds for `seconds` before bar 1. */
   setLeadInOffer(offer: { seconds: number; beats: number; bars: number } | null): void;
   /** Current / total position shown in the transport bar and its slider (song seconds). */
-  setTime(curSec: number, totalSec: number): void;
+  setTime(curSec: number, totalSec: number, minSec?: number): void;
+  /** True when the «cuenta atrás» option (3 s before the music) is on. */
+  getCountdown(): boolean;
   getLoop(): LoopMode;
   /** The text changed (or its diagnostics did): re-read it. Cheap when it is the grid's own text. */
   setSource(source: string, issues: readonly ParseError[]): void;
@@ -178,6 +180,21 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
     /* storage unavailable: the delay lasts for this screen */
   }
   const metroBox = h('input', { type: 'checkbox', 'aria-label': 'Clic de metrónomo' }) as HTMLInputElement;
+  let countdownOn = true;
+  try {
+    countdownOn = localStorage.getItem('gz.countdown') !== '0';
+  } catch {
+    /* default on */
+  }
+  const countdownBox = h('input', { type: 'checkbox', checked: countdownOn, 'aria-label': 'Cuenta atrás de 3 segundos' }) as HTMLInputElement;
+  countdownBox.addEventListener('change', () => {
+    try {
+      localStorage.setItem('gz.countdown', countdownBox.checked ? '1' : '0');
+    } catch {
+      /* ignored */
+    }
+  });
+  const countdownLabel = h('label.grid-check', { title: 'Tres segundos de cuenta atrás (clics) antes de que empiece la música' }, countdownBox, h('span', null, 'Cuenta atrás'));
   const metroLabel = h('label.grid-check', { title: 'Un clic en cada pulso para oír si la cuadrícula cae en los golpes' }, metroBox, h('span', null, 'Clic'));
   const offsetValue = h('strong.sync-value', null, '—');
   const visualValue = h('strong.sync-value', null, `${visualMs} ms`);
@@ -224,7 +241,7 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
       h('span.muted.small', null, 'Solo mueve la marca, no el sonido: úsalo si la marca va por delante o por detrás de lo que oyes (p. ej. con auriculares Bluetooth).'),
     ),
   );
-  const transport = h('div.grid-transport', null, h('div.grid-transport-row', null, playBtn, stopBtn, sourceSel, metroLabel, loopSel), audioHint, syncBox);
+  const transport = h('div.grid-transport', null, h('div.grid-transport-row', null, playBtn, stopBtn, sourceSel, countdownLabel, metroLabel, loopSel), audioHint, syncBox);
   const viewerSlot = h('div.grid-viewer-slot');
   // The position bar sits right under the strip with the wave and the chords.
   const seekRow = h(
@@ -924,11 +941,18 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
       leadText.textContent = `El audio suena ${offer.seconds.toFixed(1)} s antes del compás 1 (unos ${offer.beats} pulsos): falta el inicio.`;
       leadBtn.textContent = `Añadir ${offer.bars} compás${offer.bars === 1 ? '' : 'es'} de entrada`;
     },
-    setTime(curSec, totalSec) {
+    setTime(curSec, totalSec, minSec = 0) {
       const fmt = (s: number): string => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
-      timeEl.textContent = `${fmt(Math.max(0, curSec))} / ${fmt(Math.max(0, totalSec))}`;
-      if (Number(seekEl.max) !== Math.max(1, Math.round(totalSec * 20) / 20)) seekEl.max = String(Math.max(1, Math.round(totalSec * 20) / 20));
-      if (document.activeElement !== seekEl) seekEl.value = String(Math.max(0, Math.min(totalSec, curSec)));
+      // Shown from the start of the slider (the start of the song / audio) to its end.
+      timeEl.textContent = `${fmt(Math.max(0, curSec - minSec))} / ${fmt(Math.max(0, totalSec - minSec))}`;
+      const max = String(Math.round(Math.max(minSec + 1, totalSec) * 20) / 20);
+      const min = String(Math.round(minSec * 20) / 20);
+      if (seekEl.max !== max) seekEl.max = max;
+      if (seekEl.min !== min) seekEl.min = min;
+      if (document.activeElement !== seekEl) seekEl.value = String(Math.max(minSec, Math.min(totalSec, curSec)));
+    },
+    getCountdown() {
+      return countdownBox.checked;
     },
     getLoop() {
       return loopSel.value as LoopMode;

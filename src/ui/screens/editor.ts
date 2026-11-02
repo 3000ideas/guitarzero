@@ -1141,8 +1141,9 @@ export const editorScreen: Screen = {
     const studio = createStudioViewer({
       getPlayBeat: () => {
         const sec = gridPlayVisualSec();
-        return gridPlay && sec !== null ? secToBeat(gridPlay.song.tempoSegments, Math.max(0, sec - gridView.getVisualDelaySec())) : null;
+        return gridPlay && sec !== null ? secToBeat(gridPlay.song.tempoSegments, sec - gridView.getVisualDelaySec()) : null;
       },
+      getCountdown: () => countdownValue,
       onSetBarStart: (kind, audioSec, barIndex) => setBarStart(kind, audioSec, barIndex),
       onPickBar: (barIndex) => {
         const b = analysis.song.bars[barIndex];
@@ -1629,17 +1630,34 @@ export const editorScreen: Screen = {
       return lo;
     }
 
-    /** Where the position of the studio is right now: the playing clock, else the paused / chosen position, else the selected bar. */
+    /** Count-down digit (3, 2, 1) while the 3 s before the music run, else null. */
+    let countdownValue: number | null = null;
+
+    /**
+     * Song time where the song starts by default: the start of the audio (or the point marked with right
+     * click «Aquí empieza la canción»), which is BEFORE bar 1 when the recording begins before it.
+     */
+    function songStartSec(): number {
+      return audio ? (audio.startSec ?? 0) - audio.offsetSec : 0;
+    }
+
+    /** First song time the position bar can reach: the song start, or bar 1 when the song starts later. */
+    function rangeMinSec(): number {
+      return Math.min(songStartSec(), 0);
+    }
+
+    /** Where the position of the studio is right now: the playing clock, else the paused / chosen position, else the selected bar, else the start of the song. */
     function studioCurrentSec(): number {
       const playingSec = gridPlaySec();
-      if (playingSec !== null) return Math.max(0, playingSec);
-      return studioPosSec ?? barStartSec(selectedBarIndex());
+      if (playingSec !== null) return Math.max(gridPlay ? gridPlay.posSec : rangeMinSec(), playingSec);
+      if (studioPosSec !== null) return studioPosSec;
+      return gridView.getSelection() ? barStartSec(selectedBarIndex()) : songStartSec();
     }
 
     function refreshStudioPosition(): void {
       const cur = studioCurrentSec();
-      gridView.setTime(cur, songTotalSec());
-      studio.setFocusBar(barIndexAtSec(cur));
+      gridView.setTime(cur, songTotalSec(), rangeMinSec());
+      studio.setFocusBeat(secToBeat(analysis.song.tempoSegments, cur));
     }
 
     /** Gives the studio viewer the current song and the loaded audio (and its attack list, computed once per track). */
@@ -1671,13 +1689,24 @@ export const editorScreen: Screen = {
      * (everything before it is noise / lead-in). `this`: the bar under the click starts here, so the whole
      * grid moves to fit that strike.
      */
-    function setBarStart(kind: 'first' | 'this', audioSec: number, barIndex: number): void {
+    function setBarStart(kind: 'first' | 'this' | 'song' | 'clearSong', audioSec: number, barIndex: number): void {
       if (!audio) return;
       stopGridPlay();
+      if (kind === 'song' || kind === 'clearSong') {
+        // Where the SONG starts (playback), independent of where bar 1 is.
+        const next = { ...audio };
+        if (kind === 'clearSong' || audioSec <= 0.05) delete next.startSec;
+        else next.startSec = Math.round(audioSec * 1000) / 1000;
+        audio = next;
+        scheduleAudioSave();
+        studioPosSec = songStartSec();
+        syncStudio();
+        return;
+      }
       const target = kind === 'first' ? audioSec : audioSec - barStartSec(barIndex);
       setOffset(target);
-      dismissLeadIn(); // the user has just said where the song starts: do not offer a lead-in for the noise before it
-      studioPosSec = null;
+      dismissLeadIn(); // the user has just said where bar 1 is: do not offer a lead-in for what is before it
+      studioPosSec = songStartSec();
       syncStudio();
     }
 
@@ -1720,7 +1749,7 @@ export const editorScreen: Screen = {
       if (audio && backing) {
         const samples = backing.monoSamples();
         if (!attacksCache || attacksCache.samples !== samples) attacksCache = { samples, list: energyAttacks(samples, sampleRate, 0, samples.length / sampleRate) };
-        data = { offsetSec: audio.offsetSec, samples, sampleRate, attacks: attacksCache.list };
+        data = { offsetSec: audio.offsetSec, samples, sampleRate, attacks: attacksCache.list, startSec: audio.startSec ?? 0 };
       }
       studio.setContext(analysis.song, data);
       refreshStudioPosition();
@@ -1748,26 +1777,27 @@ export const editorScreen: Screen = {
     function studioPause(): void {
       const sec = gridPlaySec();
       stopGridPlay();
-      if (sec !== null) studioPosSec = Math.max(0, Math.min(songTotalSec(), sec));
+      if (sec !== null) studioPosSec = Math.max(rangeMinSec(), Math.min(songTotalSec(), sec));
       refreshStudioPosition();
     }
 
-    async function studioPlay(): Promise<void> {
+    /** Plays from the studio position. `withCountdown`: 3 s of clicks first (only when the user pressed play, not on seeks or loops). */
+    async function studioPlay(withCountdown = false): Promise<void> {
       let from = studioCurrentSec();
       const loop = studioLoop();
       if (loop && (from < loop.fromSec || from >= loop.endSec)) from = loop.fromSec;
-      await startGridPlay(from, loop);
+      await startGridPlay(from, loop, withCountdown && gridView.getCountdown());
     }
 
     function studioStop(): void {
       stopGridPlay();
-      studioPosSec = null;
+      studioPosSec = songStartSec();
       refreshStudioPosition();
     }
 
     /** Jumps to `sec`: keeps playing from there when it was playing. */
     function studioJump(sec: number): void {
-      studioPosSec = Math.max(0, Math.min(songTotalSec(), sec));
+      studioPosSec = Math.max(rangeMinSec(), Math.min(songTotalSec(), sec));
       if (gridPlay) {
         stopGridPlay();
         void studioPlay();
@@ -1836,6 +1866,7 @@ export const editorScreen: Screen = {
         metronome?.clear();
       }
       visualClock = null;
+      countdownValue = null;
       gridView.setPlayhead(null);
       gridView.setPlaying(false);
       checkView.setPlaying(false);
@@ -1872,6 +1903,10 @@ export const editorScreen: Screen = {
         visualClock = null;
         return null;
       }
+      if (gridPlay && real < gridPlay.posSec) {
+        visualClock = null;
+        return gridPlay.posSec; // count-down: the strip waits at the start position
+      }
       const now = performance.now();
       if (!visualClock) visualClock = { sec: real, at: now };
       else {
@@ -1904,6 +1939,14 @@ export const editorScreen: Screen = {
       scheduleGridClicks(p);
       // The mark is shown `visual delay` later than the audio clock (screen / Bluetooth lag), never earlier than the start.
       const clock = p.posSec + (p.ctx.currentTime - p.whenWall);
+      if (clock < p.posSec - 0.001) {
+        // The 3 s before the music: show 3, 2, 1 and wait.
+        countdownValue = Math.max(1, Math.ceil(p.posSec - clock - 1e-9));
+        if (editMode === 'grid') gridView.setTime(p.posSec, songTotalSec(), rangeMinSec());
+        p.raf = requestAnimationFrame(gridPlayTick);
+        return;
+      }
+      countdownValue = null;
       if (p.loop && clock >= p.loop.endSec) {
         // End of the looped bar: another pass from its start.
         const again = p.loop;
@@ -1915,13 +1958,13 @@ export const editorScreen: Screen = {
       const last = p.song.bars[p.song.bars.length - 1];
       const beat = secToBeat(p.song.tempoSegments, Math.max(0, sec));
       if (beat >= last.startBeat + last.beats) {
-        studioPosSec = null;
+        studioPosSec = songStartSec();
         stopGridPlay();
         refreshStudioPosition();
         return;
       }
       const bar = p.song.bars[barAtBeat(p.song, beat)];
-      if (editMode === 'grid') gridView.setTime(Math.max(0, sec), songTotalSec());
+      if (editMode === 'grid') gridView.setTime(sec, songTotalSec(), rangeMinSec());
       if (editMode === 'grid' && bar.srcLine !== undefined && bar.srcBar !== undefined) {
         const cell = Math.min(bar.beats - 1, Math.max(0, Math.floor(beat - bar.startBeat)));
         gridView.setPlayhead({ item: bar.srcLine - 1, bar: bar.srcBar, cell });
@@ -1957,7 +2000,7 @@ export const editorScreen: Screen = {
         return;
       }
       if (editMode === 'grid') {
-        await studioPlay();
+        await studioPlay(true);
         return;
       }
       if (editMode === 'check') {
@@ -1972,7 +2015,7 @@ export const editorScreen: Screen = {
     }
 
     /** Starts the playback at song time `fromSec` (default: the selected bar, else the start). */
-    async function startGridPlay(fromSec?: number, loop: { endSec: number; fromSec: number } | null = null): Promise<void> {
+    async function startGridPlay(fromSec?: number, loop: { endSec: number; fromSec: number } | null = null, countdown = false): Promise<void> {
       if (gridPlay || gridPlayStarting) return;
       const song = analysis.song;
       if (song.bars.length === 0) return;
@@ -2006,7 +2049,11 @@ export const editorScreen: Screen = {
           const from = sel ? song.bars.find((b) => b.srcLine === sel.item + 1 && b.srcBar === sel.bar) : undefined;
           posSec = from ? beatToSec(song.tempoSegments, from.startBeat) : 0;
         }
-        const whenWall = ctx.currentTime + 0.15;
+        const whenWall = ctx.currentTime + 0.15 + (countdown ? 3 : 0);
+        if (countdown) {
+          const clicks = ensureMetronome();
+          for (let k = 3; k >= 1; k--) clicks.scheduleClick(whenWall - k, k === 3);
+        }
         bt?.start(whenWall, posSec, 1);
         if (original && audio && backing) {
           backing.setGain(audio.gain);

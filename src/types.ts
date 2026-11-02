@@ -144,6 +144,11 @@ export interface AudioTrackInfo {
   offsetSec: number;
   /** Linear playback gain 0..1 (default 0.8). */
   gain: number;
+  /**
+   * Where the SONG starts in the audio, seconds (default 0 = the very beginning of the file). Playback in the
+   * studio starts here, whatever the bar it lies in; audio before it is skipped. Independent of `offsetSec`.
+   */
+  startSec?: number;
 }
 
 export interface StoredSong {

@@ -194,6 +194,9 @@ function cleanAudio(audio: unknown): AudioTrackInfo | null | undefined {
     durationSec: audio.durationSec,
     offsetSec: audio.offsetSec,
     gain: audio.gain,
+    ...(typeof (audio as { startSec?: unknown }).startSec === 'number' && Number.isFinite((audio as { startSec: number }).startSec) && (audio as { startSec: number }).startSec > 0
+      ? { startSec: (audio as { startSec: number }).startSec }
+      : {}),
   };
 }
 

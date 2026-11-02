@@ -1461,3 +1461,23 @@ y «Editar».
   «Aquí empieza el compás N» (el compás de debajo del clic empieza ahí: la cuadrícula entera se desplaza).
   Sirve cuando el audio empieza con ruido antes del ritmo. Tras usarlo se deja de ofrecer el aviso «falta el
   inicio» para esa canción (también con el botón «No, empieza aquí»; se recuerda en `gz.leadDismissed:<id>`).
+
+### 22.9 Dónde empieza la canción (distinto de dónde empieza el compás 1) y cuenta atrás
+
+Son dos marcas independientes:
+- **Inicio del compás 1** (`offsetSec`): dónde cae el primer compás de la cuadrícula en el audio.
+- **Inicio de la canción** (`AudioTrackInfo.startSec`, opcional, 0 por defecto = el principio del archivo):
+  desde dónde se reproduce. Por defecto el audio **suena desde su principio**, aunque el compás 1 empiece
+  más tarde (la reproducción puede empezar en un tiempo de canción negativo; el reloj y la barra de
+  posición cubren todo el audio, sin recortar lo anterior al compás 1).
+
+Clic derecho sobre la onda: «Aquí empieza la canción (lo de antes no suena)» (`startSec` = ese golpe; lo
+anterior se atenúa en la tira y no suena; la barra de posición empieza ahí), «Que suene desde el principio
+del audio» (quita la marca), «Aquí empieza el compás 1» y «Aquí empieza el compás N» (solo con el clic
+dentro de la cuadrícula, no antes del compás 1). Sin elegir ningún compás, ▶ empieza en el inicio de la
+canción; con un compás elegido, en ese compás; ■ vuelve al inicio de la canción.
+
+**Cuenta atrás** (casilla «Cuenta atrás», activada por defecto, `gz.countdown`): al pulsar ▶ (o espacio) hay 3 s
+de clics (3-2-1, el primero acentuado) con el número grande sobre la tira, y después empieza la música. No se
+aplica a saltos, bucles ni reinicios. La marca de reproducción espera en la posición inicial durante la
+cuenta atrás.

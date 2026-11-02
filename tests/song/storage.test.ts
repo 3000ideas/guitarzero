@@ -651,3 +651,16 @@ describe('in-memory fallback', () => {
     expect(getSong('s_keep')).toEqual(stored);
   });
 });
+
+describe('audio startSec (where the song starts in the audio)', () => {
+  it('is kept when valid and dropped when 0, negative or not a number', () => {
+    const base = { name: 'a.mp3', type: 'audio/mpeg', size: 10, durationSec: 100, offsetSec: 2, gain: 0.8 };
+    const mk = (extra: object) => saveSong({ id: 'st1', title: 't', artist: '', source: 'C . . . |', updatedAt: 0, audio: { ...base, ...extra } as never });
+    mk({ startSec: 1.5 });
+    expect(getSong('st1')?.audio?.startSec).toBe(1.5);
+    for (const bad of [0, -3, Number.NaN, 'x']) {
+      mk({ startSec: bad });
+      expect(getSong('st1')?.audio?.startSec).toBeUndefined();
+    }
+  });
+});

@@ -17,6 +17,8 @@ export interface StudioAudio {
   sampleRate: number;
   /** Attack times of the whole audio (seconds), computed once by the host. */
   attacks: readonly number[];
+  /** Where the song starts in the audio (0 = the beginning of the file). */
+  startSec: number;
 }
 
 export interface StudioViewerOpts {
@@ -28,7 +30,9 @@ export interface StudioViewerOpts {
    * Right click menu: `first` = «aquí empieza el compás 1», `this` = «el compás de debajo empieza aquí».
    * `audioSec` is the audio time clicked (snapped to a strike of the audio when one is close).
    */
-  onSetBarStart: (kind: 'first' | 'this', audioSec: number, barIndex: number) => void;
+  onSetBarStart: (kind: 'first' | 'this' | 'song' | 'clearSong', audioSec: number, barIndex: number) => void;
+  /** Count-down digit (3, 2, 1) to show over the strip, or null. */
+  getCountdown: () => number | null;
 }
 
 export interface StudioViewer {
@@ -36,6 +40,8 @@ export interface StudioViewer {
   setContext(song: Song, audio: StudioAudio | null): void;
   /** Bar shown while nothing plays. */
   setFocusBar(barIndex: number): void;
+  /** Position (in beats, may be negative: before bar 1) shown while nothing plays. */
+  setFocusBeat(beat: number): void;
   setPlaying(playing: boolean): void;
   redraw(): void;
   dispose(): void;
@@ -56,7 +62,7 @@ const ARROW_Y = CHORD_Y + CHORD_H + 4;
 export function createStudioViewer(opts: StudioViewerOpts): StudioViewer {
   let song: Song | null = null;
   let audio: StudioAudio | null = null;
-  let focusBar = 0;
+  let focusBeat = 0;
   let playing = false;
   let raf = 0;
   let disposed = false;
@@ -96,11 +102,16 @@ export function createStudioViewer(opts: StudioViewerOpts): StudioViewer {
       }
     }
     const barIndex = barAt(Math.max(0, beat));
-    menu.replaceChildren(
+    const entries: Array<HTMLElement | null> = [
       h('div.studio-menu-title', null, `Aquí: ${audioSec.toFixed(2)} s`),
-      h('button.studio-menu-item', { type: 'button', role: 'menuitem', onclick: () => { closeMenu(); opts.onSetBarStart('first', audioSec, barIndex); } }, 'Aquí empieza el compás 1 (el principio de la canción)'),
-      h('button.studio-menu-item', { type: 'button', role: 'menuitem', onclick: () => { closeMenu(); opts.onSetBarStart('this', audioSec, barIndex); } }, `Aquí empieza el compás ${barIndex + 1} (ajusta toda la cuadrícula)`),
-    );
+      h('button.studio-menu-item', { type: 'button', role: 'menuitem', onclick: () => { closeMenu(); opts.onSetBarStart('song', audioSec, barIndex); } }, 'Aquí empieza la canción (lo de antes no suena)'),
+      h('button.studio-menu-item', { type: 'button', role: 'menuitem', onclick: () => { closeMenu(); opts.onSetBarStart('first', audioSec, barIndex); } }, 'Aquí empieza el compás 1'),
+      beat >= 0 ? h('button.studio-menu-item', { type: 'button', role: 'menuitem', onclick: () => { closeMenu(); opts.onSetBarStart('this', audioSec, barIndex); } }, `Aquí empieza el compás ${barIndex + 1} (ajusta toda la cuadrícula)`) : null,
+    ];
+    menu.replaceChildren(...entries.filter((x): x is HTMLElement => x !== null));
+    if (audio.startSec > 0) {
+      menu.appendChild(h('button.studio-menu-item', { type: 'button', role: 'menuitem', onclick: () => { closeMenu(); opts.onSetBarStart('clearSong', audioSec, barIndex); } }, 'Que suene desde el principio del audio'));
+    }
     menu.style.left = `${Math.min(x, Math.max(0, lastView.W - 300))}px`;
     menu.style.top = `${Math.max(8, ev.clientY - rect.top - 8)}px`;
     menu.hidden = false;
@@ -133,10 +144,10 @@ export function createStudioViewer(opts: StudioViewerOpts): StudioViewer {
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    const beatsPerBar = song.bars[Math.min(focusBar, song.bars.length - 1)].beats;
+    const beatsPerBar = song.bars[0].beats;
     const span = beatsPerBar * VIEW_BARS;
     const playBeat = opts.getPlayBeat();
-    const cur = playBeat !== null ? Math.max(0, playBeat) : song.bars[Math.min(focusBar, song.bars.length - 1)].startBeat;
+    const cur = playBeat !== null ? playBeat : focusBeat;
     // Playing: the strip scrolls under a fixed playhead. Paused: the chosen bar starts near the left edge.
     const w0 = playBeat !== null ? cur - PLAYHEAD_AT * span : cur - 0.12 * span;
     const w1 = w0 + span;
@@ -147,7 +158,7 @@ export function createStudioViewer(opts: StudioViewerOpts): StudioViewer {
     ctx.fillRect(0, 0, W, HEIGHT);
 
     // Bars as clear blocks: every other bar a little lighter, the one being heard lighter still.
-    const curBar = barAt(cur);
+    const curBar = barAt(Math.max(0, cur));
     const first = Math.max(0, barAt(w0) - 0);
     lastClickMap = [];
     for (let i = first; i < song.bars.length; i++) {
@@ -321,6 +332,42 @@ export function createStudioViewer(opts: StudioViewerOpts): StudioViewer {
       }
     }
 
+    // Where the song starts: the audio before it is skipped when playing (dimmed), with a marker.
+    if (audio && audio.startSec > 0) {
+      const sb = secToBeat(song.tempoSegments, audio.startSec - audio.offsetSec);
+      const sx = xOf(sb);
+      if (sx > 0) {
+        ctx.fillStyle = 'rgba(0,0,0,0.38)';
+        ctx.fillRect(0, 0, Math.min(W, sx), HEIGHT);
+      }
+      if (sx > -2 && sx < W + 2) {
+        ctx.strokeStyle = '#4ade80';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(Math.round(sx) + 0.5, 0);
+        ctx.lineTo(Math.round(sx) + 0.5, HEIGHT);
+        ctx.stroke();
+        ctx.lineWidth = 1;
+        ctx.fillStyle = '#4ade80';
+        ctx.font = 'bold 11px system-ui, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText('▶ empieza la canción', Math.round(sx) + 5, HEIGHT - 6);
+      }
+    }
+
+    // Count-down over the strip.
+    const countdown = opts.getCountdown();
+    if (countdown !== null) {
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(0, 0, W, HEIGHT);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 96px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(String(countdown), W * 0.5, HEIGHT * 0.5);
+      ctx.textBaseline = 'alphabetic';
+    }
+
     // Playhead (while paused it marks the start of the chosen bar).
     const px = Math.round(xOf(cur)) + 0.5;
     ctx.strokeStyle = playBeat !== null ? WAVEFORM_COLORS.playhead : WAVEFORM_COLORS.offset;
@@ -354,11 +401,15 @@ export function createStudioViewer(opts: StudioViewerOpts): StudioViewer {
     setContext(nextSong, nextAudio) {
       song = nextSong;
       audio = nextAudio;
-      focusBar = Math.max(0, Math.min(Math.max(0, song.bars.length - 1), focusBar));
       draw();
     },
     setFocusBar(i) {
-      focusBar = Math.max(0, Math.round(i));
+      const b = song ? song.bars[Math.max(0, Math.min(song.bars.length - 1, Math.round(i)))] : null;
+      focusBeat = b ? b.startBeat : 0;
+      if (!playing) draw();
+    },
+    setFocusBeat(beat) {
+      focusBeat = beat;
       if (!playing) draw();
     },
     setPlaying(p) {
