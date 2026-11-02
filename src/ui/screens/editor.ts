@@ -1897,13 +1897,13 @@ export const editorScreen: Screen = {
         const actions: FollowAction[] = [];
         if (improves) actions.push({ label: 'Aplicar', primary: true, run: () => applyFollow() });
         if (skipped > 0) actions.push({ ...expandAction, primary: !improves });
-        if (!improves) actions.push({ label: 'Detectar el rasgueo del audio', primary: skipped === 0, run: () => detectStrumForFollow() });
+        if (!improves) actions.push({ label: 'Detectar el rasgueo del audio', run: () => detectStrumForFollow() });
         checkView.setFollow({
           text:
             `Se pondrá un tempo a cada línea (${changes} líneas) y se moverá el inicio. Golpes que encajan: ${before} % → ${after} % (de ${map.strikes}).` +
             (skipped > 0 ? ` ${skipped} tramo${skipped === 1 ? '' : 's'} con repeticiones no se puede${skipped === 1 ? '' : 'n'} ajustar por separado y se deja${skipped === 1 ? '' : 'n'} como está.` : '') +
             (!improves
-              ? ' Ya no hay mejora posible solo moviendo el tiempo. Lo habitual: el rasgueo del texto no es el que suena en esos compases (los desfases de medio pulso, ±200 ms, lo delatan).'
+              ? ' La cuadrícula ya está en el mejor sitio posible para tu patrón: lo que no encaja es el rasgueo (el audio toca golpes que tu texto no pone). Si prefieres el rasgueo sencillo, no hace falta hacer nada más; si quieres copiar el del audio, usa los botones de abajo.'
               : ''),
           bad: !improves,
           actions,
