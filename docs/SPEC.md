@@ -1446,3 +1446,18 @@ nivel 2 hasta cambiar sin parar, niveles 3 y 4, y por último la canción comple
 salga limpio dos veces seguidas. «Crear» / «Volver a crear» regenera la copia desde el texto actual
 (si se vuelve a crear se pierden los cambios hechos a mano en esa copia). Cada fila ofrece «Practicar»
 y «Editar».
+
+### 22.8 Barra de posición bajo la tira, desplazamiento suave y «Aquí empieza el compás»
+
+- La **barra de posición** (con el tiempo `m:ss / m:ss`) está justo **debajo de la tira** con la onda y
+  los acordes (fila `seek` del estudio), no en la barra de reproducción de arriba.
+- **Desplazamiento suave**: la onda de toda la pista se calcula una vez (picos de 1 ms, `computePeaks`) y
+  la tira solo la lee, con una escala fija para toda la pista (antes se recalculaba por ventana en cada
+  fotograma y «temblaba»). El reloj que dibuja (`gridPlayVisualSec`) avanza con el reloj de la pantalla
+  entre lecturas y se acerca poco a poco al del audio (solo salta si difieren > 0,15 s: un salto o un
+  reinicio), porque `AudioContext.currentTime` avanza a saltos.
+- **Clic derecho sobre un golpe de la onda** (menú de la tira): «Aquí empieza el compás 1» (ese instante,
+  ajustado al golpe del audio más cercano a ≤ 0,1 s, pasa a ser el inicio del compás 1: `offsetSec`) y
+  «Aquí empieza el compás N» (el compás de debajo del clic empieza ahí: la cuadrícula entera se desplaza).
+  Sirve cuando el audio empieza con ruido antes del ritmo. Tras usarlo se deja de ofrecer el aviso «falta el
+  inicio» para esa canción (también con el botón «No, empieza aquí»; se recuerda en `gz.leadDismissed:<id>`).

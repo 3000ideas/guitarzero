@@ -7,9 +7,9 @@
  */
 import type { Song } from '../types';
 import { h } from './dom';
-import { secToBeat } from '../song/tempo';
-import { barCells, barStrums, windowPeaks } from '../song/barCheck';
-import { WAVEFORM_COLORS, STRUM_MARK_COLORS } from './waveform';
+import { beatToSec, secToBeat } from '../song/tempo';
+import { barCells, barStrums } from '../song/barCheck';
+import { WAVEFORM_COLORS, STRUM_MARK_COLORS, computePeaks, type Peaks } from './waveform';
 
 export interface StudioAudio {
   offsetSec: number;
@@ -24,6 +24,11 @@ export interface StudioViewerOpts {
   getPlayBeat: () => number | null;
   /** A bar of the strip was clicked (0-based expanded bar index). */
   onPickBar: (barIndex: number) => void;
+  /**
+   * Right click menu: `first` = «aquí empieza el compás 1», `this` = «el compás de debajo empieza aquí».
+   * `audioSec` is the audio time clicked (snapped to a strike of the audio when one is close).
+   */
+  onSetBarStart: (kind: 'first' | 'this', audioSec: number, barIndex: number) => void;
 }
 
 export interface StudioViewer {
@@ -56,9 +61,50 @@ export function createStudioViewer(opts: StudioViewerOpts): StudioViewer {
   let raf = 0;
   let disposed = false;
   let lastClickMap: Array<{ x0: number; x1: number; bar: number }> = [];
+  /** Peaks of the whole audio, computed once per track: the strip only reads them, so scrolling never shimmers. */
+  let peaksCache: { samples: Float32Array; peaks: Peaks } | null = null;
+  let lastView = { w0: 0, span: 1, W: 1 };
 
   const canvas = h('canvas', { class: 'studio-canvas', 'aria-label': 'Onda de los compases con los acordes y los golpes' }) as HTMLCanvasElement;
-  const el = h('div.studio-viewer', null, canvas);
+  const menu = h('div.studio-menu', { role: 'menu' });
+  menu.hidden = true;
+  const el = h('div.studio-viewer', null, canvas, menu);
+  function closeMenu(): void {
+    menu.hidden = true;
+  }
+  document.addEventListener('pointerdown', (ev) => {
+    if (!menu.hidden && !menu.contains(ev.target as Node)) closeMenu();
+  });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') closeMenu();
+  });
+  canvas.addEventListener('contextmenu', (ev) => {
+    ev.preventDefault();
+    if (!song || !audio) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = ev.clientX - rect.left;
+    const beat = lastView.w0 + (x / lastView.W) * lastView.span;
+    const songSec = beatToSec(song.tempoSegments, Math.max(0, beat));
+    let audioSec = audio.offsetSec + songSec;
+    // Snap to the nearest strike of the audio when one is within ~0.1 s (the user points at a strum).
+    let best = 0.1;
+    for (const a of audio.attacks) {
+      const d = Math.abs(a - audioSec);
+      if (d < best) {
+        best = d;
+        audioSec = a;
+      }
+    }
+    const barIndex = barAt(Math.max(0, beat));
+    menu.replaceChildren(
+      h('div.studio-menu-title', null, `Aquí: ${audioSec.toFixed(2)} s`),
+      h('button.studio-menu-item', { type: 'button', role: 'menuitem', onclick: () => { closeMenu(); opts.onSetBarStart('first', audioSec, barIndex); } }, 'Aquí empieza el compás 1 (el principio de la canción)'),
+      h('button.studio-menu-item', { type: 'button', role: 'menuitem', onclick: () => { closeMenu(); opts.onSetBarStart('this', audioSec, barIndex); } }, `Aquí empieza el compás ${barIndex + 1} (ajusta toda la cuadrícula)`),
+    );
+    menu.style.left = `${Math.min(x, Math.max(0, lastView.W - 300))}px`;
+    menu.style.top = `${Math.max(8, ev.clientY - rect.top - 8)}px`;
+    menu.hidden = false;
+  });
 
   /** Index of the last bar that starts at or before `beat`. */
   function barAt(beat: number): number {
@@ -95,6 +141,7 @@ export function createStudioViewer(opts: StudioViewerOpts): StudioViewer {
     const w0 = playBeat !== null ? cur - PLAYHEAD_AT * span : cur - 0.12 * span;
     const w1 = w0 + span;
     const xOf = (beat: number): number => ((beat - w0) / span) * W;
+    lastView = { w0, span, W };
 
     ctx.fillStyle = WAVEFORM_COLORS.bg;
     ctx.fillRect(0, 0, W, HEIGHT);
@@ -116,14 +163,38 @@ export function createStudioViewer(opts: StudioViewerOpts): StudioViewer {
     // Waveform.
     const midY = TOP + WAVE_H / 2;
     if (audio) {
-      const peaks = windowPeaks(audio.samples, audio.sampleRate, song, audio.offsetSec, w0, w1, W);
+      if (!peaksCache || peaksCache.samples !== audio.samples) peaksCache = { samples: audio.samples, peaks: computePeaks(audio.samples, audio.sampleRate, 1000) };
+      const pk = peaksCache.peaks;
+      const linear = song.tempoSegments.length === 1;
+      const tStart = audio.offsetSec + beatToSec(song.tempoSegments, w0);
+      const tEnd = audio.offsetSec + beatToSec(song.tempoSegments, w1);
+      const segs = song.tempoSegments;
+      const off = audio.offsetSec;
+      const timeAt = (x: number): number => (linear ? tStart + ((tEnd - tStart) * x) / W : off + beatToSec(segs, w0 + (span * x) / W));
+      const lo = new Float32Array(W);
+      const hi = new Float32Array(W);
       let top = 0;
-      for (let i = 0; i < W; i++) top = Math.max(top, peaks.max[i], -peaks.min[i]);
-      const gain = top > 0.001 ? 1 / top : 1;
+      for (let x = 0; x < W; x++) {
+        const b0 = Math.floor(timeAt(x) * pk.bucketsPerSec);
+        const b1 = Math.max(b0 + 1, Math.ceil(timeAt(x + 1) * pk.bucketsPerSec));
+        let mn = 0;
+        let mx = 0;
+        for (let b = Math.max(0, b0); b < b1 && b < pk.max.length; b++) {
+          if (pk.min[b] < mn) mn = pk.min[b];
+          if (pk.max[b] > mx) mx = pk.max[b];
+        }
+        lo[x] = mn;
+        hi[x] = mx;
+        top = Math.max(top, mx, -mn);
+      }
+      // One fixed scale for the whole track (not per window), so the picture does not breathe while it moves.
+      let peak = 0;
+      for (let b = 0; b < pk.max.length; b += 7) peak = Math.max(peak, pk.max[b], -pk.min[b]);
+      const gain = peak > 0.001 ? 1 / peak : top > 0.001 ? 1 / top : 1;
       ctx.fillStyle = WAVEFORM_COLORS.wave;
       for (let x = 0; x < W; x++) {
-        const y1 = midY - peaks.max[x] * gain * (WAVE_H / 2 - 2);
-        const y2 = midY - peaks.min[x] * gain * (WAVE_H / 2 - 2);
+        const y1 = midY - hi[x] * gain * (WAVE_H / 2 - 2);
+        const y2 = midY - lo[x] * gain * (WAVE_H / 2 - 2);
         ctx.fillRect(x, y1, 1, Math.max(1, y2 - y1));
       }
     } else {

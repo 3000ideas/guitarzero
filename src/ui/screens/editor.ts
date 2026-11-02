@@ -1136,12 +1136,14 @@ export const editorScreen: Screen = {
       onSelectCell: (pos) => studioSelect(pos),
       onLoopChange: () => studioLoopChanged(),
       onLeadIn: () => addLeadIn(),
+      onLeadInDismiss: () => dismissLeadIn(),
     });
     const studio = createStudioViewer({
       getPlayBeat: () => {
-        const sec = gridPlaySec();
+        const sec = gridPlayVisualSec();
         return gridPlay && sec !== null ? secToBeat(gridPlay.song.tempoSegments, Math.max(0, sec - gridView.getVisualDelaySec())) : null;
       },
+      onSetBarStart: (kind, audioSec, barIndex) => setBarStart(kind, audioSec, barIndex),
       onPickBar: (barIndex) => {
         const b = analysis.song.bars[barIndex];
         if (b && b.srcLine !== undefined && b.srcBar !== undefined) gridView.selectCell({ item: b.srcLine - 1, bar: b.srcBar, cell: 0 });
@@ -1162,7 +1164,7 @@ export const editorScreen: Screen = {
       onUseRhythm: (barIndex, pattern) => useBarRhythm(barIndex, pattern),
       onNewPart: (barIndex, o) => newPartAt(barIndex, o),
       getPlayBeat: () => {
-        const sec = gridPlaySec();
+        const sec = gridPlayVisualSec();
         return gridPlay && sec !== null ? secToBeat(gridPlay.song.tempoSegments, Math.max(0, sec - gridView.getVisualDelaySec())) : null;
       },
     });
@@ -1645,9 +1647,43 @@ export const editorScreen: Screen = {
     let leadOffer: { seconds: number; beats: number; bars: number } | null = null;
     let firstSoundCache: { samples: Float32Array; sec: number | null } | null = null;
 
+    const leadKey = `gz.leadDismissed:${id}`;
+    function leadDismissed(): boolean {
+      try {
+        return localStorage.getItem(leadKey) === '1';
+      } catch {
+        return false;
+      }
+    }
+
+    function dismissLeadIn(): void {
+      try {
+        localStorage.setItem(leadKey, '1');
+      } catch {
+        /* the banner only stays hidden until the screen is left */
+      }
+      leadOffer = null;
+      gridView.setLeadInOffer(null);
+    }
+
+    /**
+     * Right click on the strip: tell the app where a bar starts. `first`: this strike is the start of bar 1
+     * (everything before it is noise / lead-in). `this`: the bar under the click starts here, so the whole
+     * grid moves to fit that strike.
+     */
+    function setBarStart(kind: 'first' | 'this', audioSec: number, barIndex: number): void {
+      if (!audio) return;
+      stopGridPlay();
+      const target = kind === 'first' ? audioSec : audioSec - barStartSec(barIndex);
+      setOffset(target);
+      dismissLeadIn(); // the user has just said where the song starts: do not offer a lead-in for the noise before it
+      studioPosSec = null;
+      syncStudio();
+    }
+
     function computeLeadOffer(): void {
       leadOffer = null;
-      if (audio && backing && analysis.song.bars.length > 0) {
+      if (audio && backing && analysis.song.bars.length > 0 && !leadDismissed()) {
         const samples = backing.monoSamples();
         if (!firstSoundCache || firstSoundCache.samples !== samples) firstSoundCache = { samples, sec: firstSoundSec(samples, sampleRate) };
         const first = firstSoundCache.sec;
@@ -1799,6 +1835,7 @@ export const editorScreen: Screen = {
         if (p.original) backing?.stop();
         metronome?.clear();
       }
+      visualClock = null;
       gridView.setPlayhead(null);
       gridView.setPlaying(false);
       checkView.setPlaying(false);
@@ -1821,6 +1858,27 @@ export const editorScreen: Screen = {
     function gridPlaySec(): number | null {
       const p = gridPlay;
       return p ? p.posSec + (p.ctx.currentTime - p.whenWall) : null;
+    }
+
+    /**
+     * The same time for DRAWING: the audio clock moves in coarse steps, which made the strip jump. This
+     * advances with the screen clock between reads and is pulled gently towards the audio clock (it snaps
+     * only when they differ by more than 0.15 s: a seek or a restart).
+     */
+    let visualClock: { sec: number; at: number } | null = null;
+    function gridPlayVisualSec(): number | null {
+      const real = gridPlaySec();
+      if (real === null) {
+        visualClock = null;
+        return null;
+      }
+      const now = performance.now();
+      if (!visualClock) visualClock = { sec: real, at: now };
+      else {
+        const predicted = visualClock.sec + (now - visualClock.at) / 1000;
+        visualClock = { sec: Math.abs(real - predicted) > 0.15 ? real : predicted + (real - predicted) * 0.1, at: now };
+      }
+      return visualClock.sec;
     }
 
     /** Clicks of the beats that fall in the next ~1.2 s (rolling, so a long song never schedules everything at once). */

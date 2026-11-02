@@ -56,6 +56,8 @@ export interface ChordGridOpts {
   onLoopChange?: () => void;
   /** «Añadir compás de entrada» of the banner shown when the audio starts before bar 1. */
   onLeadIn?: () => void;
+  /** «No, empieza aquí» of that banner: stop offering it for this song. */
+  onLeadInDismiss?: () => void;
   /** The «qué escuchar» choice changed (the host stops a playback in progress). */
   onSourceChange?: () => void;
   /** The «inicio de la canción» (where bar 1 sits in the audio) was nudged by `deltaSec`. */
@@ -222,18 +224,27 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
       h('span.muted.small', null, 'Solo mueve la marca, no el sonido: úsalo si la marca va por delante o por detrás de lo que oyes (p. ej. con auriculares Bluetooth).'),
     ),
   );
-  const transport = h('div.grid-transport', null, h('div.grid-transport-row', null, playBtn, stopBtn, timeEl, seekEl, sourceSel, metroLabel, loopSel), audioHint, syncBox);
+  const transport = h('div.grid-transport', null, h('div.grid-transport-row', null, playBtn, stopBtn, sourceSel, metroLabel, loopSel), audioHint, syncBox);
   const viewerSlot = h('div.grid-viewer-slot');
+  // The position bar sits right under the strip with the wave and the chords.
+  const seekRow = h(
+    'div.grid-seekrow',
+    null,
+    timeEl,
+    seekEl,
+    h('div.muted.small.grid-seekhint', null, 'Clic derecho sobre un golpe de la onda: «Aquí empieza el compás…»'),
+  );
   const leadText = h('span', null);
   const leadBtn = h('button.btn.btn-sm.btn-primary', { type: 'button', onclick: () => opts.onLeadIn?.() }, 'Añadir compás de entrada') as HTMLButtonElement;
-  const leadBanner = h('div.grid-leadin', { role: 'status' }, leadText, leadBtn);
+  const leadSkip = h('button.btn.btn-sm', { type: 'button', title: 'El principio del audio es ruido: el compás 1 está donde está', onclick: () => opts.onLeadInDismiss?.() }, 'No, empieza aquí') as HTMLButtonElement;
+  const leadBanner = h('div.grid-leadin', { role: 'status' }, leadText, leadBtn, leadSkip);
   leadBanner.hidden = true;
   viewerSlot.appendChild(leadBanner);
   sourceSel.addEventListener('change', () => opts.onSourceChange?.());
   const root = h('div.chord-grid-editor');
   const body = h('div.grid-body');
   const pad = h('div.grid-pad');
-  root.append(transport, viewerSlot, body, pad);
+  root.append(transport, viewerSlot, seekRow, body, pad);
 
   // ---------------------------------------------------------------- state helpers
 
