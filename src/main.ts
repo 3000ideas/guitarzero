@@ -140,7 +140,17 @@ export function migrateClockBase(): void {
   setFlag('clockBaseV1');
 }
 
+/** Asks the browser not to evict this site's songs and audio when space is short (best effort, no prompt on most browsers). */
+function requestPersistentStorage(): void {
+  try {
+    void navigator.storage?.persist?.().catch(() => undefined);
+  } catch {
+    /* unsupported: the data is still stored, just evictable */
+  }
+}
+
 function boot(): void {
+  requestPersistentStorage();
   migrateClockBase();
   const root = document.getElementById('app');
   if (!root) throw new Error('No se encontró el elemento #app');
