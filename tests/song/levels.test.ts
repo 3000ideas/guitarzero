@@ -86,3 +86,32 @@ describe('explaining the operation of a level', () => {
     expect(levelPreview(SODOMA, LEVELS[0]).changes).toEqual([]);
   });
 });
+
+describe('what each level demands in practice', () => {
+  it('level 1 judges only the timing (no chord) and its strikes are muted, so the judge never asks for a chord', async () => {
+    const { levelDemandOf } = await import('../../src/song/levels');
+    const l1 = levelDemandOf('sodoma-acustica-n1');
+    expect(l1?.demand.chord).toBe(false);
+    const { song } = parseSong(buildLevelSource(SODOMA, LEVELS[0], 'x').source);
+    expect(song.events.every((e) => e.muted)).toBe(true);
+  });
+
+  it('levels 2 to 4 judge chord and timing, with a forgiving chord check while the chords are being learnt', async () => {
+    const { levelDemandOf, chordToleranceFor } = await import('../../src/song/levels');
+    for (const n of [2, 3, 4]) expect(levelDemandOf(`s-n${n}`)?.demand.chord).toBe(true);
+    expect(chordToleranceFor(levelDemandOf('s-n2')!.demand, 'normal')).toBe('lenient');
+    expect(chordToleranceFor(levelDemandOf('s-n3')!.demand, 'normal')).toBe('lenient');
+    expect(chordToleranceFor(levelDemandOf('s-n4')!.demand, 'normal')).toBe('normal');
+    // never stricter than the user asked for
+    expect(chordToleranceFor(levelDemandOf('s-n4')!.demand, 'lenient')).toBe('lenient');
+    expect(chordToleranceFor(null, 'normal')).toBe('normal');
+    expect(levelDemandOf('sodoma-acustica')).toBeNull();
+  });
+
+  it('every level says in words what a hit and a mistake are', () => {
+    for (const l of LEVELS) {
+      expect(l.demand.hit.length).toBeGreaterThan(20);
+      expect(l.demand.miss.length).toBeGreaterThan(10);
+    }
+  });
+});

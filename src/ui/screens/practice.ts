@@ -31,6 +31,7 @@ import type {
 } from '../../types';
 import { parseSong } from '../../song/parser';
 import { getFlag, getSong, hasFlag, loadSettings, saveSettings, saveSong, setFlag } from '../../song/storage';
+import { chordToleranceFor, levelDemandOf } from '../../song/levels';
 import { getTrack } from '../../song/audioStore';
 import { beatToSec } from '../../song/tempo';
 import { getChordShape } from '../../music/chords';
@@ -235,6 +236,8 @@ export const practiceScreen: Screen = {
     const hasSections = song.bars.some((b) => b.section !== null);
     const playable = song.bars.length > 0;
     const loopFlag = `loop:${id}`;
+    /** When this song is a learning level: what it demands (what counts as a hit / a mistake). */
+    const levelDemand = levelDemandOf(id);
 
     // Effective settings of this screen: persisted values + the in-session toggles.
     let settings: Settings = loadSettings();
@@ -282,14 +285,16 @@ export const practiceScreen: Screen = {
     let sessionUnsubs: Array<() => void> = [];
 
     function createSession(): PracticeSession {
-      const s = new PracticeSession(song, { clock, clicks: metronome, detector: source, settings, shapes }, { frameSeconds });
+      const s = new PracticeSession(song, { clock, clicks: metronome, detector: source, settings: { ...settings, chordTolerance: chordToleranceFor(levelDemand?.demand ?? null, settings.chordTolerance) }, shapes }, { frameSeconds });
       sessionUnsubs = [
         s.on('ended', ({ summary, reason }) => {
           if (!ignoreEnded && !disposed) showSummary(summary, reason);
         }),
         s.on('hit', (hit) => {
           if (disposed) return;
-          const chord = song.events[hit.eventIndex]?.chord.name ?? '';
+          const ev = song.events[hit.eventIndex];
+          // A muted strike (✕) has no chord to name: only the timing counts.
+          const chord = ev?.muted ? '✕' : ev?.chord.name ?? '';
           const ms = Math.round(hit.timing * 1000);
           const label = timingText(hit.timingLabel) || 'Detectado';
           feedbackVerdictEl.textContent = '';
@@ -298,9 +303,18 @@ export const practiceScreen: Screen = {
         }),
         s.on('verdict', (v) => {
           if (disposed) return;
-          const chord = song.events[v.eventIndex]?.chord.name ?? '';
+          const ev = song.events[v.eventIndex];
+          const chord = ev?.chord.name ?? '';
           if (v.kind === 'skipped') return;
-          const text = v.kind === 'correct' ? `✓ ${chord}` : v.kind === 'wrong' ? `✗ ${chord}: no coincide` : `✗ ${chord}: sin rasgueo`;
+          const text = ev?.muted
+            ? v.kind === 'correct'
+              ? '✓ golpe a tiempo'
+              : '✗ sin golpe'
+            : v.kind === 'correct'
+              ? `✓ ${chord}`
+              : v.kind === 'wrong'
+                ? `✗ ${chord}: no coincide`
+                : `✗ ${chord}: sin rasgueo`;
           showFeedback(null, { text, kind: v.kind });
         }),
         s.on('phase', (phase) => {
@@ -481,6 +495,15 @@ export const practiceScreen: Screen = {
       settingsDialog,
     );
 
+    const levelStrip = h('div.practice-demand');
+    if (levelDemand) {
+      levelStrip.appendChild(h('strong', null, `Nivel ${levelDemand.level.n} · ${levelDemand.level.title}`));
+      levelStrip.appendChild(h('span.practice-demand-hit', null, h('b', null, 'Acierto: '), levelDemand.demand.hit));
+      levelStrip.appendChild(h('span.practice-demand-miss', null, h('b', null, 'Error: '), levelDemand.demand.miss));
+    } else {
+      levelStrip.hidden = true;
+    }
+
     function openSettings(): void {
       const phase = session.getState().phase;
       if (phase === 'countin' || phase === 'playing') session.pause();
@@ -612,6 +635,7 @@ export const practiceScreen: Screen = {
       'div.practice-play',
       null,
       header,
+      levelStrip,
       banner,
       h('main.practice-main', null, diagrams, h('div.practice-right', null, stage, lyrics)),
       footer,

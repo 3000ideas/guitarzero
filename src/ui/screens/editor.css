@@ -1981,3 +1981,17 @@
   font-size: 12px;
   cursor: pointer;
 }
+
+.editor .level-demand strong {
+  color: var(--ok);
+}
+
+.editor .level-demand strong.is-miss {
+  color: var(--warn);
+}
+
+.editor .level-note-demand {
+  display: block;
+  flex-basis: 100%;
+  margin-top: 2px;
+}

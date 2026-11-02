@@ -15,6 +15,22 @@ import { simplifyChart } from '../music/simplify';
 import { parseSong } from './parser';
 import { parseGrid, serializeGrid, setHeader } from './grid';
 
+/**
+ * What a level demands in practice, i.e. what counts as a hit and what as a mistake. The judge already
+ * treats a muted strike (✕) as «timing only»; this says it in words for every level and tunes how strict
+ * the chord check is while the chords are still being learnt.
+ */
+export interface LevelDemand {
+  /** The chord is judged (false: only that the strike falls on the beat). */
+  chord: boolean;
+  /** Chord strictness forced for this level (null = what Ajustes says). */
+  chordTolerance: 'normal' | 'lenient' | null;
+  /** What counts as a hit. */
+  hit: string;
+  /** What counts as a mistake. */
+  miss: string;
+}
+
 export interface LevelSpec {
   n: number;
   /** Short name shown on the button and in the title of the copy. */
@@ -25,6 +41,8 @@ export interface LevelSpec {
   maxChords: number | null;
   /** What the level does to the CHORDS of every bar, in words. */
   chordsRule: string;
+  /** What it takes to get it right in practice. */
+  demand: LevelDemand;
   /** Strum pattern for a meter of `beats` beats per bar (one character per beat or more; always valid). */
   strum: (beats: number) => string;
 }
@@ -45,6 +63,12 @@ export const LEVELS: readonly LevelSpec[] = [
     summary: 'Cuerdas apagadas y un golpe en cada tiempo. Sigue el compás y canta o tararea encima. Los acordes aún no importan.',
     maxChords: null,
     chordsRule: 'No se tocan (cuerdas apagadas), así que los acordes se dejan como están.',
+    demand: {
+      chord: false,
+      chordTolerance: null,
+      hit: 'El golpe apagado cae a tiempo, en el pulso. No hace falta ningún acorde: da igual qué suene.',
+      miss: 'No golpeas en ese tiempo, o golpeas muy fuera de tiempo.',
+    },
     strum: (b) => 'x-'.repeat(b),
   },
   {
@@ -53,6 +77,12 @@ export const LEVELS: readonly LevelSpec[] = [
     summary: 'Solo los dos acordes más usados y un golpe hacia abajo al empezar cada compás. Lo importante es cambiar a tiempo.',
     maxChords: 2,
     chordsRule: 'Solo los 2 acordes que más suenan en la canción. Cada uno de los demás se cambia por el más parecido de esos 2.',
+    demand: {
+      chord: true,
+      chordTolerance: 'lenient',
+      hit: 'Suena el acorde que toca (se acepta aunque no salga perfecto) y el golpe del tiempo 1 cae a tiempo.',
+      miss: 'Suena otro acorde, o no golpeas en el tiempo 1.',
+    },
     strum: oneDownPerBar,
   },
   {
@@ -61,6 +91,12 @@ export const LEVELS: readonly LevelSpec[] = [
     summary: 'Tres acordes y dos golpes por compás (en el 1 y en el 3). Ya se nota el ritmo de la canción.',
     maxChords: 3,
     chordsRule: 'Solo los 3 acordes que más suenan. Cada uno de los demás se cambia por el más parecido de esos 3.',
+    demand: {
+      chord: true,
+      chordTolerance: 'lenient',
+      hit: 'Suena el acorde que toca (se acepta aunque no salga perfecto) en el golpe del tiempo 1 y en el del 3, a tiempo.',
+      miss: 'Suena otro acorde, o falta uno de los dos golpes.',
+    },
     strum: downsOnOneAndThree,
   },
   {
@@ -69,6 +105,12 @@ export const LEVELS: readonly LevelSpec[] = [
     summary: 'Cuatro acordes y un golpe hacia abajo en cada tiempo. Casi la canción: solo faltan los acordes raros y el rasgueo con ↑.',
     maxChords: 4,
     chordsRule: 'Solo los 4 acordes que más suenan. Cada uno de los demás se cambia por el más parecido de esos 4.',
+    demand: {
+      chord: true,
+      chordTolerance: null,
+      hit: 'Suena el acorde que toca, bien sonado, en cada tiempo y a tiempo.',
+      miss: 'Acorde equivocado o sucio, o falta un golpe.',
+    },
     strum: (b) => 'D-'.repeat(b),
   },
 ];
@@ -157,4 +199,26 @@ export function levelPreview(source: string, level: LevelSpec): LevelPreview {
   if (level.maxChords === null) return { before, after: before, changes: [] };
   const r = simplifyChart(source, { maxChords: level.maxChords, substituteHard: false, suggestCapo: false, removeExtensions: true, allowSevenths: false });
   return { before, after: r.chordsAfter, changes: r.substitutions.filter((x) => x.from !== x.to).map((x) => ({ from: x.from, to: x.to })) };
+}
+
+/** What the full song demands (for the explanations): the chord and the timing, as the user's settings say. */
+export const FULL_SONG_DEMAND: LevelDemand = {
+  chord: true,
+  chordTolerance: null,
+  hit: 'Suena el acorde que toca y el golpe cae a tiempo, con el rasgueo de la canción.',
+  miss: 'Acorde equivocado, o falta un golpe o cae muy fuera de tiempo.',
+};
+
+/** The demand of the level a song is a copy of (by its id), or null for a normal song. */
+export function levelDemandOf(songId: string): { level: LevelSpec; demand: LevelDemand } | null {
+  const parsed = parseLevelId(songId);
+  const level = parsed ? LEVELS.find((l) => l.n === parsed.n) : undefined;
+  return level ? { level, demand: level.demand } : null;
+}
+
+/** The chord strictness to judge a level with: the level's own when it sets one, else the user's setting. */
+export function chordToleranceFor(demand: LevelDemand | null, userSetting: 'normal' | 'lenient'): 'normal' | 'lenient' {
+  if (!demand || demand.chordTolerance === null) return userSetting;
+  // Never stricter than the user asked for: «lenient» in Ajustes stays lenient.
+  return demand.chordTolerance === 'lenient' || userSetting === 'lenient' ? 'lenient' : 'normal';
 }

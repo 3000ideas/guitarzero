@@ -1532,3 +1532,22 @@ La operación se explica en la propia pantalla: en el cuadro «Niveles» cada ni
 tiempo del compás (`strumBeats`: ↓ ✕ ·) y «En esta canción: 5 acordes → 2: D A» con los cambios exactos
 (`levelPreview`: E → A · F#m → D · Bm → D). Una línea bajo el selector repite lo mismo para el nivel en el que
 se está, con el botón «Cómo funcionan los niveles».
+
+### 24.3 Qué exige cada nivel (aciertos y errores)
+
+Cada nivel tiene sus propias exigencias en la práctica (`LevelDemand` en `src/song/levels.ts`):
+
+| Nivel | Se juzga | Cuenta como acierto | Es un error |
+|---|---|---|---|
+| 1 Solo el pulso | **solo el tiempo** (ningún acorde) | el golpe apagado cae a tiempo, en el pulso; da igual qué suene | no golpeas en ese tiempo, o muy fuera de tiempo |
+| 2 | acorde + tiempo; acorde **tolerante** | suena el acorde que toca (aunque no salga perfecto) y el golpe del tiempo 1 cae a tiempo | otro acorde, o no golpeas en el tiempo 1 |
+| 3 | acorde + tiempo; acorde **tolerante** | el acorde que toca en los golpes 1 y 3, a tiempo | otro acorde, o falta un golpe |
+| 4 | acorde + tiempo; el acorde como diga Ajustes | el acorde que toca, bien sonado, en cada tiempo y a tiempo | acorde equivocado o sucio, o falta un golpe |
+
+- Nivel 1: sus golpes son apagados (✕) y el juez ya los trata como «solo tiempo» (judge.ts regla 4); además la
+  retroalimentación ya no nombra ningún acorde («✕ · A tiempo +20 ms», «✓ golpe a tiempo» / «✗ sin golpe»). Esto
+  vale para cualquier golpe apagado de cualquier canción.
+- Niveles 2 y 3: la práctica juzga con el preset de acorde «lenient» (`chordToleranceFor`), nunca más estricto de lo
+  que el usuario haya pedido en Ajustes; el nivel 4 usa lo que diga Ajustes.
+- La práctica de un nivel muestra bajo la cabecera una franja «Nivel N · … — Acierto: … — Error: …». El cuadro
+  «Niveles» del editor (y la línea bajo el selector) cuentan lo mismo con «Cuenta como acierto» / «Es un error».

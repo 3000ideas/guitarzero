@@ -119,7 +119,7 @@ import { beatToSec, secToBeat, songDurationSec } from '../../song/tempo';
 import { isExampleId } from '../../song/examples';
 import { getSong, saveSong } from '../../song/storage';
 import { copyTrack, deleteTrack, getTrack, hasIndexedDb, putTrack } from '../../song/audioStore';
-import { LEVELS, buildLevelSource, levelPreview, levelSongId, parseLevelId, strumBeats, strumRuleText, type LevelSpec } from '../../song/levels';
+import { FULL_SONG_DEMAND, LEVELS, buildLevelSource, levelPreview, levelSongId, parseLevelId, strumBeats, strumRuleText, type LevelSpec } from '../../song/levels';
 import { getAudioContext } from '../../audio/context';
 import { BackingTrack } from '../../audio/backing';
 import { renderChordTrack } from '../../audio/chordSynth';
@@ -1481,9 +1481,17 @@ export const editorScreen: Screen = {
                   h('div.level-op-line', null, h('strong', null, 'Acordes: '), level.chordsRule),
                   h('div.level-op-line', null, h('strong', null, 'Golpes: '), strumRuleText(level, beats)),
                   strumDiagram(level),
+                  h('div.level-op-line.level-demand', null, h('strong', null, 'Cuenta como acierto: '), level.demand.hit),
+                  h('div.level-op-line.level-demand', null, h('strong.is-miss', null, 'Es un error: '), level.demand.miss),
                   preview && preview.text !== '' ? h('div.level-op-line.level-example', null, h('strong', null, 'En esta canción: '), preview.text, preview.changes !== '' ? h('div.muted.small', null, `Cambios: ${preview.changes}`) : null) : null,
                 )
-              : h('div.muted.small', null, 'Todos los acordes de la canción y su rasgueo original. Es la base: cada nivel es una operación sobre sus compases (se cambian los acordes y los golpes, nada más; los compases, las secciones, el tempo y el audio quedan igual).'),
+              : h(
+                  'div.level-op',
+                  null,
+                  h('div.muted.small', null, 'Todos los acordes de la canción y su rasgueo original. Es la base: cada nivel es una operación sobre sus compases (se cambian los acordes y los golpes, nada más; los compases, las secciones, el tempo y el audio quedan igual).'),
+                  h('div.level-op-line.level-demand', null, h('strong', null, 'Cuenta como acierto: '), FULL_SONG_DEMAND.hit),
+                  h('div.level-op-line.level-demand', null, h('strong.is-miss', null, 'Es un error: '), FULL_SONG_DEMAND.miss),
+                ),
             h(
               'div.level-actions',
               null,
@@ -1512,6 +1520,7 @@ export const editorScreen: Screen = {
             `golpes `,
             strumDiagram(level),
             ` · acordes ${p.text}${p.changes !== '' ? ` (${p.changes})` : ''}`,
+            h('span.level-note-demand', null, ` · Acierto: ${level.demand.hit}`),
           ),
         );
       }
