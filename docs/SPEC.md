@@ -1384,7 +1384,16 @@ una sola vez (bandera `bundled:<id>:v<versión>`): si el usuario la borra no vue
 pierde el audio, se vuelve a descargar mientras la canción exista. Una descarga fallida no rompe
 nada y se reintenta al abrir la app.
 
-Primera incluida: **Sodoma (acústica)** (`sodoma-acustica`, 3:46, 64 compases, 69 bpm, La mayor,
+Primera incluida: **Sodoma (acústica)** (v2). La grabación empieza **antes del primer tiempo fuerte**
+(la guitarra entra en el pulso 2, a 0,65 s, y el primer tiempo fuerte está en 3,275 s): el compás 1 es
+una **anacrusa** (`- D . .`, silencio en el pulso 1) con `offsetSec` = −0,228 s (el compás 1 empieza
+antes del audio), de modo que «Escuchar» desde el principio suena la canción entera. Los tempos de
+cada línea salen de los pulsos que siguió el analizador de la grabación (68,5 bpm de media;
+`tempo:` por línea, error de compás medio ≈ 50 ms, máximo ≈ 75 ms), porque con un único `tempo: 69`
+redondeado el texto se adelantaba ~1,7 s al llegar al compás 64. Una copia sin editar de la v1 se
+actualiza sola (`legacy`); una copia editada nunca se toca.
+
+(v1, para referencia:) **Sodoma (acústica)** (`sodoma-acustica`, 3:46, 64 compases, 69 bpm, La mayor,
 inicio del compás 1 en 3,275 s), con los acordes detectados automáticamente en la grabación
 (confianza baja: hay que revisarlos) y el rasgueo sencillo. El MP3 se publicó sin carátula ni
 metadatos (`-map_metadata -1`). El audio es público en el sitio.

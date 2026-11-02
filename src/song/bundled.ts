@@ -19,9 +19,11 @@ export interface BundledSong {
   /** Bump when the song text or the audio changes: a new version is installed once more. */
   version: number;
   audio: AudioTrackInfo;
+  /** Earlier texts of this song: an installed copy that still has exactly one of them (the user never edited it) is upgraded. */
+  legacy?: Array<{ source: string; offsetSec: number }>;
 }
 
-const SODOMA_ACUSTICA = `title: Sodoma (acústica)
+const SODOMA_ACUSTICA_V1 = `title: Sodoma (acústica)
 artist: Canción personal
 tempo: 69
 time: 4/4
@@ -56,6 +58,52 @@ D . . . | D . . E | D . . . | D . . . |
 D . . . | D . . . |
 `;
 
+/** v2: the first bar is the pick-up (the guitar starts on beat 2), and every line carries the tempo that follows the recording. */
+const SODOMA_ACUSTICA = `title: Sodoma (acústica)
+artist: Canción personal
+tempo: 68.51
+time: 4/4
+strum: D-D-D-D-
+
+# Acordes detectados automáticamente en la grabación: revisa y corrige (confianza baja).
+# Tonalidad: La mayor. El compás 1 es la anacrusa: la guitarra entra en el pulso 2 (el audio empieza
+# antes del primer tiempo fuerte). Cada línea lleva el tempo que sigue a la grabación.
+# Abre «Comprobar» para ver cada compás con la onda del audio.
+
+[Estrofa]
+- D . . |
+D . . . |
+[Puente]
+D . . E | D . . . | D . . . | A . . . |
+D . . . | A . . . | D . . . | F#m . . . |
+tempo: 68.36
+E . . . | D . . . | D . F#m . | F#m . E . |
+tempo: 68.56
+D . F#m . | F#m . E . | D . E . | F#m . . . |
+Bm . A . | D . . . | F#m . D . | A . E . |
+F#m . D . | A . E . | D . . . | A . . . |
+D . . . | D A . . | D . . . |
+[Parte C]
+F#m . . . | E . . . | E . . . | D . F#m . |
+A . E . | D . F#m . | A . E . | D . E . |
+F#m . A . | A . . . | D . . . | F#m . A . |
+tempo: 68.37
+A . E . | E A . . | A . . . | D . . . |
+[Parte D]
+tempo: 68.64
+D . . . | E . . . | F#m . . . | D . . . |
+A . . . | E . . . |
+[Parte E]
+tempo: 68.44
+E . . . | D . F#m . | A . E . | D . F#m . |
+A . E . | D . E . | F#m . A . | Bm . . . |
+[Estrofa]
+tempo: 68.15
+D . . . | D . . E | D . . . | D . . . |
+tempo: 91.22
+D . . . | D . . . |
+`;
+
 export const BUNDLED_SONGS: readonly BundledSong[] = [
   {
     id: 'sodoma-acustica',
@@ -63,13 +111,14 @@ export const BUNDLED_SONGS: readonly BundledSong[] = [
     artist: 'Canción personal',
     source: SODOMA_ACUSTICA,
     file: 'sodoma-acustica.mp3',
-    version: 1,
+    version: 2,
+    legacy: [{ source: SODOMA_ACUSTICA_V1, offsetSec: 3.275 }],
     audio: {
       name: 'Sodoma-acustica-guitarra.mp3',
       type: 'audio/mpeg',
       size: 4981533,
       durationSec: 225.97,
-      offsetSec: 3.275, // start of bar 1 in the recording (from the chord analysis)
+      offsetSec: -0.228, // bar 1 is a pick-up bar that starts before the audio: the first downbeat (bar 2) is at 3.275 s
       gain: 0.8,
     },
   },
@@ -90,6 +139,11 @@ export function installBundledEntries(songs: readonly BundledSong[] = BUNDLED_SO
   const pending: BundledSong[] = [];
   for (const b of songs) {
     const existing = getSong(b.id);
+    if (existing && b.legacy?.some((l) => l.source === existing.source && existing.audio?.offsetSec === l.offsetSec)) {
+      // Still the untouched earlier version: bring it to this one (an edited copy is never overwritten).
+      saveSong({ ...existing, title: b.title, artist: b.artist, source: b.source, audio: { ...b.audio } });
+      setFlag(flagName(b));
+    }
     if (!existing) {
       if (getFlag(flagName(b))) continue; // installed before and then deleted by the user: leave it deleted
       const entry: StoredSong = { id: b.id, title: b.title, artist: b.artist, source: b.source, updatedAt: 0, audio: { ...b.audio } };

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUNDLED_SONGS, bundledAudioUrl, downloadBundledAudio, installBundledEntries } from '../../src/song/bundled';
 import { parseSong } from '../../src/song/parser';
-import { clearStorage, deleteSong, getSong } from '../../src/song/storage';
+import { clearStorage, deleteSong, getSong, saveSong } from '../../src/song/storage';
 import { deleteTrack, getTrack } from '../../src/song/audioStore';
 
 const sodoma = BUNDLED_SONGS[0];
@@ -14,10 +14,11 @@ beforeEach(async () => {
 });
 
 describe('bundled songs', () => {
-  it('the Sodoma text parses without errors and has the 64 bars of the recording', () => {
+  it('the Sodoma text parses without errors: a pick-up bar plus the 64 bars of the recording', () => {
     const { song, errors } = parseSong(sodoma.source);
     expect(errors.filter((e) => e.severity === 'error')).toEqual([]);
-    expect(song.bars).toHaveLength(64);
+    expect(song.bars).toHaveLength(65);
+    expect(song.bars[0].chords.map((c) => c.chord.name)).toEqual(['-', 'D']); // rest on beat 1, the guitar enters on beat 2
     expect(song.chordNames).toEqual(expect.arrayContaining(['D', 'E', 'A', 'F#m', 'Bm']));
   });
 
@@ -26,10 +27,22 @@ describe('bundled songs', () => {
     expect(pending.map((b) => b.id)).toEqual(['sodoma-acustica']);
     const s = getSong('sodoma-acustica');
     expect(s?.builtin).toBeFalsy();
-    expect(s?.audio?.offsetSec).toBeCloseTo(3.275, 3);
+    expect(s?.audio?.offsetSec).toBeCloseTo(-0.228, 3);
     expect(s?.source).toBe(sodoma.source);
     // a second boot does not duplicate or overwrite it
     expect(installBundledEntries()).toHaveLength(1);
+  });
+
+  it('upgrades an untouched earlier version, never an edited one', () => {
+    const legacy = sodoma.legacy![0];
+    saveSong({ id: sodoma.id, title: 'Sodoma (acústica)', artist: 'Canción personal', source: legacy.source, updatedAt: 0, audio: { ...sodoma.audio, offsetSec: legacy.offsetSec } });
+    installBundledEntries();
+    expect(getSong(sodoma.id)?.source).toBe(sodoma.source);
+    expect(getSong(sodoma.id)?.audio?.offsetSec).toBeCloseTo(-0.228, 3);
+    // an edited copy keeps the user's work
+    saveSong({ id: sodoma.id, title: 'Sodoma (acústica)', artist: 'Canción personal', source: legacy.source + '# mío\n', updatedAt: 0, audio: { ...sodoma.audio, offsetSec: legacy.offsetSec } });
+    installBundledEntries();
+    expect(getSong(sodoma.id)?.source).toContain('# mío');
   });
 
   it('does not bring a song back after the user deleted it', () => {
