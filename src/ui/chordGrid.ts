@@ -73,6 +73,8 @@ export interface ChordGridView {
   getVisualDelaySec(): number;
   /** Shows the current start of the song in the audio (null without a track). */
   setOffsetInfo(offsetSec: number | null): void;
+  /** Selects a cell (e.g. when coming back from the check view). */
+  selectCell(pos: { item: number; bar: number; cell: number }): void;
   /** The selected cell (where playback starts), or null. */
   getSelection(): { item: number; bar: number; cell: number } | null;
   /** Switches the «Escuchar» button between play and stop. */
@@ -841,6 +843,9 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
       audioHint.textContent = available
         ? 'Empieza en el compás seleccionado · compara tu canción con los acordes'
         : 'Carga un audio en «Pista de audio» (abajo) para compararlo con los acordes';
+    },
+    selectCell(pos) {
+      select(pos);
     },
     getSelection() {
       return validSel(sel) ? { ...sel } : null;

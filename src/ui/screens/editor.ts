@@ -107,6 +107,7 @@ import {
   type WeightedChord,
 } from '../../music/simplify';
 import { createChordGrid } from '../chordGrid';
+import { createBarCheck } from '../barCheck';
 import { parseSong } from '../../song/parser';
 import { beatToSec, secToBeat, songDurationSec } from '../../song/tempo';
 import { isExampleId } from '../../song/examples';
@@ -167,7 +168,8 @@ export const VARIABLE_TEMPO_THRESHOLD = 0.015;
 
 // ---------------------------------------------------------------- edit mode (text | grid)
 
-export type EditorMode = 'text' | 'grid';
+/** 'check' (Comprobar) is a view of the same text; only 'text' and 'grid' are remembered. */
+export type EditorMode = 'text' | 'grid' | 'check';
 export const EDITOR_MODE_KEY = 'gz.editorMode';
 
 /** The way of editing the user chose last ('grid' the first time). Never throws. */
@@ -180,6 +182,7 @@ export function loadEditorMode(): EditorMode {
 }
 
 export function saveEditorMode(mode: EditorMode): void {
+  if (mode === 'check') return;
   try {
     localStorage.setItem(EDITOR_MODE_KEY, mode);
   } catch {
@@ -1123,7 +1126,17 @@ export const editorScreen: Screen = {
     const gridView = createChordGrid({ onChange: (next) => applyText(next), onTogglePlay: () => void toggleGridPlay(), onSourceChange: () => stopGridPlay(), onNudgeOffset: (d) => onGridNudge(d) });
     const textTab = h('button.mode-tab', { type: 'button', role: 'tab', onclick: () => setEditMode('text') }, 'Texto') as HTMLButtonElement;
     const gridTab = h('button.mode-tab', { type: 'button', role: 'tab', onclick: () => setEditMode('grid') }, 'Cuadrícula') as HTMLButtonElement;
-    const modeTabs = h('div.mode-tabs', { role: 'tablist', 'aria-label': 'Forma de editar' }, gridTab, textTab);
+    const checkTab = h('button.mode-tab', { type: 'button', role: 'tab', onclick: () => setEditMode('check') }, 'Comprobar') as HTMLButtonElement;
+    const checkView = createBarCheck({
+      onPlayToggle: () => void toggleGridPlay(),
+      onBarChange: () => stopGridPlay(),
+      onNudgeOffset: (d) => onGridNudge(d),
+      getPlayBeat: () => {
+        const sec = gridPlaySec();
+        return gridPlay && sec !== null ? secToBeat(gridPlay.song.tempoSegments, Math.max(0, sec - gridView.getVisualDelaySec())) : null;
+      },
+    });
+    const modeTabs = h('div.mode-tabs', { role: 'tablist', 'aria-label': 'Forma de editar' }, gridTab, checkTab, textTab);
 
     const titleEl = h('h2.editor-title', null, displayTitle(analysis.song.title));
     const statusEl = h('span.save-status', null, 'Guardado');
@@ -1439,19 +1452,49 @@ export const editorScreen: Screen = {
       caretEl.textContent = `Línea ${lineOfOffset(textarea.value, textarea.selectionStart)}`;
     }
 
+    /** The bar of the expanded song that the grid's selected cell belongs to (0 without a selection). */
+    function selectedBarIndex(): number {
+      const sel = gridView.getSelection();
+      const at = sel ? analysis.song.bars.findIndex((b) => b.srcLine === sel.item + 1 && b.srcBar === sel.bar) : -1;
+      return Math.max(0, at);
+    }
+
+    /** Gives the check view the current song and the loaded audio (its samples are cached by the track). */
+    function syncCheck(): void {
+      checkView.setContext(analysis.song, audio && backing ? { offsetSec: audio.offsetSec, samples: backing.monoSamples(), sampleRate } : null);
+    }
+
     function setEditMode(mode: EditorMode): void {
+      const previous = editMode;
       editMode = mode;
       saveEditorMode(mode);
+      const text = mode === 'text';
       const grid = mode === 'grid';
-      textarea.hidden = grid;
-      textHint.hidden = grid;
+      const check = mode === 'check';
+      textarea.hidden = !text;
+      textHint.hidden = !text;
       gridView.el.hidden = !grid;
-      if (!grid) stopGridPlay();
+      checkView.el.hidden = !check;
+      if (previous !== mode) stopGridPlay();
       gridTab.classList.toggle('is-active', grid);
-      textTab.classList.toggle('is-active', !grid);
+      checkTab.classList.toggle('is-active', check);
+      textTab.classList.toggle('is-active', text);
       gridTab.setAttribute('aria-selected', String(grid));
-      textTab.setAttribute('aria-selected', String(!grid));
-      if (grid) gridView.setSource(textarea.value, analysis.issues);
+      checkTab.setAttribute('aria-selected', String(check));
+      textTab.setAttribute('aria-selected', String(text));
+      if (grid) {
+        gridView.setSource(textarea.value, analysis.issues);
+        if (previous === 'check') {
+          const b = analysis.song.bars[checkView.getBar()];
+          if (b && b.srcLine !== undefined && b.srcBar !== undefined) gridView.selectCell({ item: b.srcLine - 1, bar: b.srcBar, cell: 0 });
+        }
+      }
+      if (check) {
+        gridView.setSource(textarea.value, analysis.issues);
+        const start = previous === 'grid' ? selectedBarIndex() : checkView.getBar();
+        syncCheck();
+        checkView.setBar(start);
+      }
     }
 
     // ------------------------------------------------------------ grid playback
@@ -1470,6 +1513,8 @@ export const editorScreen: Screen = {
       ctx: AudioContext;
       /** Next beat of the song whose metronome click has not been looked at yet. */
       nextBeat: number;
+      /** A bar looped in the check view: song time where it ends and where each pass starts; null = play on. */
+      loop: { endSec: number; fromSec: number } | null;
     }
     let gridPlay: GridPlay | null = null;
     let gridPlayStarting = false;
@@ -1488,6 +1533,7 @@ export const editorScreen: Screen = {
       }
       gridView.setPlayhead(null);
       gridView.setPlaying(false);
+      checkView.setPlaying(false);
     }
 
     /** Index of the last bar that starts at or before `beat` (bars are in order). */
@@ -1512,7 +1558,7 @@ export const editorScreen: Screen = {
     function scheduleGridClicks(p: GridPlay): void {
       const horizon = p.ctx.currentTime + 1.2;
       const segs = p.song.tempoSegments;
-      const on = gridView.getMetronome();
+      const on = activeView().getMetronome();
       const clicks = on ? ensureMetronome() : null;
       while (p.nextBeat < p.song.totalBeats) {
         const wall = p.whenWall + (beatToSec(segs, p.nextBeat) - p.posSec);
@@ -1530,7 +1576,15 @@ export const editorScreen: Screen = {
       if (!p || unmounted) return;
       scheduleGridClicks(p);
       // The mark is shown `visual delay` later than the audio clock (screen / Bluetooth lag), never earlier than the start.
-      const sec = p.posSec + (p.ctx.currentTime - p.whenWall) - gridView.getVisualDelaySec();
+      const clock = p.posSec + (p.ctx.currentTime - p.whenWall);
+      if (p.loop && clock >= p.loop.endSec) {
+        // End of the looped bar: another pass from its start.
+        const again = p.loop;
+        stopGridPlay();
+        void startGridPlay(again.fromSec, again);
+        return;
+      }
+      const sec = clock - gridView.getVisualDelaySec();
       const last = p.song.bars[p.song.bars.length - 1];
       const beat = secToBeat(p.song.tempoSegments, Math.max(0, sec));
       if (beat >= last.startBeat + last.beats) {
@@ -1538,11 +1592,16 @@ export const editorScreen: Screen = {
         return;
       }
       const bar = p.song.bars[barAtBeat(p.song, beat)];
-      if (bar.srcLine !== undefined && bar.srcBar !== undefined) {
+      if (editMode === 'grid' && bar.srcLine !== undefined && bar.srcBar !== undefined) {
         const cell = Math.min(bar.beats - 1, Math.max(0, Math.floor(beat - bar.startBeat)));
         gridView.setPlayhead({ item: bar.srcLine - 1, bar: bar.srcBar, cell });
       }
       p.raf = requestAnimationFrame(gridPlayTick);
+    }
+
+    /** The view whose «qué escuchar» and clic options apply now. */
+    function activeView(): { getPlaySource(): 'chords' | 'song' | 'both'; getMetronome(): boolean } {
+      return editMode === 'check' ? checkView : gridView;
     }
 
     async function toggleGridPlay(): Promise<void> {
@@ -1550,11 +1609,19 @@ export const editorScreen: Screen = {
         stopGridPlay();
         return;
       }
+      if (editMode === 'check') {
+        const range = checkView.getBarRange();
+        if (!range) return;
+        const segs = analysis.song.tempoSegments;
+        const fromSec = beatToSec(segs, range.startBeat);
+        await startGridPlay(fromSec, { endSec: beatToSec(segs, range.endBeat), fromSec });
+        return;
+      }
       await startGridPlay();
     }
 
     /** Starts the playback at song time `fromSec` (default: the selected bar, else the start). */
-    async function startGridPlay(fromSec?: number): Promise<void> {
+    async function startGridPlay(fromSec?: number, loop: { endSec: number; fromSec: number } | null = null): Promise<void> {
       if (gridPlay || gridPlayStarting) return;
       const song = analysis.song;
       if (song.bars.length === 0) return;
@@ -1567,7 +1634,7 @@ export const editorScreen: Screen = {
         } catch {
           /* the click that started this allows it; if not, start() still schedules */
         }
-        const source = gridView.getPlaySource();
+        const source = activeView().getPlaySource();
         const original = (source === 'song' || source === 'both') && audio !== null && backing !== null;
         let bt: BackingTrack | null = null;
         if (source !== 'song' || !original) {
@@ -1595,8 +1662,9 @@ export const editorScreen: Screen = {
           backing.start(whenWall, audio.offsetSec + posSec, 1); // the song's bar 1 sits at offsetSec in the audio
         }
         const nextBeat = Math.max(0, Math.ceil(secToBeat(song.tempoSegments, Math.max(0, posSec)) - 1e-6));
-        gridPlay = { bt, original, raf: 0, whenWall, posSec, song, source: textarea.value, ctx, nextBeat };
+        gridPlay = { bt, original, raf: 0, whenWall, posSec, song, source: textarea.value, ctx, nextBeat, loop };
         gridView.setPlaying(true);
+        checkView.setPlaying(true);
         gridPlay.raf = requestAnimationFrame(gridPlayTick);
       } catch (err) {
         console.warn('No se pudo reproducir la canción', err);
@@ -1609,15 +1677,16 @@ export const editorScreen: Screen = {
     function onGridNudge(deltaSec: number): void {
       if (!audio) return;
       const resumeAt = gridPlaySec();
+      const loop = gridPlay ? gridPlay.loop : null;
       nudgeOffset(deltaSec);
       if (resumeAt !== null) {
         stopGridPlay();
-        void startGridPlay(Math.max(0, resumeAt));
+        void startGridPlay(Math.max(0, resumeAt), loop);
       }
     }
 
     function goToLine(line: number): void {
-      if (editMode === 'grid') setEditMode('text');
+      if (editMode !== 'text') setEditMode('text');
       const { start, end } = lineRange(textarea.value, line);
       textarea.focus();
       textarea.setSelectionRange(start, end);
@@ -1689,6 +1758,7 @@ export const editorScreen: Screen = {
       renderStrum();
       if (gridPlay && textarea.value !== gridPlay.source) stopGridPlay(); // the audio no longer matches the text
       if (editMode === 'grid') gridView.setSource(textarea.value, analysis.issues);
+      if (editMode === 'check') syncCheck();
     }
 
     /** The song as it should be persisted right now (text + backing track metadata). */
@@ -1826,6 +1896,7 @@ export const editorScreen: Screen = {
       const ready = backing !== null && !busy;
       gridView.setAudioAvailable(ready && audio !== null);
       gridView.setOffsetInfo(audio ? audio.offsetSec : null);
+      if (editMode === 'check') syncCheck();
       loadBtn.disabled = busy;
       replaceBtn.disabled = busy;
       removeBtn.disabled = busy;
@@ -2269,6 +2340,7 @@ export const editorScreen: Screen = {
       if (v === audio.offsetSec) return;
       audio = { ...audio, offsetSec: v };
       gridView.setOffsetInfo(v);
+      if (editMode === 'check') syncCheck();
       syncGrid();
       scheduleAudioSave();
     }
@@ -2573,7 +2645,7 @@ export const editorScreen: Screen = {
     );
 
     const textHint = h('div.editor-hint', null, caretEl, h('span', null, 'Ctrl+S guarda al instante'), h('span', null, 'Pulsa en un error para ir a su línea'));
-    const main = h('div.editor-main', null, modeTabs, textarea, gridView.el, textHint, audioPanel);
+    const main = h('div.editor-main', null, modeTabs, textarea, gridView.el, checkView.el, textHint, audioPanel);
 
     const panel = h(
       'aside.editor-panel',
@@ -2639,6 +2711,7 @@ export const editorScreen: Screen = {
       if (waveObserver) waveObserver.disconnect();
       else window.removeEventListener('resize', onWaveResize);
       stopGridPlay();
+      checkView.dispose();
       gridView.dispose();
       waveform.dispose();
       backing?.dispose();

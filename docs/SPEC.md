@@ -1265,3 +1265,21 @@ recuerda la última en `localStorage` `gz.editorMode`; por defecto Cuadrícula).
   «desfase de la marca verde» (±20 ms, `localStorage` `gz.gridVisualMs`) que solo retrasa o adelanta
   lo que se dibuja, para compensar pantalla o auriculares Bluetooth. Un tempo con decimales
   (`tempo: 96.5`) corrige la deriva en canciones largas.
+
+### 22.1 Pestaña «Comprobar» (un compás cada vez)
+
+Tercera pestaña del editor (Cuadrícula · Comprobar · Texto) para ver si la tablatura encaja con el
+audio. Muestra **un compás** (más un pulso de contexto a cada lado), navegable con ◀ ▶; al venir
+de la cuadrícula empieza en el compás seleccionado y al volver lo selecciona.
+- Un lienzo (`src/ui/barCheck.ts`, datos puros en `src/song/barCheck.ts`) dibuja la **onda del
+  audio** de esa ventana (con el mapa de tempo y `offsetSec`), las líneas de pulso numeradas, las
+  casillas de acorde del compás, los **golpes que pide el texto** (↓ ↑ ✕ del patrón `strum:`, con
+  el acorde vigente y un ↓ extra si un acorde cambia en un hueco) como líneas discontinuas sobre la
+  onda, y triángulos naranjas con los **golpes que parece haber en el audio** (subidas de energía
+  cada 5 ms: una pista visual, no el detector de rasgueo). Si las flechas caen sobre los picos, el
+  texto encaja con el audio.
+- «▶ Escuchar este compás» lo reproduce **en bucle** (canción / canción + acordes / solo acordes,
+  con clic opcional); una raya blanca marca la posición. Los botones −100/−10/+10/+100 ms mueven el
+  inicio (`offsetSec`) y el bucle continúa; cambiar de compás o de pestaña lo detiene.
+- Texto de ayuda en la vista: la letra del acorde marca en qué pulso **empieza** ese acorde; los
+  golpes los fija el patrón de rasgueo, no la posición de la letra.
