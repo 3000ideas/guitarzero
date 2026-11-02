@@ -466,15 +466,6 @@ export const libraryScreen: Screen = {
       }
     }
 
-    const header = h(
-      'header.screen-header',
-      null,
-      h('div.col', { style: 'gap: 2px' }, h('h1.brand', null, 'GuitarZero'), h('span.brand-tagline', null, 'Practica acordes al ritmo de la pelota')),
-      h('span.spacer'),
-      h('a.btn', { href: '#/tuner', title: 'Afinador: comprueba si la guitarra está afinada' }, 'Afinador'),
-      h('a.btn', { href: '#/settings', title: 'Micrófono, latencia y afinación' }, 'Ajustes'),
-    );
-
     const toolbar = h(
       'div.lib-toolbar',
       null,
@@ -508,7 +499,6 @@ export const libraryScreen: Screen = {
     const screen = h(
       'main.screen.library',
       null,
-      header,
       toolbar,
       importBox,
       h('section.lib-section', null, h('div.lib-section-title', null, h('h2', null, 'Mis canciones'), userCount), userList),

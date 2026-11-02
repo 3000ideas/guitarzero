@@ -1,7 +1,7 @@
 /* Editor (#/edit/:id) — screen-specific styles. Base tokens and classes live in src/styles.css. */
 
 .editor {
-  min-height: 100vh;
+  min-height: calc(100vh - var(--appbar-h, 0px));
 }
 
 .editor .editor-title {
@@ -1287,7 +1287,7 @@
       'viewer viewer'
       'bars pad';
     gap: 8px 12px;
-    height: calc(100vh - 150px);
+    height: calc(100vh - 150px - var(--appbar-h, 0px));
     min-height: 560px;
   }
 
@@ -1876,4 +1876,16 @@
 .editor .levels-help ol {
   margin: 6px 0 0;
   padding-left: 20px;
+}
+
+/* Narrow screens: the sync panel must never be wider than the screen. */
+.chord-grid-editor .grid-sync,
+.chord-grid-editor .grid-transport {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.chord-grid-editor .grid-sync .auto-sync-row,
+.chord-grid-editor .grid-sync .sync-row {
+  flex-wrap: wrap;
 }

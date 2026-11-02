@@ -3438,22 +3438,9 @@ export const editorScreen: Screen = {
     const header = h(
       'header.screen-header',
       null,
-      h('a.btn', { href: '#/', title: 'Volver a la biblioteca' }, '← Volver'),
       h('div.grow', null, titleEl, h('div.muted.small', null, 'Editor · los cambios se guardan solos')),
       statusEl,
       h('button.btn', { type: 'button', onclick: saveWithFeedback, title: 'Guardar ahora (Ctrl+S)' }, 'Guardar'),
-      h(
-        'button.btn.btn-primary',
-        {
-          type: 'button',
-          title: 'Guardar y abrir la autopista',
-          onclick: () => {
-            flush();
-            location.hash = `#/play/${id}`;
-          },
-        },
-        'Probar',
-      ),
     );
 
     const textHint = h('div.editor-hint', null, caretEl, h('span', null, 'Ctrl+S guarda al instante'), h('span', null, 'Pulsa en un error para ir a su línea'));

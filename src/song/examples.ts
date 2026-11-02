@@ -176,7 +176,7 @@ time: 4/4
 strum: x-x-x-x-
 
 # Para comprobar que la app te oye y mide bien el ritmo, sin preocuparte por los acordes.
-# Cada parte se puede elegir sola en "Sección" (Ajustes de práctica).
+# Cada parte se puede elegir sola en "Sección" (Opciones de práctica).
 
 [1 Cuerdas apagadas, negras]
 # Apaga las cuerdas con la mano izquierda (apoya los dedos sin pulsar) y rasguea al ritmo de cada bola.

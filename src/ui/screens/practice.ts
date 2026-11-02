@@ -447,14 +447,14 @@ export const practiceScreen: Screen = {
     const settingsBtn = h(
       'button',
       { class: 'btn practice-settings-btn', type: 'button', title: 'Velocidad, metrónomo, pista, micrófono, secciones…', onclick: () => openSettings() },
-      '⚙ Ajustes',
+      '⚙ Opciones',
     ) as HTMLButtonElement;
     const closeSettingsBtn = h('button', { class: 'btn btn-primary', type: 'button', onclick: () => settingsDialog.close() }, 'Listo');
     const settingsDialog = h(
       'dialog.practice-dialog',
-      { 'aria-label': 'Ajustes de práctica' },
+      { 'aria-label': 'Opciones de práctica' },
       h('div.practice-dialog-body', null,
-        h('h2', null, 'Ajustes de práctica'),
+        h('h2', null, 'Opciones de práctica'),
         h('label.practice-field', null, 'Velocidad', speedSelect),
         h('label.practice-toggle', null, metronomeToggle, 'Metrónomo'),
         h('label.practice-toggle', { title: 'Atajo: L' }, loopToggle, 'Repetir'),

@@ -19,6 +19,7 @@ import { practiceScreen } from './ui/screens/practice';
 import { settingsScreen } from './ui/screens/settings';
 import { tunerScreen } from './ui/screens/tuner';
 import { downloadBundledAudio, installBundledEntries } from './song/bundled';
+import { createAppBar } from './ui/appbar';
 
 export type RouteName = 'library' | 'editor' | 'practice' | 'settings' | 'tuner';
 
@@ -103,7 +104,7 @@ export function titleForRoute(route: Route): string {
 }
 
 /** Wires the router to `root`; returns a function that renders the current hash. */
-export function createRouter(root: HTMLElement): () => void {
+export function createRouter(root: HTMLElement, onRoute?: (route: Route) => void): () => void {
   let current: (() => void) | null = null;
 
   return function render(): void {
@@ -124,6 +125,7 @@ export function createRouter(root: HTMLElement): () => void {
     root.replaceChildren();
     root.dataset.route = route.name;
     document.title = titleForRoute(route);
+    onRoute?.(route);
     window.scrollTo(0, 0);
     current = SCREENS[route.name].mount(root, route.params);
   };
@@ -157,7 +159,10 @@ function boot(): void {
   void downloadBundledAudio(installBundledEntries());
   const root = document.getElementById('app');
   if (!root) throw new Error('No se encontró el elemento #app');
-  const render = createRouter(root);
+  // One bar for the whole app (logo, menus, Practicar / Editar of the song), outside the root the router empties.
+  const appbar = createAppBar();
+  root.parentElement?.insertBefore(appbar.el, root);
+  const render = createRouter(root, (route) => appbar.update(route));
   window.addEventListener('hashchange', render);
   render();
 }

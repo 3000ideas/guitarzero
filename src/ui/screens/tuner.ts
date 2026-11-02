@@ -330,7 +330,7 @@ export const tunerScreen: Screen = {
     const screen = h(
       'main.screen.tuner',
       null,
-      h('header.tuner-header', null, h('a', { class: 'btn btn-sm', href: '#/' }, '← Volver'), h('h1', null, 'Afinador')),
+      h('header.tuner-header', null, h('h1', null, 'Afinador')),
       h(
         'div.card.tuner-card',
         null,

@@ -419,7 +419,7 @@ export const settingsScreen: Screen = {
     const rootEl = h(
       'section.settings',
       null,
-      h('header.settings-header', null, h('a', { class: 'btn', href: '#/' }, '← Volver'), h('h1', null, 'Ajustes')),
+      h('header.settings-header', null, h('h1', null, 'Ajustes')),
 
       h(
         'fieldset.settings-group',
@@ -523,12 +523,6 @@ export const settingsScreen: Screen = {
         h('div.settings-row', null, updateBtn, reloadBtn),
       ),
 
-      h(
-        'footer.settings-footer',
-        null,
-        h('a', { class: 'btn', href: '#/tuner', title: 'Comprueba si la guitarra está afinada' }, 'Afinador'),
-        h('a', { class: 'btn', href: '#/' }, 'Volver'),
-      ),
     );
     root.appendChild(rootEl);
 

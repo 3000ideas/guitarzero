@@ -1495,3 +1495,20 @@ Los niveles aún no creados salen con borde discontinuo. «⋯» abre un **cuadr
 explicación, la lista de niveles (Abrir / Practicar / Crear o Volver a crear, y «estás aquí») y el orden
 de estudio de un profesor, para no llenar la pantalla. «Volver a crear» rehace el nivel desde la completa y
 pierde sus cambios a mano. Con el cuadro abierto, el espacio no reproduce.
+
+## 25. Barra superior común
+
+Una sola barra en la parte de arriba de **todas** las pantallas (`src/ui/appbar.ts`, estilos en
+`styles.css`), creada una vez fuera de la raíz del router (`main.ts` la inserta antes de `#app` y la
+actualiza en cada ruta con `createRouter(root, onRoute)`):
+- A la izquierda el **logotipo** (una pelota que bota sobre un camino de puntos), «GuitarZero» y el lema
+  «Practica acordes al ritmo de la pelota» (el lema se oculta en pantallas estrechas).
+- A la derecha los **menús**: Canciones (la biblioteca), Afinador y Ajustes; el de la pantalla actual queda marcado.
+- **Dentro de una canción** (`#/play/:id`, `#/edit/:id`) aparece el interruptor **[Practicar | Editar]** para pasar de
+  una a otra con la canción actual, con la pestaña activa resaltada. En los ejemplos (solo lectura) no hay «Editar»
+  (en la biblioteca, «Editar» crea una copia).
+- En pantallas estrechas el interruptor pasa a una segunda fila centrada; en móvil apaisado la barra se compacta.
+La barra publica su altura real en `--appbar-h` y las pantallas que ocupan toda la ventana (la autopista de práctica,
+el estudio del editor) se colocan debajo. Se quitaron los menús propios de cada pantalla (marca y botones de la
+biblioteca, «← Volver» de ajustes / afinador / editor, «Probar» del editor, pie de ajustes); el botón de la práctica
+que abre sus ajustes pasó a llamarse «Opciones» para no confundirlo con el menú Ajustes.
