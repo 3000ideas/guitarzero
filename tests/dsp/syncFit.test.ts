@@ -155,3 +155,20 @@ describe('barDrift / driftJumps (where the sync is lost)', () => {
     expect(jumps[0].jumpSec).toBeGreaterThan(-0.23);
   });
 });
+
+describe('firstSoundSec', () => {
+  it('finds where the audio really starts, ignoring a quiet noise floor', async () => {
+    const { firstSoundSec } = await import('../../src/dsp/syncFit');
+    const out = new Float32Array(10 * SR);
+    let seed = 5;
+    for (let i = 0; i < out.length; i++) {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      out[i] = ((seed / 4294967296) * 2 - 1) * 0.002; // a hiss
+    }
+    for (let i = Math.round(1.3 * SR); i < out.length; i++) out[i] += Math.sin(i * 0.3) * 0.5;
+    const t = firstSoundSec(out, SR);
+    expect(t).not.toBeNull();
+    expect(Math.abs((t as number) - 1.3)).toBeLessThan(0.08);
+    expect(firstSoundSec(new Float32Array(10 * SR), SR)).toBeNull();
+  });
+});

@@ -110,10 +110,10 @@ import { createChordGrid } from '../chordGrid';
 import { createBarCheck } from '../barCheck';
 import { createStudioViewer } from '../studioViewer';
 import { energyAttacks } from '../../song/barCheck';
-import { applyTempoMap, expandRepeats, parseGrid, restrumBar, retimeBar, serializeGrid, startPartAt, strumAt } from '../../song/grid';
+import { applyTempoMap, expandRepeats, parseGrid, prependLeadIn, restrumBar, retimeBar, serializeGrid, startPartAt, strumAt } from '../../song/grid';
 import { followAudio, type Stretch, type TempoMap } from '../../dsp/tempoMap';
 import type { FollowAction } from '../barCheck';
-import { barDrift, driftJumps, fitSync, type DriftJump, type SyncFit } from '../../dsp/syncFit';
+import { barDrift, driftJumps, firstSoundSec, fitSync, type DriftJump, type SyncFit } from '../../dsp/syncFit';
 import { parseSong } from '../../song/parser';
 import { beatToSec, secToBeat, songDurationSec } from '../../song/tempo';
 import { isExampleId } from '../../song/examples';
@@ -1134,6 +1134,7 @@ export const editorScreen: Screen = {
       onSeek: (sec) => studioSeek(sec),
       onSelectCell: (pos) => studioSelect(pos),
       onLoopChange: () => studioLoopChanged(),
+      onLeadIn: () => addLeadIn(),
     });
     const studio = createStudioViewer({
       getPlayBeat: () => {
@@ -1571,7 +1572,45 @@ export const editorScreen: Screen = {
     }
 
     /** Gives the studio viewer the current song and the loaded audio (and its attack list, computed once per track). */
+    /** The audio sounds before bar 1 (the chart misses its beginning): what to offer, or null. */
+    let leadOffer: { seconds: number; beats: number; bars: number } | null = null;
+    let firstSoundCache: { samples: Float32Array; sec: number | null } | null = null;
+
+    function computeLeadOffer(): void {
+      leadOffer = null;
+      if (audio && backing && analysis.song.bars.length > 0) {
+        const samples = backing.monoSamples();
+        if (!firstSoundCache || firstSoundCache.samples !== samples) firstSoundCache = { samples, sec: firstSoundSec(samples, sampleRate) };
+        const first = firstSoundCache.sec;
+        const beatSec = 60 / analysis.song.tempoSegments[0].bpm;
+        const gap = first === null ? 0 : audio.offsetSec - first;
+        if (first !== null && gap > Math.max(0.35 * beatSec, 0.3)) {
+          const beats = Math.max(1, Math.round(gap / beatSec));
+          leadOffer = { seconds: gap, beats, bars: Math.ceil(beats / analysis.song.timeSignature.beatsPerBar) };
+        }
+      }
+      gridView.setLeadInOffer(leadOffer);
+    }
+
+    /** Writes the missing beginning: rests up to where the guitar enters, then the first chord, and moves the start of the audio. */
+    function addLeadIn(): void {
+      const offer = leadOffer;
+      if (!offer || !audio) return;
+      stopGridPlay();
+      const chart = parseGrid(textarea.value);
+      const added = prependLeadIn(chart, offer.beats);
+      if (added === 0) return;
+      const barSec = (analysis.song.timeSignature.beatsPerBar * 60) / analysis.song.tempoSegments[0].bpm;
+      const newOffset = audio.offsetSec - added * barSec;
+      studioPosSec = null;
+      applyText(serializeGrid(chart)); // undoable with «Deshacer» (the text; the start of the audio is shown in «Sincronía»)
+      setOffset(newOffset);
+      studioPosSec = null;
+      syncStudio();
+    }
+
     function syncStudio(): void {
+      computeLeadOffer();
       let data = null;
       if (audio && backing) {
         const samples = backing.monoSamples();

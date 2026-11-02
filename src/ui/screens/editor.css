@@ -1607,3 +1607,16 @@
   flex: 1 1 8em;
   min-width: 0;
 }
+
+.chord-grid-editor .grid-leadin {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 6px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--warn);
+  background: rgba(250, 204, 21, 0.1);
+  font-size: 14px;
+}

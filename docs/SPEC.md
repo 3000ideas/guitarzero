@@ -1414,3 +1414,13 @@ anterior) y el `×n` de la sección. `startSectionAt` parte la línea de texto p
 falta y deja bajo la nueva cabecera el `tempo:` que estuviera justo antes; `removeSectionStart` y el
 cambio de nombre se niegan, igual que partir una sección, cuando la sección se repite (`×n`) o su
 nombre se reutiliza más abajo, para no cambiar la música. `addBarAtEnd` añade compases al final.
+
+### 22.7 Aviso «falta el inicio» (audio antes del compás 1)
+
+Si el audio ya suena antes de donde empieza el compás 1 (`firstSoundSec` en `src/dsp/syncFit.ts`: la
+primera ventana de 50 ms con volumen ≥ ⅕ de los pasajes fuertes; hueco mayor que 0,35 pulsos y 0,3 s),
+el estudio muestra un aviso amarillo con el hueco y el botón «Añadir N compás(es) de entrada».
+`prependLeadIn` (`src/song/grid.ts`) escribe esos pulsos justo antes de la primera línea de compases:
+silencios hasta el pulso donde entra el audio y después el primer acorde de la canción (`- D . .`);
+el inicio del audio se mueve N compases (`offsetSec` puede quedar negativo: el compás 1 empieza antes
+del audio). Sirve para cualquier canción y para copias editadas que no se actualizan solas.

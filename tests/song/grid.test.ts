@@ -21,6 +21,7 @@ import {
   normalizeCellValue,
   parseBarCells,
   parseGrid,
+  prependLeadIn,
   removeSectionStart,
   retimeBar,
   sectionIndexAt,
@@ -479,5 +480,29 @@ describe('sections: guards that keep the music unchanged', () => {
     const fine = parseGrid('[A]\nC . . . | G . . . |\n[B]\nF . . . |\n');
     expect(startSectionAt(fine, 1, 1, 'X')).toBe(true);
     expect(musical(serializeGrid(fine))).toEqual(musical('[A]\nC . . . | G . . . |\n[B]\nF . . . |\n'));
+  });
+});
+
+describe('prependLeadIn', () => {
+  it('3 beats of audio before bar 1: one bar, a rest and the first chord held', () => {
+    const chart = parseGrid('tempo: 68\n[Estrofa]\nD . . . | F#m . . . |\n');
+    expect(prependLeadIn(chart, 3)).toBe(1);
+    expect(serializeGrid(chart)).toBe('tempo: 68\n[Estrofa]\n- D . . |\nD . . . | F#m . . . |\n');
+    expect(parseSong(serializeGrid(chart)).errors.filter((e) => e.severity === 'error')).toEqual([]);
+  });
+
+  it('whole bars and more than one bar', () => {
+    const a = parseGrid('G . . . |\n');
+    expect(prependLeadIn(a, 4)).toBe(1);
+    expect(serializeGrid(a)).toBe('G . . . |\nG . . . |\n');
+    const b = parseGrid('G . . . |\n');
+    expect(prependLeadIn(b, 6)).toBe(2);
+    expect(serializeGrid(b)).toBe('- - G . | . . . . |\nG . . . |\n');
+    expect(parseSong(serializeGrid(b)).song.bars).toHaveLength(3);
+  });
+
+  it('refuses without bars or with less than a beat', () => {
+    expect(prependLeadIn(parseGrid('tempo: 80\n'), 2)).toBe(0);
+    expect(prependLeadIn(parseGrid('C . . . |\n'), 0.4)).toBe(0);
   });
 });

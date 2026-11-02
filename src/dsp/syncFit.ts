@@ -428,3 +428,24 @@ export function planDrift(drift: readonly BarDrift[], minJumpSec = JUMP_MIN_SEC)
   const head = conf.map((d, i) => ({ bar: d.bar, v: e[i] })).filter((x) => x.bar < firstJumpAt).map((x) => x.v);
   return { slopePerBar: slope, interceptSec: median(head.length > 0 ? head : e), jumps };
 }
+
+/**
+ * Time (s) where the audio really starts sounding: the first 50 ms window whose RMS reaches a fifth
+ * of the loud passages (95th percentile of the window RMS). Null for silence.
+ */
+export function firstSoundSec(samples: Float32Array, sampleRate: number): number | null {
+  const win = Math.max(1, Math.round(sampleRate * 0.05));
+  const n = Math.floor(samples.length / win);
+  if (n < 4) return null;
+  const rms = new Float32Array(n);
+  for (let w = 0; w < n; w++) {
+    let acc = 0;
+    for (let i = w * win; i < (w + 1) * win; i++) acc += samples[i] * samples[i];
+    rms[w] = Math.sqrt(acc / win);
+  }
+  const sorted = Float32Array.from(rms).sort();
+  const loud = sorted[Math.floor(n * 0.95)];
+  if (!(loud > 1e-4)) return null;
+  for (let w = 0; w < n; w++) if (rms[w] >= 0.2 * loud) return (w * win) / sampleRate;
+  return null;
+}

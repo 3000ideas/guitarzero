@@ -54,6 +54,8 @@ export interface ChordGridOpts {
   onSelectCell?: (pos: { item: number; bar: number; cell: number }) => void;
   /** The loop choice changed. */
   onLoopChange?: () => void;
+  /** «Añadir compás de entrada» of the banner shown when the audio starts before bar 1. */
+  onLeadIn?: () => void;
   /** The «qué escuchar» choice changed (the host stops a playback in progress). */
   onSourceChange?: () => void;
   /** The «inicio de la canción» (where bar 1 sits in the audio) was nudged by `deltaSec`. */
@@ -75,6 +77,8 @@ export interface ChordGridView {
   autoSync: AutoSyncBox;
   /** Where the host mounts the studio viewer (between the transport bar and the bars). */
   viewerSlot: HTMLElement;
+  /** Offers (or, with null, hides) the lead-in banner: the audio sounds for `seconds` before bar 1. */
+  setLeadInOffer(offer: { seconds: number; beats: number; bars: number } | null): void;
   /** Current / total position shown in the transport bar and its slider (song seconds). */
   setTime(curSec: number, totalSec: number): void;
   getLoop(): LoopMode;
@@ -220,6 +224,11 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
   );
   const transport = h('div.grid-transport', null, h('div.grid-transport-row', null, playBtn, stopBtn, timeEl, seekEl, sourceSel, metroLabel, loopSel), audioHint, syncBox);
   const viewerSlot = h('div.grid-viewer-slot');
+  const leadText = h('span', null);
+  const leadBtn = h('button.btn.btn-sm.btn-primary', { type: 'button', onclick: () => opts.onLeadIn?.() }, 'Añadir compás de entrada') as HTMLButtonElement;
+  const leadBanner = h('div.grid-leadin', { role: 'status' }, leadText, leadBtn);
+  leadBanner.hidden = true;
+  viewerSlot.appendChild(leadBanner);
   sourceSel.addEventListener('change', () => opts.onSourceChange?.());
   const root = h('div.chord-grid-editor');
   const body = h('div.grid-body');
@@ -898,6 +907,12 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
       playBtn.classList.toggle('is-playing', playing);
     },
     viewerSlot,
+    setLeadInOffer(offer) {
+      leadBanner.hidden = offer === null;
+      if (!offer) return;
+      leadText.textContent = `El audio suena ${offer.seconds.toFixed(1)} s antes del compás 1 (unos ${offer.beats} pulsos): falta el inicio.`;
+      leadBtn.textContent = `Añadir ${offer.bars} compás${offer.bars === 1 ? '' : 'es'} de entrada`;
+    },
     setTime(curSec, totalSec) {
       const fmt = (s: number): string => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
       timeEl.textContent = `${fmt(Math.max(0, curSec))} / ${fmt(Math.max(0, totalSec))}`;

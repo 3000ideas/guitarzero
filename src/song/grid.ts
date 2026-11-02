@@ -674,6 +674,33 @@ export function addBarAtEnd(chart: GridChart): { item: number; bar: number } | n
   return appendBar(chart, last);
 }
 
+/**
+ * Writes the lead-in that the recording has before bar 1: `beatsBefore` beats of the song's first
+ * chord, preceded by rests when they do not fill whole bars (the guitar enters on beat 2 → `- D . .`).
+ * The new bars go right before the first bar line. Returns the number of bars added (0 = nothing done).
+ */
+export function prependLeadIn(chart: GridChart, beatsBefore: number): number {
+  const idx = chart.items.findIndex((it) => it.kind === 'bars');
+  const first = idx >= 0 ? barsItem(chart, idx) : null;
+  if (!first || !(beatsBefore >= 1)) return 0;
+  const beats = first.beats;
+  const total = Math.ceil(Math.round(beatsBefore) / beats) * beats;
+  const rests = total - Math.round(beatsBefore);
+  let chord = 'C';
+  for (const bar of first.bars) {
+    const c = bar.cells.find((x) => x !== '' && x !== REST_CELL && !NC_RE.test(x));
+    if (c) {
+      chord = c;
+      break;
+    }
+  }
+  const cells = Array.from({ length: total }, (_, i) => (i < rests ? REST_CELL : i === rests ? chord : ''));
+  const bars: GridBar[] = [];
+  for (let b = 0; b < total / beats; b++) bars.push({ cells: cells.slice(b * beats, (b + 1) * beats) });
+  chart.items.splice(idx, 0, { kind: 'bars', bars, repeat: 1, comment: '', beats, orig: null });
+  return bars.length;
+}
+
 /** Tempo changes smaller than this (bpm) are not written between stretches: they would add noise, not accuracy. */
 export const TEMPO_MAP_MIN_CHANGE = 0.15;
 
