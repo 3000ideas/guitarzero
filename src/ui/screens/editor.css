@@ -936,3 +936,41 @@
 .chord-grid-editor .grid-cell.is-playing .grid-beat {
   color: #04210f;
 }
+
+.chord-grid-editor .grid-transport {
+  flex-wrap: wrap;
+}
+
+.chord-grid-editor .grid-sync {
+  flex-basis: 100%;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 12px;
+  background: var(--panel-2);
+}
+
+.chord-grid-editor .grid-sync summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.chord-grid-editor .grid-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+}
+
+.chord-grid-editor .sync-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin-top: 6px;
+  font-size: 14px;
+}
+
+.chord-grid-editor .sync-value {
+  min-width: 5.5em;
+  font-variant-numeric: tabular-nums;
+}

@@ -47,7 +47,13 @@ export interface ChordGridOpts {
   onTogglePlay?: () => void;
   /** The «qué escuchar» choice changed (the host stops a playback in progress). */
   onSourceChange?: () => void;
+  /** The «inicio de la canción» (where bar 1 sits in the audio) was nudged by `deltaSec`. */
+  onNudgeOffset?: (deltaSec: number) => void;
 }
+
+/** localStorage key of the visual delay of the playing mark, in ms. */
+export const VISUAL_DELAY_KEY = 'gz.gridVisualMs';
+export const VISUAL_DELAY_LIMIT_MS = 500;
 
 export type PlaySource = 'chords' | 'song' | 'both';
 
@@ -61,6 +67,12 @@ export interface ChordGridView {
   getPlaySource(): PlaySource;
   /** Enables the audio options when a song track is loaded. */
   setAudioAvailable(available: boolean): void;
+  /** True when the «clic de metrónomo» option is on. */
+  getMetronome(): boolean;
+  /** Seconds the playing mark is shown later than the audio clock says (compensates screen / Bluetooth lag). */
+  getVisualDelaySec(): number;
+  /** Shows the current start of the song in the audio (null without a track). */
+  setOffsetInfo(offsetSec: number | null): void;
   /** The selected cell (where playback starts), or null. */
   getSelection(): { item: number; bar: number; cell: number } | null;
   /** Switches the «Escuchar» button between play and stop. */
@@ -124,7 +136,59 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
   ];
   for (const [value, label] of sourceOptions) sourceSel.appendChild(h('option', { value }, label));
   const audioHint = h('span.muted.small', null, 'Empieza en el compás seleccionado');
-  const transport = h('div.grid-transport', null, playBtn, sourceSel, audioHint);
+  let visualMs = 0;
+  try {
+    const v = Number(localStorage.getItem(VISUAL_DELAY_KEY));
+    if (Number.isFinite(v)) visualMs = Math.max(-VISUAL_DELAY_LIMIT_MS, Math.min(VISUAL_DELAY_LIMIT_MS, Math.round(v)));
+  } catch {
+    /* storage unavailable: the delay lasts for this screen */
+  }
+  const metroBox = h('input', { type: 'checkbox', 'aria-label': 'Clic de metrónomo' }) as HTMLInputElement;
+  const offsetValue = h('strong.sync-value', null, '—');
+  const visualValue = h('strong.sync-value', null, `${visualMs} ms`);
+  const stepBtn = (label: string, title: string, fn: () => void): HTMLElement =>
+    h('button.grid-mini', { type: 'button', title, onclick: fn }, label);
+  const nudge = (ms: number) => (): void => opts.onNudgeOffset?.(ms / 1000);
+  const nudgeVisual = (ms: number) => (): void => {
+    visualMs = Math.max(-VISUAL_DELAY_LIMIT_MS, Math.min(VISUAL_DELAY_LIMIT_MS, visualMs + ms));
+    visualValue.textContent = `${visualMs} ms`;
+    try {
+      localStorage.setItem(VISUAL_DELAY_KEY, String(visualMs));
+    } catch {
+      /* ignored */
+    }
+  };
+  const syncBox = h(
+    'details.grid-sync',
+    null,
+    h('summary', null, 'Ajustar la sincronía'),
+    h(
+      'p.muted.small',
+      null,
+      'Activa el clic y escucha «Canción + acordes»: el clic cae justo en cada pulso de la cuadrícula. Si el clic suena ANTES que el golpe de la canción, pulsa «+» (retrasa la cuadrícula); si suena DESPUÉS, pulsa «−». Cuando clic y golpe coincidan, la cuadrícula está bien alineada con la canción.',
+    ),
+    h('label.grid-check', null, metroBox, h('span', null, 'Clic de metrónomo en cada pulso')),
+    h(
+      'div.sync-row',
+      null,
+      h('span', null, 'Inicio de la canción (compás 1) '),
+      offsetValue,
+      stepBtn('−100', 'Adelanta la cuadrícula 100 ms', nudge(-100)),
+      stepBtn('−10', 'Adelanta la cuadrícula 10 ms', nudge(-10)),
+      stepBtn('+10', 'Retrasa la cuadrícula 10 ms', nudge(10)),
+      stepBtn('+100', 'Retrasa la cuadrícula 100 ms', nudge(100)),
+    ),
+    h(
+      'div.sync-row',
+      null,
+      h('span', null, 'Marca verde '),
+      visualValue,
+      stepBtn('−20', 'La marca verde se muestra antes', nudgeVisual(-20)),
+      stepBtn('+20', 'La marca verde se muestra después', nudgeVisual(20)),
+      h('span.muted.small', null, 'Solo mueve la marca, no el sonido: úsalo si la marca va por delante o por detrás de lo que oyes (p. ej. con auriculares Bluetooth).'),
+    ),
+  );
+  const transport = h('div.grid-transport', null, playBtn, sourceSel, audioHint, syncBox);
   sourceSel.addEventListener('change', () => opts.onSourceChange?.());
   const root = h('div.chord-grid-editor');
   const body = h('div.grid-body');
@@ -755,6 +819,15 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
         lastPlayheadBar = barKey;
         el.scrollIntoView({ block: 'nearest' });
       }
+    },
+    getMetronome() {
+      return metroBox.checked;
+    },
+    getVisualDelaySec() {
+      return visualMs / 1000;
+    },
+    setOffsetInfo(offsetSec) {
+      offsetValue.textContent = offsetSec === null ? '—' : `${offsetSec.toFixed(3)} s`;
     },
     getPlaySource() {
       return sourceSel.value as PlaySource;

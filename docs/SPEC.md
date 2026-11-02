@@ -1258,3 +1258,10 @@ recuerda la última en `localStorage` `gz.editorMode`; por defecto Cuadrícula).
   Con una pista de audio cargada, un selector elige qué suena: «Solo acordes», «Canción original»
   (el audio cargado, desde `offsetSec + beatToSec(compás)`) o «Canción + acordes» (ambos sincronizados
   a la vez; es lo que se elige por defecto al cargar el audio, para comparar). Sin audio solo hay acordes.
+  **Ajustar la sincronía** (desplegable bajo el botón): «Clic de metrónomo en cada pulso» (clics
+  del mapa de tempo, programados con una ventana móvil de 1,2 s) para oír si la cuadrícula cae en los
+  golpes de la canción; botones −100 / −10 / +10 / +100 ms sobre el inicio del compás 1 en el audio
+  (`offsetSec`, el mismo ajuste de «Pista de audio»; si suena, continúa desde el mismo punto); y un
+  «desfase de la marca verde» (±20 ms, `localStorage` `gz.gridVisualMs`) que solo retrasa o adelanta
+  lo que se dibuja, para compensar pantalla o auriculares Bluetooth. Un tempo con decimales
+  (`tempo: 96.5`) corrige la deriva en canciones largas.

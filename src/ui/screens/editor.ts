@@ -1120,7 +1120,7 @@ export const editorScreen: Screen = {
 
     // Two ways to edit the same text: the text itself or the chord grid (SPEC section 22).
     let editMode: EditorMode = loadEditorMode();
-    const gridView = createChordGrid({ onChange: (next) => applyText(next), onTogglePlay: () => void toggleGridPlay(), onSourceChange: () => stopGridPlay() });
+    const gridView = createChordGrid({ onChange: (next) => applyText(next), onTogglePlay: () => void toggleGridPlay(), onSourceChange: () => stopGridPlay(), onNudgeOffset: (d) => onGridNudge(d) });
     const textTab = h('button.mode-tab', { type: 'button', role: 'tab', onclick: () => setEditMode('text') }, 'Texto') as HTMLButtonElement;
     const gridTab = h('button.mode-tab', { type: 'button', role: 'tab', onclick: () => setEditMode('grid') }, 'Cuadrícula') as HTMLButtonElement;
     const modeTabs = h('div.mode-tabs', { role: 'tablist', 'aria-label': 'Forma de editar' }, gridTab, textTab);
@@ -1468,9 +1468,13 @@ export const editorScreen: Screen = {
       song: Song;
       source: string;
       ctx: AudioContext;
+      /** Next beat of the song whose metronome click has not been looked at yet. */
+      nextBeat: number;
     }
     let gridPlay: GridPlay | null = null;
     let gridPlayStarting = false;
+    /** The synthesized chord track is pure per text and sample rate: rendered once and reused (restarts, nudges). */
+    let chordBufferCache: { source: string; rate: number; buffer: AudioBuffer } | null = null;
 
     function stopGridPlay(): void {
       const p = gridPlay;
@@ -1480,6 +1484,7 @@ export const editorScreen: Screen = {
         p.bt?.stop();
         p.bt?.dispose();
         if (p.original) backing?.stop();
+        metronome?.clear();
       }
       gridView.setPlayhead(null);
       gridView.setPlaying(false);
@@ -1497,10 +1502,35 @@ export const editorScreen: Screen = {
       return lo;
     }
 
+    /** Song time (s) that is being heard right now, or null when nothing plays. */
+    function gridPlaySec(): number | null {
+      const p = gridPlay;
+      return p ? p.posSec + (p.ctx.currentTime - p.whenWall) : null;
+    }
+
+    /** Clicks of the beats that fall in the next ~1.2 s (rolling, so a long song never schedules everything at once). */
+    function scheduleGridClicks(p: GridPlay): void {
+      const horizon = p.ctx.currentTime + 1.2;
+      const segs = p.song.tempoSegments;
+      const on = gridView.getMetronome();
+      const clicks = on ? ensureMetronome() : null;
+      while (p.nextBeat < p.song.totalBeats) {
+        const wall = p.whenWall + (beatToSec(segs, p.nextBeat) - p.posSec);
+        if (wall > horizon) break;
+        if (clicks && wall >= p.ctx.currentTime) {
+          const bar = p.song.bars[barAtBeat(p.song, p.nextBeat)];
+          clicks.scheduleClick(wall, p.nextBeat === bar.startBeat);
+        }
+        p.nextBeat++;
+      }
+    }
+
     function gridPlayTick(): void {
       const p = gridPlay;
       if (!p || unmounted) return;
-      const sec = p.posSec + (p.ctx.currentTime - p.whenWall);
+      scheduleGridClicks(p);
+      // The mark is shown `visual delay` later than the audio clock (screen / Bluetooth lag), never earlier than the start.
+      const sec = p.posSec + (p.ctx.currentTime - p.whenWall) - gridView.getVisualDelaySec();
       const last = p.song.bars[p.song.bars.length - 1];
       const beat = secToBeat(p.song.tempoSegments, Math.max(0, sec));
       if (beat >= last.startBeat + last.beats) {
@@ -1520,7 +1550,12 @@ export const editorScreen: Screen = {
         stopGridPlay();
         return;
       }
-      if (gridPlayStarting) return;
+      await startGridPlay();
+    }
+
+    /** Starts the playback at song time `fromSec` (default: the selected bar, else the start). */
+    async function startGridPlay(fromSec?: number): Promise<void> {
+      if (gridPlay || gridPlayStarting) return;
       const song = analysis.song;
       if (song.bars.length === 0) return;
       stopPreview();
@@ -1536,28 +1571,48 @@ export const editorScreen: Screen = {
         const original = (source === 'song' || source === 'both') && audio !== null && backing !== null;
         let bt: BackingTrack | null = null;
         if (source !== 'song' || !original) {
-          const buffer = await renderChordTrack(song, ctx.sampleRate);
+          const text = textarea.value;
+          let buffer = chordBufferCache && chordBufferCache.source === text && chordBufferCache.rate === ctx.sampleRate ? chordBufferCache.buffer : null;
+          if (!buffer) {
+            buffer = await renderChordTrack(song, ctx.sampleRate);
+            chordBufferCache = { source: text, rate: ctx.sampleRate, buffer };
+          }
           if (unmounted || gridPlay) return;
           bt = new BackingTrack(ctx);
           bt.loadBuffer(buffer);
           bt.setGain(original ? 0.6 : 0.9);
         }
-        const sel = gridView.getSelection();
-        const from = sel ? song.bars.find((b) => b.srcLine === sel.item + 1 && b.srcBar === sel.bar) : undefined;
-        const posSec = from ? beatToSec(song.tempoSegments, from.startBeat) : 0;
+        let posSec = fromSec ?? 0;
+        if (fromSec === undefined) {
+          const sel = gridView.getSelection();
+          const from = sel ? song.bars.find((b) => b.srcLine === sel.item + 1 && b.srcBar === sel.bar) : undefined;
+          posSec = from ? beatToSec(song.tempoSegments, from.startBeat) : 0;
+        }
         const whenWall = ctx.currentTime + 0.15;
         bt?.start(whenWall, posSec, 1);
         if (original && audio && backing) {
           backing.setGain(audio.gain);
           backing.start(whenWall, audio.offsetSec + posSec, 1); // the song's bar 1 sits at offsetSec in the audio
         }
-        gridPlay = { bt, original, raf: 0, whenWall, posSec, song, source: textarea.value, ctx };
+        const nextBeat = Math.max(0, Math.ceil(secToBeat(song.tempoSegments, Math.max(0, posSec)) - 1e-6));
+        gridPlay = { bt, original, raf: 0, whenWall, posSec, song, source: textarea.value, ctx, nextBeat };
         gridView.setPlaying(true);
         gridPlay.raf = requestAnimationFrame(gridPlayTick);
       } catch (err) {
         console.warn('No se pudo reproducir la canción', err);
       } finally {
         gridPlayStarting = false;
+      }
+    }
+
+    /** Nudges where the song starts in the audio; a playback in progress continues from the same point with the new alignment. */
+    function onGridNudge(deltaSec: number): void {
+      if (!audio) return;
+      const resumeAt = gridPlaySec();
+      nudgeOffset(deltaSec);
+      if (resumeAt !== null) {
+        stopGridPlay();
+        void startGridPlay(Math.max(0, resumeAt));
       }
     }
 
@@ -1770,6 +1825,7 @@ export const editorScreen: Screen = {
     function updateButtons(): void {
       const ready = backing !== null && !busy;
       gridView.setAudioAvailable(ready && audio !== null);
+      gridView.setOffsetInfo(audio ? audio.offsetSec : null);
       loadBtn.disabled = busy;
       replaceBtn.disabled = busy;
       removeBtn.disabled = busy;
@@ -2212,6 +2268,7 @@ export const editorScreen: Screen = {
       offsetInput.value = v.toFixed(2);
       if (v === audio.offsetSec) return;
       audio = { ...audio, offsetSec: v };
+      gridView.setOffsetInfo(v);
       syncGrid();
       scheduleAudioSave();
     }
