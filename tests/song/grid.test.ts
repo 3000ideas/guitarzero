@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseSong } from '../../src/song/parser';
 import { EXAMPLE_SONGS } from '../../src/song/examples';
 import {
+  applyTempoMap,
   addBarLine,
   addSection,
   appendBar,
@@ -327,5 +328,26 @@ describe('retimeBar', () => {
     const rep = parseGrid('tempo: 80\nD . . . | A . . . | x2\n');
     expect(retimeBar(rep, 1, 0, 90, 80)).toBe(false);
     expect(retimeBar(a, 1, 0, 5, 80)).toBe(false);
+  });
+});
+
+describe('applyTempoMap', () => {
+  it('writes a tempo before every line whose tempo changes and drops the old mid-song ones', () => {
+    const chart = parseGrid('tempo: 100\n[A]\nC . . . | G . . . |\ntempo: 50\nAm . . . | F . . . |\nC . . . | G . . . |\n');
+    const n = applyTempoMap(chart, [
+      { item: 2, bpm: 98.5 },
+      { item: 4, bpm: 98.55 }, // within 0.15 bpm of the previous one: not written
+      { item: 5, bpm: 101.2 },
+    ]);
+    expect(n).toBe(2);
+    const out = serializeGrid(chart);
+    expect(out).toBe('tempo: 98.5\n[A]\nC . . . | G . . . |\nAm . . . | F . . . |\ntempo: 101.2\nC . . . | G . . . |\n');
+    expect(parseSong(out).song.tempoSegments.map((t) => t.bpm)).toEqual([98.5, 101.2]);
+  });
+
+  it('adds the leading tempo when there is none', () => {
+    const chart = parseGrid('C . . . | G . . . |\nAm . . . |\n');
+    applyTempoMap(chart, [{ item: 0, bpm: 90 }, { item: 1, bpm: 95 }]);
+    expect(serializeGrid(chart)).toBe('tempo: 90\nC . . . | G . . . |\ntempo: 95\nAm . . . |\n');
   });
 });

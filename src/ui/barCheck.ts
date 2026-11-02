@@ -42,6 +42,10 @@ export interface BarCheckOpts {
   onAnalyzeDrift: () => void;
   /** «Corregir» a jump with a tempo change of its bar. */
   onFixJump: (jump: DriftJump) => void;
+  /** «Seguir el audio»: compute / apply / discard a tempo for every line. */
+  onFollowRun: () => void;
+  onFollowApply: () => void;
+  onFollowDiscard: () => void;
 }
 
 export interface BarCheckView {
@@ -49,6 +53,8 @@ export interface BarCheckView {
   autoSync: AutoSyncBox;
   /** Result of the bar-by-bar analysis (null clears it); `note` is a message for the user. */
   setDrift(drift: readonly BarDrift[] | null, jumps: readonly DriftJump[], note?: string): void;
+  /** Result of «Seguir el audio» (null hides it). */
+  setFollow(result: { text: string; canApply: boolean; bad?: boolean } | null, busy?: boolean): void;
   /** New text / audio: redraws, keeping the bar when it still exists. */
   setContext(song: Song, audio: BarCheckAudio | null): void;
   setBar(index: number): void;
@@ -96,13 +102,21 @@ export function createBarCheck(opts: BarCheckOpts): BarCheckView {
     h('button.grid-mini', { type: 'button', title: `${deltaMs > 0 ? 'Retrasa' : 'Adelanta'} la cuadrícula ${Math.abs(deltaMs)} ms`, onclick: () => opts.onNudgeOffset(deltaMs / 1000) }, label);
 
   const autoSync = createAutoSyncBox(opts.autoSync);
+  const followBtn = h('button.btn.btn-sm.btn-primary', { type: 'button', onclick: () => opts.onFollowRun() }, '✨ Seguir el audio') as HTMLButtonElement;
+  const followText = h('div.auto-sync-text');
+  const followApply = h('button.btn.btn-sm.btn-primary', { type: 'button', onclick: () => opts.onFollowApply() }, 'Aplicar') as HTMLButtonElement;
+  const followDiscard = h('button.btn.btn-sm', { type: 'button', onclick: () => opts.onFollowDiscard() }, 'Descartar') as HTMLButtonElement;
+  const followResult = h('div.auto-sync-result', { role: 'status' }, followText, h('div.auto-sync-actions', null, followApply, followDiscard));
+  followResult.hidden = true;
   const driftBtn = h('button.btn.btn-sm', { type: 'button', onclick: () => opts.onAnalyzeDrift() }, '🔎 Ver dónde se pierde la sincronía') as HTMLButtonElement;
   const driftStrip = h('div.drift-strip');
   const driftText = h('div.drift-text');
   const driftBox = h(
     'div.check-drift',
     null,
-    h('div.auto-sync-row', null, driftBtn, h('span.muted.small', null, 'Compara cada compás con el audio: si en un compás la canción cambia (una pausa, más pulsos…) y desde ahí todo se desfasa, se ve aquí.')),
+    h('div.auto-sync-row', null, followBtn, h('span.muted.small', null, 'Si una persona toca, el tempo nunca es exacto: esto pone un tempo a cada línea para que el texto siga a la grabación. Es la forma sencilla de arreglar muchos desfases.')),
+    followResult,
+    h('div.auto-sync-row', null, driftBtn, h('span.muted.small', null, 'Solo para mirar: el desfase de cada compás.')),
     driftStrip,
     driftText,
   );
@@ -367,12 +381,14 @@ export function createBarCheck(opts: BarCheckOpts): BarCheckView {
     }
     if (note) driftText.appendChild(h('p', null, note));
     if (jumps.length === 0) {
-      driftText.appendChild(h('p', null, 'No hay saltos: el audio y el texto avanzan juntos (los «?» son compases con otro ritmo o sin audio).'));
+      driftText.appendChild(h('p', null, 'No hay saltos bruscos: el audio y el texto avanzan juntos (los «?» son compases con otro ritmo o sin audio).'));
       return;
     }
+    const advanced = h('details.drift-advanced', null, h('summary', null, `Cambios bruscos detectados: ${jumps.length} (avanzado; «Seguir el audio» ya los tiene en cuenta)`));
+    driftText.appendChild(advanced);
     for (const j of jumps) {
       const ms = Math.round(Math.abs(j.jumpSec) * 1000);
-      driftText.appendChild(
+      advanced.appendChild(
         h(
           'div.drift-jump',
           null,
@@ -391,6 +407,19 @@ export function createBarCheck(opts: BarCheckOpts): BarCheckView {
     el,
     autoSync,
     setDrift: renderDrift,
+    setFollow(result, busy) {
+      followBtn.disabled = !!busy;
+      followBtn.textContent = busy ? 'Analizando…' : '✨ Seguir el audio';
+      if (!result) {
+        followResult.hidden = true;
+        return;
+      }
+      followResult.hidden = false;
+      followResult.classList.toggle('is-bad', !!result.bad);
+      followText.textContent = result.text;
+      followApply.hidden = !result.canApply;
+      followDiscard.textContent = result.canApply ? 'Descartar' : 'Cerrar';
+    },
     setContext(nextSong, nextAudio) {
       song = nextSong;
       audio = nextAudio;

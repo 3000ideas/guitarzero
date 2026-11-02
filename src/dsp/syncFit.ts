@@ -234,8 +234,6 @@ export function describeFit(fit: SyncFit): string {
 
 // ---------------------------------------------------------------- bar by bar (where the sync is lost)
 
-/** Below this best / mean score a bar's own strikes do not show a clear alignment. */
-export const BAR_MIN_CONFIDENCE = 1.5;
 /** A change of the bar-to-bar offset beyond this is reported as a jump, seconds. */
 export const JUMP_MIN_SEC = 0.04;
 
@@ -256,50 +254,101 @@ export interface DriftJump {
   jumpSec: number;
 }
 
+/** Offset states of the bar-by-bar path, seconds. */
+export const PATH_STEP_SEC = 0.005;
+/** Cost of leaving the current offset (plus PATH_JUMP_SLOPE per window width): a bar must gain more than this to move the path. */
+export const PATH_JUMP_COST = 0.25;
+export const PATH_JUMP_SLOPE = 0.5;
+/** A bar «shows» its strikes when this share of them reaches 20 % of a clear attack at the path's offset. */
+export const PATH_MIN_PRESENT = 0.5;
+
 /**
- * For every bar, how far the audio is from the grid judged only by the strikes of that bar
- * (±half a beat). A bar whose rhythm differs from the text gets null; the jump between the bars
- * around it tells whether the length of the audio differs from the text (see `driftJumps`).
+ * How far the audio is from the grid, bar by bar, as ONE consistent path (Viterbi): every bar scores
+ * each possible offset (±~¾ beat) by how well its own strikes land on attacks, and moving the path
+ * between bars costs more the further it moves. A noisy bar or one that matches a neighbouring
+ * beat by accident therefore follows its neighbours, while a lasting change of the audio (a longer
+ * bar, a slowing tempo) still moves the path. Bars without clear strikes of their own get null.
  */
 export function barDrift(
   samples: Float32Array,
   sampleRate: number,
   offsetSec: number,
   song: Pick<Song, 'bars' | 'events' | 'tempoSegments'>,
+  precomputed?: Float32Array,
 ): BarDrift[] {
-  const curve = attackCurve(samples, sampleRate);
+  const curve = precomputed ?? attackCurve(samples, sampleRate);
   const duration = samples.length / Math.max(1, sampleRate);
-  // What a clear strike looks like on the curve: a bar «has» its strikes when most of them reach a fraction of that.
+  const nBars = song.bars.length;
+  const none = (): BarDrift[] => song.bars.map((_, i) => ({ bar: i, deltaSec: null, confidence: 0 }));
+  if (curve.length === 0 || nBars === 0) return none();
   const sorted = Float32Array.from(curve).sort();
-  const ref = sorted.length > 0 ? sorted[Math.floor(sorted.length * 0.97)] : 0;
+  const ref = sorted[Math.floor(sorted.length * 0.97)];
+  if (!(ref > 0)) return none();
   const byBar: number[][] = song.bars.map(() => []);
   for (const e of song.events) if (byBar[e.barIndex]) byBar[e.barIndex].push(beatToSec(song.tempoSegments, e.time));
-  return song.bars.map((bar, i): BarDrift => {
-    const secs = byBar[i].filter((t) => offsetSec + t > 0.05 && offsetSec + t < duration - 0.05);
-    if (curve.length === 0 || secs.length < 3 || secs.length < 0.8 * byBar[i].length) return { bar: i, deltaSec: null, confidence: 0 };
-    const beatSec = beatToSec(song.tempoSegments, bar.startBeat + 1) - beatToSec(song.tempoSegments, bar.startBeat);
-    const window = Math.min(0.6, Math.max(0.15, 0.5 * beatSec));
-    let best = -Infinity;
-    let at = 0;
-    let sum = 0;
-    let n = 0;
-    for (let d = -window; d <= window + 1e-9; d += OFFSET_STEP_SEC) {
-      let sc = 0;
-      for (const t of secs) sc += sampleAt(curve, offsetSec + d + t);
-      sc *= 1 - 0.02 * (Math.abs(d) / window); // ties go to the smaller shift
-      sum += sc;
-      n++;
-      if (sc > best) {
-        best = sc;
-        at = d;
+  const first = song.bars[0];
+  const beatSec = beatToSec(song.tempoSegments, first.startBeat + 1) - beatToSec(song.tempoSegments, first.startBeat);
+  const window = Math.min(0.6, Math.max(0.2, 0.75 * beatSec));
+  const states = Math.floor((2 * window) / PATH_STEP_SEC) + 1;
+  const delta = (s: number): number => -window + s * PATH_STEP_SEC;
+
+  // Emission of each bar for each offset: mean strength of its strikes (≈1 = every strike on a clear attack).
+  const secsOf: number[][] = byBar.map((all) => all.filter((t) => offsetSec + t > 0.05 && offsetSec + t < duration - 0.05));
+  const usable = secsOf.map((secs, i) => secs.length >= 3 && secs.length >= 0.8 * byBar[i].length);
+  const emission: Float32Array[] = secsOf.map((secs, i) => {
+    const e = new Float32Array(states);
+    if (!usable[i]) return e;
+    for (let s = 0; s < states; s++) {
+      let acc = 0;
+      for (const t of secs) acc += sampleAt(curve, offsetSec + delta(s) + t);
+      e[s] = acc / (secs.length * ref);
+    }
+    return e;
+  });
+
+  // Viterbi with a cost for moving between offsets.
+  const score: Float32Array[] = [];
+  const back: Int16Array[] = [];
+  for (let i = 0; i < nBars; i++) {
+    const cur = new Float32Array(states);
+    const from = new Int16Array(states);
+    if (i === 0) {
+      for (let s = 0; s < states; s++) cur[s] = emission[0][s] - 0.3 * (Math.abs(delta(s)) / window);
+    } else {
+      const prev = score[i - 1];
+      for (let s = 0; s < states; s++) {
+        let bestV = -Infinity;
+        let bestS = s;
+        for (let q = 0; q < states; q++) {
+          const move = q === s ? 0 : PATH_JUMP_COST + (PATH_JUMP_SLOPE * Math.abs(s - q) * PATH_STEP_SEC) / window;
+          const v = prev[q] - move;
+          if (v > bestV) {
+            bestV = v;
+            bestS = q;
+          }
+        }
+        cur[s] = emission[i][s] + bestV;
+        from[s] = bestS;
       }
     }
-    const mean = sum / Math.max(1, n);
-    const confidence = mean > 0 ? best / mean : 0;
+    score.push(cur);
+    back.push(from);
+  }
+  let s = 0;
+  for (let q = 1; q < states; q++) if (score[nBars - 1][q] > score[nBars - 1][s]) s = q;
+  const path = new Array<number>(nBars);
+  for (let i = nBars - 1; i >= 0; i--) {
+    path[i] = s;
+    s = back[i][s];
+  }
+  return song.bars.map((_, i): BarDrift => {
+    const secs = secsOf[i];
+    if (!usable[i]) return { bar: i, deltaSec: null, confidence: 0 };
+    const d = delta(path[i]);
     let present = 0;
-    for (const t of secs) if (sampleAt(curve, offsetSec + at + t) >= 0.2 * ref) present++;
-    const clear = confidence >= BAR_MIN_CONFIDENCE && present / secs.length >= 0.6;
-    return { bar: i, deltaSec: clear ? Math.round(at * 1000) / 1000 : null, confidence };
+    for (const t of secs) if (sampleAt(curve, offsetSec + d + t) >= 0.2 * ref) present++;
+    const share = present / secs.length;
+    return { bar: i, deltaSec: share >= PATH_MIN_PRESENT ? Math.round(d * 1000) / 1000 : null, confidence: share };
   });
 }
 
@@ -315,4 +364,67 @@ export function driftJumps(drift: readonly BarDrift[], minJumpSec = JUMP_MIN_SEC
     prev = d;
   }
   return out;
+}
+
+// ---------------------------------------------------------------- one plan instead of many corrections
+
+/** A change of level has to last at least this many confident bars to count (a single odd bar is the player, not the song). */
+export const JUMP_PERSIST_BARS = 3;
+
+export interface DriftPlan {
+  /** Seconds the audio gains (+) or loses (−) on the text per bar: a tempo that is a little off. */
+  slopePerBar: number;
+  /** Offset of the first stretch once that slope is removed (seconds, + = audio later). */
+  interceptSec: number;
+  /** Lasting level changes left after removing the slope: bars whose length really differs. */
+  jumps: DriftJump[];
+}
+
+function median(values: readonly number[]): number {
+  if (values.length === 0) return 0;
+  const v = [...values].sort((x, y) => x - y);
+  const mid = v.length >> 1;
+  return v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
+}
+
+/**
+ * Reads the bar-by-bar drift as «a steady slope (tempo a bit off) + a few lasting steps (bars of
+ * different length) + noise». The slope is the median bar-to-bar change, which a few steps do not
+ * move; after removing it only level changes that persist for JUMP_PERSIST_BARS confident bars on
+ * each side are reported (one per cluster, at its sharpest point). Noise and one-off bars disappear.
+ */
+export function planDrift(drift: readonly BarDrift[], minJumpSec = JUMP_MIN_SEC): DriftPlan {
+  const conf = drift.filter((d): d is BarDrift & { deltaSec: number } => d.deltaSec !== null);
+  if (conf.length < 3) return { slopePerBar: 0, interceptSec: 0, jumps: [] };
+  const diffs: number[] = [];
+  for (let m = 1; m < conf.length; m++) {
+    const gap = conf[m].bar - conf[m - 1].bar;
+    if (gap >= 1 && gap <= 2) diffs.push((conf[m].deltaSec - conf[m - 1].deltaSec) / gap);
+  }
+  const slope = median(diffs);
+  const e = conf.map((d) => d.deltaSec - slope * d.bar);
+  const candidates: Array<{ m: number; diff: number }> = [];
+  for (let m = 1; m < conf.length; m++) {
+    const before = e.slice(Math.max(0, m - JUMP_PERSIST_BARS), m);
+    const after = e.slice(m, m + JUMP_PERSIST_BARS);
+    if (before.length < 2 || after.length < 2) continue;
+    const diff = median(after) - median(before);
+    if (Math.abs(diff) >= minJumpSec) candidates.push({ m, diff });
+  }
+  const jumps: DriftJump[] = [];
+  let cluster: Array<{ m: number; diff: number }> = [];
+  const flush = (): void => {
+    if (cluster.length === 0) return;
+    const top = cluster.reduce((a, b) => (Math.abs(b.diff) > Math.abs(a.diff) ? b : a));
+    jumps.push({ fromBar: conf[top.m - 1].bar, toBar: conf[top.m].bar, culpritBar: conf[top.m].bar - 1, jumpSec: top.diff });
+    cluster = [];
+  };
+  for (const c of candidates) {
+    if (cluster.length > 0 && c.m - cluster[cluster.length - 1].m > 1) flush();
+    cluster.push(c);
+  }
+  flush();
+  const firstJumpAt = jumps.length > 0 ? jumps[0].toBar : Infinity;
+  const head = conf.map((d, i) => ({ bar: d.bar, v: e[i] })).filter((x) => x.bar < firstJumpAt).map((x) => x.v);
+  return { slopePerBar: slope, interceptSec: median(head.length > 0 ? head : e), jumps };
 }

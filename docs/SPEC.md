@@ -1314,3 +1314,23 @@ sincronía» (`barDrift` / `driftJumps` en `src/dsp/syncFit.ts`):
   (X = pulsos·60 / (duración del texto + salto)), con «Deshacer». No se ofrece si el compás está en
   una línea con `x<n>` o en una sección reutilizada (se indica cómo hacerlo a mano). Orden
   recomendado: primero «Ajustar automáticamente» (inicio y tempo global), luego esta herramienta.
+
+### 22.4 «Seguir el audio» (un tempo por línea; la forma sencilla de arreglar muchos desfases)
+
+Una persona no toca a tempo exacto: con un único inicio/tempo los desfases suben y bajan a lo largo
+de la canción y corregirlos compás a compás es interminable (y el desfase de un compás suelto es
+ruido). `src/dsp/tempoMap.ts` (`followAudio`) sigue la grabación **una sola vez**:
+- Primero un ajuste global (22.2) para centrar inicio y tempo medio.
+- El texto se divide en tramos = líneas de texto. El inicio de cada tramo es un «ancla» en el audio;
+  las anclas se eligen **todas a la vez** (programación dinámica, paso 10 ms, ±0,8 s) para que los
+  golpes del texto caigan sobre los ataques, con un pequeño coste por alejarse del tempo escrito
+  (±10 % por línea como máximo). La primera ancla no se mueve más de medio pulso.
+- Tempo de cada tramo = sus pulsos × 60 / (tiempo entre sus dos anclas). Las líneas con `x<n>` o
+  repetidas por secciones no se pueden retemporizar y conservan su duración escrita.
+- Vista previa («Golpes que encajan: X % → Y %»); «Aplicar» (`applyTempoMap`, `src/song/grid.ts`)
+  mueve el inicio, sustituye los `tempo:` de mitad de canción por uno antes de cada línea cuyo tempo
+  cambie ≥ 0,15 bpm y se puede deshacer. Con una grabación simulada que cambia de tempo (±1 %/compás)
+  las anclas quedan a ~6 ms (máx. 17 ms) de la verdad. Las correcciones por compás de 22.3 quedan
+  como herramienta avanzada.
+- `barDrift` pasó a ser un camino único (Viterbi) en lugar de una búsqueda por compás: un compás
+  ruidoso sigue a sus vecinos en vez de saltar a un pulso vecino.

@@ -108,7 +108,8 @@ import {
 } from '../../music/simplify';
 import { createChordGrid } from '../chordGrid';
 import { createBarCheck } from '../barCheck';
-import { parseGrid, retimeBar, serializeGrid } from '../../song/grid';
+import { applyTempoMap, parseGrid, retimeBar, serializeGrid } from '../../song/grid';
+import { followAudio, type Stretch, type TempoMap } from '../../dsp/tempoMap';
 import { barDrift, driftJumps, fitSync, type DriftJump, type SyncFit } from '../../dsp/syncFit';
 import { parseSong } from '../../song/parser';
 import { beatToSec, secToBeat, songDurationSec } from '../../song/tempo';
@@ -1136,6 +1137,9 @@ export const editorScreen: Screen = {
       autoSync: { onRun: () => runAutoSync(), onApply: () => applyAutoSync(), onDiscard: () => discardAutoSync() },
       onAnalyzeDrift: () => runDrift(),
       onFixJump: (j) => fixJump(j),
+      onFollowRun: () => runFollow(),
+      onFollowApply: () => applyFollow(),
+      onFollowDiscard: () => discardFollow(),
       getPlayBeat: () => {
         const sec = gridPlaySec();
         return gridPlay && sec !== null ? secToBeat(gridPlay.song.tempoSegments, Math.max(0, sec - gridView.getVisualDelaySec())) : null;
@@ -1729,6 +1733,121 @@ export const editorScreen: Screen = {
 
     function discardAutoSync(): void {
       showFit(null);
+    }
+
+    // ------------------------------------------------------------ «Seguir el audio»
+
+    interface PendingFollow {
+      /** The text this was computed for (the result is void once it changes). */
+      source: string;
+      offsetSec: number;
+      entries: Array<{ item: number; bpm: number }>;
+    }
+    let pendingFollow: PendingFollow | null = null;
+
+    /** The song cut into stretches = the text lines, and which of them can take a tempo of their own. */
+    function buildStretches(song: Song, chart: ReturnType<typeof parseGrid>): { stretches: Stretch[]; lines: number[]; skipped: number } {
+      const raw: Array<{ line: number; fromBar: number; toBar: number }> = [];
+      song.bars.forEach((b, i) => {
+        const line = b.srcLine ?? -1;
+        const last = raw[raw.length - 1];
+        if (last && last.line === line) last.toBar = i + 1;
+        else raw.push({ line, fromBar: i, toBar: i + 1 });
+      });
+      const seen = new Map<number, number>();
+      for (const r of raw) seen.set(r.line, (seen.get(r.line) ?? 0) + 1);
+      let skipped = 0;
+      const stretches: Stretch[] = raw.map((r) => {
+        const item = chart.items[r.line - 1];
+        const unique = r.line > 0 && seen.get(r.line) === 1 && !!item && item.kind === 'bars';
+        const plain = unique && item.kind === 'bars' && item.repeat === 1 && item.bars.length === r.toBar - r.fromBar;
+        if (!plain) skipped++;
+        return { fromBar: r.fromBar, toBar: r.toBar, retimable: plain };
+      });
+      return { stretches, lines: raw.map((r) => r.line), skipped };
+    }
+
+    function discardFollow(): void {
+      pendingFollow = null;
+      checkView.setFollow(null);
+    }
+
+    /** Follows the recording: a global fit first (offset and overall tempo), then a tempo for every line. */
+    function runFollow(): void {
+      if (!audio || !backing || busy) return;
+      stopGridPlay();
+      pendingFollow = null;
+      checkView.setFollow(null, true);
+      window.setTimeout(() => {
+        if (unmounted || !audio || !backing) return;
+        const source = textarea.value;
+        const song = analysis.song;
+        const samples = backing.monoSamples();
+        let offset = audio.offsetSec;
+        let mapSong = song;
+        const fit = fitSync({
+          samples,
+          sampleRate,
+          offsetSec: offset,
+          segments: song.tempoSegments,
+          strikes: song.events.map((e) => e.time),
+          beatSec: song.tempo > 0 ? 60 / song.tempo : 0.5,
+          allowTempo: song.tempoSegments.length === 1,
+        });
+        if (fit.ok) {
+          offset += fit.deltaSec;
+          if (fit.tempoFactor !== 1 && song.tempoSegments.length === 1) {
+            mapSong = analyzeSource(rewriteHeader(source, 'tempo', String(Math.round((song.tempo / fit.tempoFactor) * 100) / 100)), id).song;
+          }
+        }
+        const chart = parseGrid(source);
+        const { stretches, lines, skipped } = buildStretches(mapSong, chart);
+        if (stretches.every((s) => !s.retimable)) {
+          checkView.setFollow({ text: 'Ninguna línea del texto se puede ajustar por separado (todas se repiten). Escribe las repeticiones como compases sueltos en la vista Texto.', canApply: false, bad: true });
+          return;
+        }
+        const map: TempoMap = followAudio(samples, sampleRate, offset, mapSong, stretches);
+        if (!map.ok) {
+          checkView.setFollow({ text: map.reason, canApply: false, bad: true });
+          return;
+        }
+        const entries = stretches
+          .map((st, i) => ({ item: lines[i] - 1, bpm: map.bpm[i], keep: st.retimable || lines.filter((l) => l === lines[i]).length === 1 }))
+          .filter((e) => e.keep && e.item >= 0)
+          .sort((a, b) => a.item - b.item)
+          .map(({ item, bpm }) => ({ item, bpm }));
+        pendingFollow = { source, offsetSec: offset + map.anchors[0], entries };
+        const before = Math.round((fit.ok ? fit.before : map.before) * 100);
+        const after = Math.round(map.after * 100);
+        const changes = Math.max(0, stretches.filter((s) => s.retimable).length);
+        checkView.setFollow({
+          text:
+            `Se pondrá un tempo a cada línea (${changes} líneas) y se moverá el inicio. Golpes que encajan: ${before} % → ${after} % (de ${map.strikes}).` +
+            (skipped > 0 ? ` ${skipped} tramo${skipped === 1 ? '' : 's'} con repeticiones se deja${skipped === 1 ? '' : 'n'} como está.` : '') +
+            (after <= before ? ' No mejora el encaje: puede que el patrón de rasgueo no sea el de la canción.' : ''),
+          canApply: after > before,
+          bad: after <= before,
+        });
+      }, 30);
+    }
+
+    function applyFollow(): void {
+      const p = pendingFollow;
+      if (!p || !audio) return;
+      if (p.source !== textarea.value) {
+        discardFollow();
+        checkView.setFollow({ text: 'El texto ha cambiado desde el análisis: vuelve a pulsar «Seguir el audio».', canApply: false, bad: true });
+        return;
+      }
+      stopGridPlay();
+      const chart = parseGrid(textarea.value);
+      applyTempoMap(chart, p.entries);
+      applyText(serializeGrid(chart));
+      setOffset(p.offsetSec);
+      pendingFollow = null;
+      checkView.setFollow(null);
+      if (editMode === 'check') syncCheck();
+      runDrift();
     }
 
     /** Bar-by-bar analysis of the whole audio: shows where the audio stops following the grid. */

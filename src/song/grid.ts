@@ -431,6 +431,46 @@ export function retimeBar(chart: GridChart, itemIndex: number, barIndex: number,
   return true;
 }
 
+/** Tempo changes smaller than this (bpm) are not written between stretches: they would add noise, not accuracy. */
+export const TEMPO_MAP_MIN_CHANGE = 0.15;
+
+/**
+ * Writes a tempo for every stretch of the song: the mid-song `tempo:` headers are replaced by one
+ * header before each line (`entries[].item`) whose tempo differs from the one in effect, and the
+ * leading `tempo:` takes the first stretch. `entries` are in text order. Returns the number of
+ * headers written.
+ */
+export function applyTempoMap(chart: GridChart, entries: ReadonlyArray<{ item: number; bpm: number }>): number {
+  if (entries.length === 0) return 0;
+  const firstContent = chart.items.findIndex((it) => it.kind === 'section' || it.kind === 'bars' || it.kind === 'raw');
+  const start = firstContent < 0 ? chart.items.length : firstContent;
+  // Drop the mid-song tempo headers, remembering where every old item lands.
+  const newIndex: number[] = [];
+  const kept: GridItem[] = [];
+  chart.items.forEach((it, i) => {
+    const drop = i > start && it.kind === 'header' && it.key === 'tempo';
+    newIndex[i] = kept.length;
+    if (!drop) kept.push(it);
+  });
+  chart.items = kept;
+  const fmt = (v: number): string => String(Math.round(v * 100) / 100);
+  setHeader(chart, 'tempo', fmt(entries[0].bpm));
+  // setHeader may have inserted a leading header: shift by the difference in the leading block.
+  const shift = chart.items.findIndex((it) => it.kind === 'section' || it.kind === 'bars' || it.kind === 'raw') - newIndex[start];
+  let last = entries[0].bpm;
+  const inserts: Array<{ at: number; bpm: number }> = [];
+  for (let n = 1; n < entries.length; n++) {
+    const e = entries[n];
+    if (Math.abs(e.bpm - last) < TEMPO_MAP_MIN_CHANGE) continue;
+    inserts.push({ at: newIndex[e.item] + (Number.isFinite(shift) ? shift : 0), bpm: e.bpm });
+    last = e.bpm;
+  }
+  for (let k = inserts.length - 1; k >= 0; k--) {
+    chart.items.splice(inserts[k].at, 0, { kind: 'header', key: 'tempo', value: fmt(inserts[k].bpm), comment: '', orig: null });
+  }
+  return inserts.length + 1;
+}
+
 /** Index of the last bar line of the chart, or -1. */
 export function lastBarsIndex(chart: GridChart): number {
   for (let i = chart.items.length - 1; i >= 0; i--) if (chart.items[i].kind === 'bars') return i;
