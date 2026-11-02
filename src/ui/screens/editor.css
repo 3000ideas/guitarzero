@@ -1220,3 +1220,265 @@
   gap: 8px 12px;
   margin: 8px 0;
 }
+
+/* ---------------------------------------------------------------- Studio layout of the grid (desktop) */
+.chord-grid-editor .grid-transport {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.chord-grid-editor .grid-transport-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+
+.chord-grid-editor .grid-play {
+  min-width: 112px;
+}
+
+.chord-grid-editor .grid-stop {
+  min-width: 40px;
+}
+
+.chord-grid-editor .grid-time {
+  font-variant-numeric: tabular-nums;
+  min-width: 6.5em;
+  font-size: 14px;
+}
+
+.chord-grid-editor .grid-seek {
+  flex: 1 1 160px;
+  min-width: 120px;
+  min-height: 24px;
+}
+
+.chord-grid-editor .grid-audio-hint {
+  display: none;
+}
+
+.chord-grid-editor .grid-viewer-slot:empty {
+  display: none;
+}
+
+.studio-viewer {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+  background: #12151c;
+}
+
+.studio-canvas {
+  display: block;
+  cursor: pointer;
+}
+
+@media (min-width: 1100px) {
+  .chord-grid-editor {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 300px;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-areas:
+      'transport transport'
+      'viewer viewer'
+      'bars pad';
+    gap: 8px 12px;
+    height: calc(100vh - 150px);
+    min-height: 560px;
+  }
+
+  .chord-grid-editor .grid-transport {
+    grid-area: transport;
+    position: relative;
+    z-index: 6;
+  }
+
+  .chord-grid-editor .grid-viewer-slot {
+    grid-area: viewer;
+  }
+
+  .chord-grid-editor .grid-body {
+    grid-area: bars;
+    overflow-y: auto;
+    padding-right: 6px;
+    gap: 6px;
+    min-height: 0;
+  }
+
+  .chord-grid-editor .grid-pad {
+    grid-area: pad;
+    position: static;
+    margin: 0;
+    border-radius: 12px;
+    overflow-y: auto;
+    box-shadow: none;
+    min-height: 0;
+  }
+
+  .chord-grid-editor .pad-scroll {
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+
+  /* The sync panel opens over the content instead of pushing the strip down. */
+  .chord-grid-editor .grid-sync {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    width: min(560px, 100%);
+    background: var(--panel);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+  }
+
+  .chord-grid-editor .grid-sync:not([open]) {
+    position: static;
+    width: auto;
+    flex-basis: auto;
+    padding: 0;
+    border: 0;
+    background: none;
+    box-shadow: none;
+  }
+
+  .chord-grid-editor .grid-transport {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .chord-grid-editor .grid-transport-row {
+    flex: 1 1 auto;
+    flex-wrap: nowrap;
+  }
+
+  /* Compact bars: many per row, so the whole song fits without a long scroll. */
+  .chord-grid-editor .grid-bars {
+    grid-template-columns: repeat(auto-fill, minmax(calc(var(--cells, 4) * 27px + 12px), 1fr));
+    gap: 6px;
+  }
+
+  .chord-grid-editor .grid-bar {
+    padding: 12px 3px 3px;
+    border-radius: 8px;
+  }
+
+  .chord-grid-editor .grid-cells {
+    gap: 1px;
+  }
+
+  .chord-grid-editor .grid-cell {
+    min-height: 34px;
+    padding: 0;
+    border-radius: 5px;
+  }
+
+  .chord-grid-editor .grid-chord {
+    font-size: 13px;
+    letter-spacing: -0.02em;
+  }
+
+  .chord-grid-editor .grid-cell.is-long .grid-chord {
+    font-size: 10px;
+  }
+
+  .chord-grid-editor .grid-beat {
+    font-size: 8px;
+  }
+
+  .chord-grid-editor .grid-section {
+    margin-top: 6px;
+    gap: 6px;
+  }
+
+  .chord-grid-editor .grid-section-name {
+    min-height: 30px;
+    font-size: 14px;
+  }
+
+  .chord-grid-editor .grid-row {
+    gap: 4px;
+  }
+
+  .chord-grid-editor .grid-row-tools {
+    gap: 6px;
+  }
+
+  .chord-grid-editor .grid-lyric {
+    flex: 1 1 8em;
+    min-height: 28px;
+    font-size: 13px;
+  }
+
+  .chord-grid-editor .grid-head {
+    padding: 4px 10px;
+  }
+
+  .chord-grid-editor .grid-add-row {
+    padding: 6px 0 12px;
+  }
+}
+
+@media (min-width: 1100px) {
+  /* Use the width of a big screen: the studio needs room for the strip and the bars. */
+  .screen.editor {
+    max-width: min(1760px, 100%);
+  }
+
+  .editor .editor-body {
+    grid-template-columns: minmax(0, 1fr) 340px;
+  }
+}
+
+@media (min-width: 1100px) {
+  /* One line of bars per text line, with its small tools to the right (the lyric field opens on hover). */
+  .chord-grid-editor .grid-row {
+    position: relative;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+  }
+
+  .chord-grid-editor .grid-row .grid-bars {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .chord-grid-editor .grid-row .grid-row-tools {
+    flex: 0 0 96px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .chord-grid-editor .grid-row .grid-comment {
+    display: none;
+  }
+
+  .chord-grid-editor .grid-row .grid-lyric {
+    display: none;
+    position: absolute;
+    left: 0;
+    bottom: -4px;
+    width: 55%;
+    z-index: 4;
+    background: var(--panel);
+  }
+
+  .chord-grid-editor .grid-row.has-lyric .grid-lyric,
+  .chord-grid-editor .grid-row:hover .grid-lyric,
+  .chord-grid-editor .grid-row:focus-within .grid-lyric {
+    display: block;
+  }
+
+  .chord-grid-editor .grid-row.has-lyric {
+    padding-bottom: 20px;
+  }
+
+  .chord-grid-editor .grid-row .grid-issue {
+    flex-basis: 100%;
+  }
+}

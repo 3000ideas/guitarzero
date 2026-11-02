@@ -44,8 +44,16 @@ import {
 export interface ChordGridOpts {
   /** Called with the new song text after every change made in the grid. */
   onChange: (source: string) => void;
-  /** The «Escuchar» button was pressed (the host plays or stops the song). */
+  /** The play / pause button was pressed. */
   onTogglePlay?: () => void;
+  /** The stop button was pressed (the host goes back to the start of the selected bar). */
+  onStop?: () => void;
+  /** The position slider moved to `sec` (song seconds). */
+  onSeek?: (sec: number) => void;
+  /** A cell was selected by the user (the host moves the playback position there). */
+  onSelectCell?: (pos: { item: number; bar: number; cell: number }) => void;
+  /** The loop choice changed. */
+  onLoopChange?: () => void;
   /** The «qué escuchar» choice changed (the host stops a playback in progress). */
   onSourceChange?: () => void;
   /** The «inicio de la canción» (where bar 1 sits in the audio) was nudged by `deltaSec`. */
@@ -59,10 +67,17 @@ export const VISUAL_DELAY_KEY = 'gz.gridVisualMs';
 export const VISUAL_DELAY_LIMIT_MS = 500;
 
 export type PlaySource = 'chords' | 'song' | 'both';
+/** What «Escuchar» repeats: nothing, the selected bar, or the section of the selected bar. */
+export type LoopMode = 'off' | 'bar' | 'section';
 
 export interface ChordGridView {
   el: HTMLElement;
   autoSync: AutoSyncBox;
+  /** Where the host mounts the studio viewer (between the transport bar and the bars). */
+  viewerSlot: HTMLElement;
+  /** Current / total position shown in the transport bar and its slider (song seconds). */
+  setTime(curSec: number, totalSec: number): void;
+  getLoop(): LoopMode;
   /** The text changed (or its diagnostics did): re-read it. Cheap when it is the grid's own text. */
   setSource(source: string, issues: readonly ParseError[]): void;
   /** Marks the cell being played (null = none) without redrawing the grid. */
@@ -133,7 +148,14 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
   let playhead: Sel | null = null;
   let lastPlayheadBar = '';
   let audioReady = false;
-  const playBtn = h('button.btn.btn-sm.grid-play', { type: 'button', title: 'Reproduce la canción con acordes y marca por dónde va', onclick: () => opts.onTogglePlay?.() }, '▶ Escuchar') as HTMLButtonElement;
+  const playBtn = h('button.btn.btn-sm.btn-primary.grid-play', { type: 'button', title: 'Reproducir / pausar (espacio)', onclick: () => opts.onTogglePlay?.() }, '▶ Escuchar') as HTMLButtonElement;
+  const stopBtn = h('button.btn.btn-sm.grid-stop', { type: 'button', title: 'Parar y volver al compás seleccionado', onclick: () => opts.onStop?.() }, '■') as HTMLButtonElement;
+  const timeEl = h('span.grid-time', null, '0:00 / 0:00');
+  const seekEl = h('input', { type: 'range', min: '0', max: '1', step: '0.05', value: '0', class: 'grid-seek', 'aria-label': 'Posición' }) as HTMLInputElement;
+  seekEl.addEventListener('input', () => opts.onSeek?.(Number(seekEl.value)));
+  const loopSel = h('select', { 'aria-label': 'Repetir' }) as HTMLSelectElement;
+  for (const [value, label] of [['off', 'Sin bucle'], ['bar', 'Repetir el compás'], ['section', 'Repetir la sección']]) loopSel.appendChild(h('option', { value }, label));
+  loopSel.addEventListener('change', () => opts.onLoopChange?.());
   const sourceSel = h('select', { 'aria-label': 'Qué escuchar' }) as HTMLSelectElement;
   const sourceOptions: Array<[PlaySource, string]> = [
     ['chords', 'Solo acordes'],
@@ -141,7 +163,7 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
     ['both', 'Canción + acordes'],
   ];
   for (const [value, label] of sourceOptions) sourceSel.appendChild(h('option', { value }, label));
-  const audioHint = h('span.muted.small', null, 'Empieza en el compás seleccionado');
+  const audioHint = h('span.muted.small.grid-audio-hint', null, 'Empieza en el compás seleccionado');
   let visualMs = 0;
   try {
     const v = Number(localStorage.getItem(VISUAL_DELAY_KEY));
@@ -150,6 +172,7 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
     /* storage unavailable: the delay lasts for this screen */
   }
   const metroBox = h('input', { type: 'checkbox', 'aria-label': 'Clic de metrónomo' }) as HTMLInputElement;
+  const metroLabel = h('label.grid-check', { title: 'Un clic en cada pulso para oír si la cuadrícula cae en los golpes' }, metroBox, h('span', null, 'Clic'));
   const offsetValue = h('strong.sync-value', null, '—');
   const visualValue = h('strong.sync-value', null, `${visualMs} ms`);
   const stepBtn = (label: string, title: string, fn: () => void): HTMLElement =>
@@ -168,14 +191,13 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
   const syncBox = h(
     'details.grid-sync',
     null,
-    h('summary', null, 'Ajustar la sincronía'),
+    h('summary', null, '⚙ Sincronía'),
     autoSync.el,
     h(
       'p.muted.small',
       null,
       'Activa el clic y escucha «Canción + acordes»: el clic cae justo en cada pulso de la cuadrícula. Si el clic suena ANTES que el golpe de la canción, pulsa «+» (retrasa la cuadrícula); si suena DESPUÉS, pulsa «−». Cuando clic y golpe coincidan, la cuadrícula está bien alineada con la canción.',
     ),
-    h('label.grid-check', null, metroBox, h('span', null, 'Clic de metrónomo en cada pulso')),
     h(
       'div.sync-row',
       null,
@@ -196,12 +218,13 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
       h('span.muted.small', null, 'Solo mueve la marca, no el sonido: úsalo si la marca va por delante o por detrás de lo que oyes (p. ej. con auriculares Bluetooth).'),
     ),
   );
-  const transport = h('div.grid-transport', null, playBtn, sourceSel, audioHint, syncBox);
+  const transport = h('div.grid-transport', null, h('div.grid-transport-row', null, playBtn, stopBtn, timeEl, seekEl, sourceSel, metroLabel, loopSel), audioHint, syncBox);
+  const viewerSlot = h('div.grid-viewer-slot');
   sourceSel.addEventListener('change', () => opts.onSourceChange?.());
   const root = h('div.chord-grid-editor');
   const body = h('div.grid-body');
   const pad = h('div.grid-pad');
-  root.append(transport, body, pad);
+  root.append(transport, viewerSlot, body, pad);
 
   // ---------------------------------------------------------------- state helpers
 
@@ -244,12 +267,13 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
     return !!it && it.kind === 'bars' && !!it.bars[s.bar] && s.cell >= 0 && s.cell < it.bars[s.bar].cells.length;
   }
 
-  function select(next: Sel | null): void {
+  function select(next: Sel | null, notify = true): void {
     sel = next && validSel(next) ? next : null;
     notice = '';
     render();
     const el = body.querySelector('.grid-cell.is-selected');
     if (el && 'scrollIntoView' in el) (el as HTMLElement).scrollIntoView({ block: 'nearest' });
+    if (notify && sel) opts.onSelectCell?.({ ...sel });
   }
 
   function moveCell(delta: number): void {
@@ -431,7 +455,7 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
         commit(false);
       }, { placeholder: 'letra (opcional)', class: 'grid-lyric' }),
     );
-    return h('section.grid-row', null, bars, tools, issueFor(item + 1));
+    return h('section.grid-row', { class: lyric !== '' ? 'has-lyric' : '' }, bars, tools, issueFor(item + 1));
   }
 
   function addBarTo(item: number): void {
@@ -826,7 +850,13 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
       const barKey = `${pos.item}:${pos.bar}`;
       if (barKey !== lastPlayheadBar) {
         lastPlayheadBar = barKey;
-        el.scrollIntoView({ block: 'nearest' });
+        // Keep the playing bar in the middle band of the list (scroll the list itself, never the page).
+        const row = el.closest('.grid-bar') as HTMLElement | null;
+        if (row && body.scrollHeight > body.clientHeight) {
+          const top = row.offsetTop - body.offsetTop;
+          const rel = top - body.scrollTop;
+          if (rel < body.clientHeight * 0.15 || rel > body.clientHeight * 0.65) body.scrollTo({ top: Math.max(0, top - body.clientHeight * 0.35), behavior: 'smooth' });
+        }
       }
     },
     getMetronome() {
@@ -848,7 +878,7 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
       if (available && !wasAvailable) sourceSel.value = 'both'; // a track was just loaded: compare it with the chords
       if (!available && sourceSel.value !== 'chords') sourceSel.value = 'chords';
       audioHint.textContent = available
-        ? 'Empieza en el compás seleccionado · compara tu canción con los acordes'
+        ? 'Empieza en el compás seleccionado'
         : 'Carga un audio en «Pista de audio» (abajo) para compararlo con los acordes';
     },
     selectCell(pos) {
@@ -858,8 +888,18 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
       return validSel(sel) ? { ...sel } : null;
     },
     setPlaying(playing) {
-      playBtn.textContent = playing ? '■ Parar' : '▶ Escuchar';
-      playBtn.classList.toggle('btn-primary', playing);
+      playBtn.textContent = playing ? '⏸ Pausa' : '▶ Escuchar';
+      playBtn.classList.toggle('is-playing', playing);
+    },
+    viewerSlot,
+    setTime(curSec, totalSec) {
+      const fmt = (s: number): string => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+      timeEl.textContent = `${fmt(Math.max(0, curSec))} / ${fmt(Math.max(0, totalSec))}`;
+      if (Number(seekEl.max) !== Math.max(1, Math.round(totalSec * 20) / 20)) seekEl.max = String(Math.max(1, Math.round(totalSec * 20) / 20));
+      if (document.activeElement !== seekEl) seekEl.value = String(Math.max(0, Math.min(totalSec, curSec)));
+    },
+    getLoop() {
+      return loopSel.value as LoopMode;
     },
     dispose() {
       disposed = true;

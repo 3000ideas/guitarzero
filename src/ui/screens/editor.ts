@@ -108,6 +108,8 @@ import {
 } from '../../music/simplify';
 import { createChordGrid } from '../chordGrid';
 import { createBarCheck } from '../barCheck';
+import { createStudioViewer } from '../studioViewer';
+import { energyAttacks } from '../../song/barCheck';
 import { applyTempoMap, expandRepeats, parseGrid, restrumBar, retimeBar, serializeGrid, startPartAt, strumAt } from '../../song/grid';
 import { followAudio, type Stretch, type TempoMap } from '../../dsp/tempoMap';
 import type { FollowAction } from '../barCheck';
@@ -1127,7 +1129,23 @@ export const editorScreen: Screen = {
 
     // Two ways to edit the same text: the text itself or the chord grid (SPEC section 22).
     let editMode: EditorMode = loadEditorMode();
-    const gridView = createChordGrid({ onChange: (next) => applyText(next), onTogglePlay: () => void toggleGridPlay(), onSourceChange: () => stopGridPlay(), onNudgeOffset: (d) => onGridNudge(d), autoSync: { onRun: () => runAutoSync(), onApply: () => applyAutoSync(), onDiscard: () => discardAutoSync() } });
+    const gridView = createChordGrid({ onChange: (next) => applyText(next), onTogglePlay: () => void toggleGridPlay(), onSourceChange: () => stopGridPlay(), onNudgeOffset: (d) => onGridNudge(d), autoSync: { onRun: () => runAutoSync(), onApply: () => applyAutoSync(), onDiscard: () => discardAutoSync() },
+      onStop: () => studioStop(),
+      onSeek: (sec) => studioSeek(sec),
+      onSelectCell: (pos) => studioSelect(pos),
+      onLoopChange: () => studioLoopChanged(),
+    });
+    const studio = createStudioViewer({
+      getPlayBeat: () => {
+        const sec = gridPlaySec();
+        return gridPlay && sec !== null ? secToBeat(gridPlay.song.tempoSegments, Math.max(0, sec - gridView.getVisualDelaySec())) : null;
+      },
+      onPickBar: (barIndex) => {
+        const b = analysis.song.bars[barIndex];
+        if (b && b.srcLine !== undefined && b.srcBar !== undefined) gridView.selectCell({ item: b.srcLine - 1, bar: b.srcBar, cell: 0 });
+      },
+    });
+    gridView.viewerSlot.appendChild(studio.el);
     const textTab = h('button.mode-tab', { type: 'button', role: 'tab', onclick: () => setEditMode('text') }, 'Texto') as HTMLButtonElement;
     const gridTab = h('button.mode-tab', { type: 'button', role: 'tab', onclick: () => setEditMode('grid') }, 'Cuadrícula') as HTMLButtonElement;
     const checkTab = h('button.mode-tab', { type: 'button', role: 'tab', onclick: () => setEditMode('check') }, 'Comprobar') as HTMLButtonElement;
@@ -1494,6 +1512,7 @@ export const editorScreen: Screen = {
       textTab.setAttribute('aria-selected', String(text));
       if (grid) {
         gridView.setSource(textarea.value, analysis.issues);
+        syncStudio();
         if (previous === 'check') {
           const b = analysis.song.bars[checkView.getBar()];
           if (b && b.srcLine !== undefined && b.srcBar !== undefined) gridView.selectCell({ item: b.srcLine - 1, bar: b.srcBar, cell: 0 });
@@ -1506,6 +1525,137 @@ export const editorScreen: Screen = {
         checkView.setBar(start);
       }
     }
+
+    // ------------------------------------------------------------ studio (transport + viewer)
+
+    /** Song time (s) where the next «Escuchar» starts when nothing plays (set by pausing, seeking or choosing a bar). */
+    let studioPosSec: number | null = null;
+    let attacksCache: { samples: Float32Array; list: number[] } | null = null;
+
+    function songTotalSec(): number {
+      const s = analysis.song;
+      return s.bars.length > 0 ? beatToSec(s.tempoSegments, s.totalBeats) : 0;
+    }
+
+    function barStartSec(barIndex: number): number {
+      const b = analysis.song.bars[barIndex];
+      return b ? beatToSec(analysis.song.tempoSegments, b.startBeat) : 0;
+    }
+
+    /** Index of the expanded bar that holds song time `sec`. */
+    function barIndexAtSec(sec: number): number {
+      const s = analysis.song;
+      if (s.bars.length === 0) return 0;
+      const beat = secToBeat(s.tempoSegments, Math.max(0, sec));
+      let lo = 0;
+      let hi = s.bars.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (s.bars[mid].startBeat <= beat) lo = mid;
+        else hi = mid - 1;
+      }
+      return lo;
+    }
+
+    /** Where the position of the studio is right now: the playing clock, else the paused / chosen position, else the selected bar. */
+    function studioCurrentSec(): number {
+      const playingSec = gridPlaySec();
+      if (playingSec !== null) return Math.max(0, playingSec);
+      return studioPosSec ?? barStartSec(selectedBarIndex());
+    }
+
+    function refreshStudioPosition(): void {
+      const cur = studioCurrentSec();
+      gridView.setTime(cur, songTotalSec());
+      studio.setFocusBar(barIndexAtSec(cur));
+    }
+
+    /** Gives the studio viewer the current song and the loaded audio (and its attack list, computed once per track). */
+    function syncStudio(): void {
+      let data = null;
+      if (audio && backing) {
+        const samples = backing.monoSamples();
+        if (!attacksCache || attacksCache.samples !== samples) attacksCache = { samples, list: energyAttacks(samples, sampleRate, 0, samples.length / sampleRate) };
+        data = { offsetSec: audio.offsetSec, samples, sampleRate, attacks: attacksCache.list };
+      }
+      studio.setContext(analysis.song, data);
+      refreshStudioPosition();
+    }
+
+    /** The span to repeat for the loop choice of the transport bar (null = no loop). */
+    function studioLoop(): { endSec: number; fromSec: number } | null {
+      const mode = gridView.getLoop();
+      if (mode === 'off') return null;
+      const song = analysis.song;
+      const idx = barIndexAtSec(studioCurrentSec());
+      if (!song.bars[idx]) return null;
+      let a = idx;
+      let b = idx;
+      if (mode === 'section') {
+        const label = song.bars[idx].section;
+        while (a > 0 && song.bars[a - 1].section === label) a--;
+        while (b < song.bars.length - 1 && song.bars[b + 1].section === label) b++;
+      }
+      const last = song.bars[b];
+      return { fromSec: barStartSec(a), endSec: beatToSec(song.tempoSegments, last.startBeat + last.beats) };
+    }
+
+    /** Pauses: the position is kept so «Escuchar» goes on from there. */
+    function studioPause(): void {
+      const sec = gridPlaySec();
+      stopGridPlay();
+      if (sec !== null) studioPosSec = Math.max(0, Math.min(songTotalSec(), sec));
+      refreshStudioPosition();
+    }
+
+    async function studioPlay(): Promise<void> {
+      let from = studioCurrentSec();
+      const loop = studioLoop();
+      if (loop && (from < loop.fromSec || from >= loop.endSec)) from = loop.fromSec;
+      await startGridPlay(from, loop);
+    }
+
+    function studioStop(): void {
+      stopGridPlay();
+      studioPosSec = null;
+      refreshStudioPosition();
+    }
+
+    /** Jumps to `sec`: keeps playing from there when it was playing. */
+    function studioJump(sec: number): void {
+      studioPosSec = Math.max(0, Math.min(songTotalSec(), sec));
+      if (gridPlay) {
+        stopGridPlay();
+        void studioPlay();
+      } else {
+        refreshStudioPosition();
+      }
+    }
+
+    function studioSeek(sec: number): void {
+      studioJump(sec);
+    }
+
+    function studioSelect(pos: { item: number; bar: number; cell: number }): void {
+      const b = analysis.song.bars.find((x) => x.srcLine === pos.item + 1 && x.srcBar === pos.bar);
+      if (b) studioJump(barStartSec(b.index));
+    }
+
+    function studioLoopChanged(): void {
+      if (gridPlay) {
+        const sec = gridPlaySec();
+        stopGridPlay();
+        if (sec !== null) studioPosSec = sec;
+        void studioPlay();
+      }
+    }
+
+    /** Space plays / pauses in the grid and check views (unless the user is typing). */
+    const onSpaceKey = (ev: KeyboardEvent): void => {
+      if (ev.code !== 'Space' || editMode === 'text' || recording || isTypingTarget(ev.target)) return;
+      ev.preventDefault();
+      if (ev.type === 'keydown' && !ev.repeat) void toggleGridPlay();
+    };
 
     // ------------------------------------------------------------ grid playback
 
@@ -1544,6 +1694,7 @@ export const editorScreen: Screen = {
       gridView.setPlayhead(null);
       gridView.setPlaying(false);
       checkView.setPlaying(false);
+      studio.setPlaying(false);
     }
 
     /** Index of the last bar that starts at or before `beat` (bars are in order). */
@@ -1598,10 +1749,13 @@ export const editorScreen: Screen = {
       const last = p.song.bars[p.song.bars.length - 1];
       const beat = secToBeat(p.song.tempoSegments, Math.max(0, sec));
       if (beat >= last.startBeat + last.beats) {
+        studioPosSec = null;
         stopGridPlay();
+        refreshStudioPosition();
         return;
       }
       const bar = p.song.bars[barAtBeat(p.song, beat)];
+      if (editMode === 'grid') gridView.setTime(Math.max(0, sec), songTotalSec());
       if (editMode === 'grid' && bar.srcLine !== undefined && bar.srcBar !== undefined) {
         const cell = Math.min(bar.beats - 1, Math.max(0, Math.floor(beat - bar.startBeat)));
         gridView.setPlayhead({ item: bar.srcLine - 1, bar: bar.srcBar, cell });
@@ -1632,7 +1786,12 @@ export const editorScreen: Screen = {
 
     async function toggleGridPlay(): Promise<void> {
       if (gridPlay) {
-        stopGridPlay();
+        if (editMode === 'grid') studioPause();
+        else stopGridPlay();
+        return;
+      }
+      if (editMode === 'grid') {
+        await studioPlay();
         return;
       }
       if (editMode === 'check') {
@@ -1691,6 +1850,7 @@ export const editorScreen: Screen = {
         gridPlay = { bt, original, raf: 0, whenWall, posSec, song, source: textarea.value, ctx, nextBeat, loop };
         gridView.setPlaying(true);
         checkView.setPlaying(true);
+        studio.setPlaying(true);
         gridPlay.raf = requestAnimationFrame(gridPlayTick);
       } catch (err) {
         console.warn('No se pudo reproducir la canción', err);
@@ -2121,6 +2281,7 @@ export const editorScreen: Screen = {
       if (gridPlay && textarea.value !== gridPlay.source) stopGridPlay(); // the audio no longer matches the text
       if (editMode === 'grid') gridView.setSource(textarea.value, analysis.issues);
       if (editMode === 'check') syncCheck();
+      if (editMode === 'grid') syncStudio();
     }
 
     /** The song as it should be persisted right now (text + backing track metadata). */
@@ -2261,6 +2422,7 @@ export const editorScreen: Screen = {
       gridView.autoSync.setAvailable(ready && audio !== null);
       checkView.autoSync.setAvailable(ready && audio !== null);
       if (editMode === 'check') syncCheck();
+      if (editMode === 'grid') syncStudio();
       loadBtn.disabled = busy;
       replaceBtn.disabled = busy;
       removeBtn.disabled = busy;
@@ -2705,6 +2867,7 @@ export const editorScreen: Screen = {
       audio = { ...audio, offsetSec: v };
       gridView.setOffsetInfo(v);
       if (editMode === 'check') syncCheck();
+      if (editMode === 'grid') syncStudio();
       syncGrid();
       scheduleAudioSave();
     }
@@ -3031,6 +3194,8 @@ export const editorScreen: Screen = {
     textarea.addEventListener('keyup', updateCaret);
     textarea.addEventListener('click', updateCaret);
     textarea.addEventListener('select', updateCaret);
+    document.addEventListener('keydown', onSpaceKey);
+    document.addEventListener('keyup', onSpaceKey);
     window.addEventListener('pagehide', flushOnHide);
     document.addEventListener('visibilitychange', onVisibility);
 
@@ -3075,6 +3240,9 @@ export const editorScreen: Screen = {
       if (waveObserver) waveObserver.disconnect();
       else window.removeEventListener('resize', onWaveResize);
       stopGridPlay();
+      document.removeEventListener('keydown', onSpaceKey);
+      document.removeEventListener('keyup', onSpaceKey);
+      studio.dispose();
       checkView.dispose();
       gridView.dispose();
       waveform.dispose();

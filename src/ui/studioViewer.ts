@@ -1,0 +1,297 @@
+/**
+ * Studio viewer: a few bars of the song as a scrolling strip, to SEE whether what sounds is what
+ * is written. While playing, the strip scrolls under a fixed playhead; paused, it shows the
+ * chosen bar. Layers (top to bottom): the waveform of the audio with the attacks it seems to have
+ * (orange ▲) and the strikes the text asks for (dashed lines), the beat ruler with bar numbers,
+ * the chords as wide boxes and the strum arrows.
+ */
+import type { Song } from '../types';
+import { h } from './dom';
+import { secToBeat } from '../song/tempo';
+import { barCells, barStrums, windowPeaks } from '../song/barCheck';
+import { WAVEFORM_COLORS, STRUM_MARK_COLORS } from './waveform';
+
+export interface StudioAudio {
+  offsetSec: number;
+  samples: Float32Array;
+  sampleRate: number;
+  /** Attack times of the whole audio (seconds), computed once by the host. */
+  attacks: readonly number[];
+}
+
+export interface StudioViewerOpts {
+  /** Beat (absolute) being heard now, or null when nothing plays. */
+  getPlayBeat: () => number | null;
+  /** A bar of the strip was clicked (0-based expanded bar index). */
+  onPickBar: (barIndex: number) => void;
+}
+
+export interface StudioViewer {
+  el: HTMLElement;
+  setContext(song: Song, audio: StudioAudio | null): void;
+  /** Bar shown while nothing plays. */
+  setFocusBar(barIndex: number): void;
+  setPlaying(playing: boolean): void;
+  redraw(): void;
+  dispose(): void;
+}
+
+/** Bars of the strip. */
+export const VIEW_BARS = 4;
+/** Where the playhead sits while playing, as a fraction of the strip width. */
+export const PLAYHEAD_AT = 0.22;
+const HEIGHT = 236;
+const TOP = 18;
+const WAVE_H = 96;
+const RULER_Y = TOP + WAVE_H;
+const CHORD_Y = RULER_Y + 20;
+const CHORD_H = 40;
+const ARROW_Y = CHORD_Y + CHORD_H + 4;
+
+export function createStudioViewer(opts: StudioViewerOpts): StudioViewer {
+  let song: Song | null = null;
+  let audio: StudioAudio | null = null;
+  let focusBar = 0;
+  let playing = false;
+  let raf = 0;
+  let disposed = false;
+  let lastClickMap: Array<{ x0: number; x1: number; bar: number }> = [];
+
+  const canvas = h('canvas', { class: 'studio-canvas', 'aria-label': 'Onda de los compases con los acordes y los golpes' }) as HTMLCanvasElement;
+  const el = h('div.studio-viewer', null, canvas);
+
+  /** Index of the last bar that starts at or before `beat`. */
+  function barAt(beat: number): number {
+    if (!song || song.bars.length === 0) return 0;
+    let lo = 0;
+    let hi = song.bars.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (song.bars[mid].startBeat <= beat) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo;
+  }
+
+  function draw(): void {
+    if (disposed || !song || song.bars.length === 0) return;
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const W = Math.max(320, Math.floor(el.clientWidth || 640));
+    if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(HEIGHT * dpr)) {
+      canvas.width = Math.round(W * dpr);
+      canvas.height = Math.round(HEIGHT * dpr);
+      canvas.style.width = `${W}px`;
+      canvas.style.height = `${HEIGHT}px`;
+    }
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const beatsPerBar = song.bars[Math.min(focusBar, song.bars.length - 1)].beats;
+    const span = beatsPerBar * VIEW_BARS;
+    const playBeat = opts.getPlayBeat();
+    const cur = playBeat !== null ? Math.max(0, playBeat) : song.bars[Math.min(focusBar, song.bars.length - 1)].startBeat;
+    // Playing: the strip scrolls under a fixed playhead. Paused: the chosen bar starts near the left edge.
+    const w0 = playBeat !== null ? cur - PLAYHEAD_AT * span : cur - 0.12 * span;
+    const w1 = w0 + span;
+    const xOf = (beat: number): number => ((beat - w0) / span) * W;
+
+    ctx.fillStyle = WAVEFORM_COLORS.bg;
+    ctx.fillRect(0, 0, W, HEIGHT);
+
+    // Bar shading: the bar being heard (or chosen) a little lighter.
+    const curBar = barAt(cur);
+    const first = Math.max(0, barAt(w0) - 0);
+    lastClickMap = [];
+    for (let i = first; i < song.bars.length; i++) {
+      const b = song.bars[i];
+      if (b.startBeat >= w1) break;
+      const x0 = xOf(b.startBeat);
+      const x1 = xOf(b.startBeat + b.beats);
+      lastClickMap.push({ x0, x1, bar: i });
+      if (i === curBar) {
+        ctx.fillStyle = 'rgba(255,255,255,0.06)';
+        ctx.fillRect(x0, 0, x1 - x0, HEIGHT);
+      }
+    }
+
+    // Waveform.
+    const midY = TOP + WAVE_H / 2;
+    if (audio) {
+      const peaks = windowPeaks(audio.samples, audio.sampleRate, song, audio.offsetSec, w0, w1, W);
+      let top = 0;
+      for (let i = 0; i < W; i++) top = Math.max(top, peaks.max[i], -peaks.min[i]);
+      const gain = top > 0.001 ? 1 / top : 1;
+      ctx.fillStyle = WAVEFORM_COLORS.wave;
+      for (let x = 0; x < W; x++) {
+        const y1 = midY - peaks.max[x] * gain * (WAVE_H / 2 - 2);
+        const y2 = midY - peaks.min[x] * gain * (WAVE_H / 2 - 2);
+        ctx.fillRect(x, y1, 1, Math.max(1, y2 - y1));
+      }
+    } else {
+      ctx.fillStyle = WAVEFORM_COLORS.empty;
+      ctx.font = '13px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Carga un audio en «Pista de audio» para ver su onda aquí', W / 2, midY + 4);
+    }
+    ctx.strokeStyle = WAVEFORM_COLORS.axis;
+    ctx.beginPath();
+    ctx.moveTo(0, midY + 0.5);
+    ctx.lineTo(W, midY + 0.5);
+    ctx.stroke();
+
+    // Beat lines, bar lines and numbers.
+    ctx.textAlign = 'center';
+    for (let k = Math.ceil(w0); k <= w1; k++) {
+      const bi = barAt(k);
+      const bar = song.bars[bi];
+      const isBarStart = bar && Math.abs(bar.startBeat - k) < 1e-9;
+      const x = Math.round(xOf(k)) + 0.5;
+      ctx.strokeStyle = isBarStart ? WAVEFORM_COLORS.bar : WAVEFORM_COLORS.beat;
+      ctx.lineWidth = isBarStart ? 2 : 1;
+      ctx.beginPath();
+      ctx.moveTo(x, TOP);
+      ctx.lineTo(x, HEIGHT - 4);
+      ctx.stroke();
+      ctx.lineWidth = 1;
+      if (bar && k >= 0 && k < song.totalBeats) {
+        const n = k - bar.startBeat + 1;
+        ctx.fillStyle = WAVEFORM_COLORS.barText;
+        ctx.font = '11px system-ui, sans-serif';
+        ctx.fillText(String(n), xOf(k + 0.5), RULER_Y + 14);
+        if (isBarStart) {
+          ctx.textAlign = 'left';
+          ctx.font = 'bold 12px system-ui, sans-serif';
+          ctx.fillStyle = '#e6edf7';
+          ctx.fillText(`${bi + 1}${bar.section ? ` · ${bar.section}` : ''}`, x + 4, 13);
+          ctx.textAlign = 'center';
+        }
+      }
+    }
+
+    // Chords as wide boxes (a chord lasts until the next one starts).
+    ctx.textBaseline = 'middle';
+    for (let i = first; i < song.bars.length; i++) {
+      const b = song.bars[i];
+      if (b.startBeat >= w1) break;
+      const cells = barCells(song, i);
+      const starts = cells.map((c, idx) => (c.chord !== null ? idx : -1)).filter((idx) => idx >= 0);
+      if (starts.length === 0) {
+        // The bar holds the previous chord: a faint box.
+        ctx.fillStyle = 'rgba(255,255,255,0.04)';
+        ctx.beginPath();
+        ctx.roundRect(xOf(b.startBeat) + 2, CHORD_Y, xOf(b.startBeat + b.beats) - xOf(b.startBeat) - 4, CHORD_H, 6);
+        ctx.fill();
+        continue;
+      }
+      starts.forEach((idx, n) => {
+        const to = n + 1 < starts.length ? starts[n + 1] : cells.length;
+        const x0 = xOf(b.startBeat + idx) + 2;
+        const x1 = xOf(b.startBeat + to) - 2;
+        const cell = cells[idx];
+        const solid = !cell.rest;
+        ctx.fillStyle = solid ? 'rgba(34,211,238,0.16)' : 'rgba(255,255,255,0.05)';
+        ctx.strokeStyle = solid ? 'rgba(34,211,238,0.6)' : WAVEFORM_COLORS.beat;
+        ctx.beginPath();
+        ctx.roundRect(x0, CHORD_Y, x1 - x0, CHORD_H, 6);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = solid ? '#e6edf7' : WAVEFORM_COLORS.empty;
+        ctx.font = solid ? 'bold 18px system-ui, sans-serif' : '16px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(cell.rest ? '–' : cell.chord ?? '', (x0 + x1) / 2, CHORD_Y + CHORD_H / 2);
+      });
+    }
+    ctx.textBaseline = 'alphabetic';
+
+    // Strikes the text asks for.
+    for (let i = first; i < song.bars.length; i++) {
+      const b = song.bars[i];
+      if (b.startBeat >= w1) break;
+      for (const s of barStrums(song, i)) {
+        const x = Math.round(xOf(s.beat)) + 0.5;
+        if (x < -4 || x > W + 4) continue;
+        const color = STRUM_MARK_COLORS[s.kind === 'down' ? 'down' : s.kind === 'up' ? 'up' : 'muted'];
+        ctx.strokeStyle = color;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(x, TOP);
+        ctx.lineTo(x, RULER_Y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = color;
+        ctx.textAlign = 'center';
+        ctx.font = 'bold 22px system-ui, sans-serif';
+        ctx.fillText(s.kind === 'down' ? '↓' : s.kind === 'up' ? '↑' : '✕', x, ARROW_Y + 20);
+      }
+    }
+
+    // What the audio seems to do.
+    if (audio) {
+      ctx.fillStyle = '#fb923c';
+      for (const sec of audio.attacks) {
+        const beat = secToBeat(song.tempoSegments, sec - audio.offsetSec);
+        if (beat < w0 || beat > w1) continue;
+        const x = xOf(beat);
+        ctx.beginPath();
+        ctx.moveTo(x, TOP + 1);
+        ctx.lineTo(x - 5, TOP + 11);
+        ctx.lineTo(x + 5, TOP + 11);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+
+    // Playhead (while paused it marks the start of the chosen bar).
+    const px = Math.round(xOf(cur)) + 0.5;
+    ctx.strokeStyle = playBeat !== null ? WAVEFORM_COLORS.playhead : WAVEFORM_COLORS.offset;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(px, 0);
+    ctx.lineTo(px, HEIGHT);
+    ctx.stroke();
+    ctx.lineWidth = 1;
+  }
+
+  function loop(): void {
+    raf = 0;
+    if (disposed) return;
+    draw();
+    if (playing) raf = requestAnimationFrame(loop);
+  }
+
+  canvas.addEventListener('click', (ev) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = ev.clientX - rect.left;
+    const hit = lastClickMap.find((m) => x >= m.x0 && x < m.x1);
+    if (hit) opts.onPickBar(hit.bar);
+  });
+
+  const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => draw()) : null;
+  observer?.observe(el);
+
+  return {
+    el,
+    setContext(nextSong, nextAudio) {
+      song = nextSong;
+      audio = nextAudio;
+      focusBar = Math.max(0, Math.min(Math.max(0, song.bars.length - 1), focusBar));
+      draw();
+    },
+    setFocusBar(i) {
+      focusBar = Math.max(0, Math.round(i));
+      if (!playing) draw();
+    },
+    setPlaying(p) {
+      playing = p;
+      if (p && !raf) raf = requestAnimationFrame(loop);
+      if (!p) draw();
+    },
+    redraw: draw,
+    dispose() {
+      disposed = true;
+      if (raf) cancelAnimationFrame(raf);
+      observer?.disconnect();
+    },
+  };
+}
