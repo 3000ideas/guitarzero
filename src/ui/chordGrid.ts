@@ -11,6 +11,7 @@
  */
 import type { ParseError } from '../types';
 import { clear, h } from './dom';
+import { createAutoSyncBox, type AutoSyncBox, type AutoSyncOpts } from './autoSyncBox';
 import {
   GRID_BARS_PER_LINE,
   NC_CELL,
@@ -49,6 +50,8 @@ export interface ChordGridOpts {
   onSourceChange?: () => void;
   /** The «inicio de la canción» (where bar 1 sits in the audio) was nudged by `deltaSec`. */
   onNudgeOffset?: (deltaSec: number) => void;
+  /** «Ajustar automáticamente» of the sync panel. */
+  autoSync?: AutoSyncOpts;
 }
 
 /** localStorage key of the visual delay of the playing mark, in ms. */
@@ -59,6 +62,7 @@ export type PlaySource = 'chords' | 'song' | 'both';
 
 export interface ChordGridView {
   el: HTMLElement;
+  autoSync: AutoSyncBox;
   /** The text changed (or its diagnostics did): re-read it. Cheap when it is the grid's own text. */
   setSource(source: string, issues: readonly ParseError[]): void;
   /** Marks the cell being played (null = none) without redrawing the grid. */
@@ -160,10 +164,12 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
       /* ignored */
     }
   };
+  const autoSync = createAutoSyncBox(opts.autoSync ?? { onRun: () => {}, onApply: () => {}, onDiscard: () => {} });
   const syncBox = h(
     'details.grid-sync',
     null,
     h('summary', null, 'Ajustar la sincronía'),
+    autoSync.el,
     h(
       'p.muted.small',
       null,
@@ -792,6 +798,7 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
 
   return {
     el: root,
+    autoSync,
     setSource(source, nextIssues) {
       const key = nextIssues.map((i) => `${i.line}:${i.severity}:${i.message}`).join('|');
       const textChanged = source !== lastText;

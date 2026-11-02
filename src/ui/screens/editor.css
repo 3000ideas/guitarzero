@@ -1078,3 +1078,35 @@
 .bar-check .check-note {
   margin: 0;
 }
+
+.auto-sync {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.auto-sync-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+
+.auto-sync-result {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--ok);
+  background: rgba(74, 222, 128, 0.08);
+  font-size: 14px;
+}
+
+.auto-sync-result.is-bad {
+  border-color: var(--warn);
+  background: rgba(250, 204, 21, 0.08);
+}
+
+.auto-sync-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}

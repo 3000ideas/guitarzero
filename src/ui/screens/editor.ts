@@ -108,6 +108,7 @@ import {
 } from '../../music/simplify';
 import { createChordGrid } from '../chordGrid';
 import { createBarCheck } from '../barCheck';
+import { fitSync, type SyncFit } from '../../dsp/syncFit';
 import { parseSong } from '../../song/parser';
 import { beatToSec, secToBeat, songDurationSec } from '../../song/tempo';
 import { isExampleId } from '../../song/examples';
@@ -1123,7 +1124,7 @@ export const editorScreen: Screen = {
 
     // Two ways to edit the same text: the text itself or the chord grid (SPEC section 22).
     let editMode: EditorMode = loadEditorMode();
-    const gridView = createChordGrid({ onChange: (next) => applyText(next), onTogglePlay: () => void toggleGridPlay(), onSourceChange: () => stopGridPlay(), onNudgeOffset: (d) => onGridNudge(d) });
+    const gridView = createChordGrid({ onChange: (next) => applyText(next), onTogglePlay: () => void toggleGridPlay(), onSourceChange: () => stopGridPlay(), onNudgeOffset: (d) => onGridNudge(d), autoSync: { onRun: () => runAutoSync(), onApply: () => applyAutoSync(), onDiscard: () => discardAutoSync() } });
     const textTab = h('button.mode-tab', { type: 'button', role: 'tab', onclick: () => setEditMode('text') }, 'Texto') as HTMLButtonElement;
     const gridTab = h('button.mode-tab', { type: 'button', role: 'tab', onclick: () => setEditMode('grid') }, 'Cuadrícula') as HTMLButtonElement;
     const checkTab = h('button.mode-tab', { type: 'button', role: 'tab', onclick: () => setEditMode('check') }, 'Comprobar') as HTMLButtonElement;
@@ -1131,6 +1132,7 @@ export const editorScreen: Screen = {
       onPlayToggle: () => void toggleGridPlay(),
       onBarChange: () => stopGridPlay(),
       onNudgeOffset: (d) => onGridNudge(d),
+      autoSync: { onRun: () => runAutoSync(), onApply: () => applyAutoSync(), onDiscard: () => discardAutoSync() },
       getPlayBeat: () => {
         const sec = gridPlaySec();
         return gridPlay && sec !== null ? secToBeat(gridPlay.song.tempoSegments, Math.max(0, sec - gridView.getVisualDelaySec())) : null;
@@ -1673,6 +1675,59 @@ export const editorScreen: Screen = {
       }
     }
 
+    // ------------------------------------------------------------ automatic alignment
+
+    let pendingFit: SyncFit | null = null;
+
+    function showFit(fit: SyncFit | null): void {
+      pendingFit = fit;
+      gridView.autoSync.show(fit);
+      checkView.autoSync.show(fit);
+    }
+
+    /** Compares the strikes of the text with the audio and proposes the start (and tempo) that make them land. */
+    function runAutoSync(): void {
+      if (!audio || !backing || busy) return;
+      stopGridPlay();
+      showFit(null);
+      gridView.autoSync.setBusy(true);
+      checkView.autoSync.setBusy(true);
+      // After a tick so «Analizando…» paints before the (synchronous) analysis.
+      window.setTimeout(() => {
+        gridView.autoSync.setBusy(false);
+        checkView.autoSync.setBusy(false);
+        if (unmounted || !audio || !backing) return;
+        const song = analysis.song;
+        const fit = fitSync({
+          samples: backing.monoSamples(),
+          sampleRate,
+          offsetSec: audio.offsetSec,
+          segments: song.tempoSegments,
+          strikes: song.events.map((e) => e.time),
+          beatSec: song.tempo > 0 ? 60 / song.tempo : 0.5,
+          allowTempo: song.tempoSegments.length === 1,
+        });
+        showFit(fit);
+      }, 30);
+    }
+
+    function applyAutoSync(): void {
+      const fit = pendingFit;
+      if (!fit || !fit.ok || !audio) return;
+      stopGridPlay();
+      if (fit.tempoFactor !== 1 && analysis.song.tempoSegments.length === 1) {
+        const bpm = Math.round((analysis.song.tempo / fit.tempoFactor) * 100) / 100;
+        applyText(rewriteHeader(textarea.value, 'tempo', String(bpm)));
+      }
+      setOffset(audio.offsetSec + fit.deltaSec);
+      showFit(null);
+      if (editMode === 'check') syncCheck();
+    }
+
+    function discardAutoSync(): void {
+      showFit(null);
+    }
+
     /** Nudges where the song starts in the audio; a playback in progress continues from the same point with the new alignment. */
     function onGridNudge(deltaSec: number): void {
       if (!audio) return;
@@ -1896,6 +1951,8 @@ export const editorScreen: Screen = {
       const ready = backing !== null && !busy;
       gridView.setAudioAvailable(ready && audio !== null);
       gridView.setOffsetInfo(audio ? audio.offsetSec : null);
+      gridView.autoSync.setAvailable(ready && audio !== null);
+      checkView.autoSync.setAvailable(ready && audio !== null);
       if (editMode === 'check') syncCheck();
       loadBtn.disabled = busy;
       replaceBtn.disabled = busy;

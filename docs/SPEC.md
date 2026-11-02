@@ -1283,3 +1283,18 @@ de la cuadrícula empieza en el compás seleccionado y al volver lo selecciona.
   inicio (`offsetSec`) y el bucle continúa; cambiar de compás o de pestaña lo detiene.
 - Texto de ayuda en la vista: la letra del acorde marca en qué pulso **empieza** ese acorde; los
   golpes los fija el patrón de rasgueo, no la posición de la letra.
+
+### 22.2 Ajuste automático («✨ Ajustar automáticamente»)
+
+En la sincronía de la cuadrícula y en Comprobar. `src/dsp/syncFit.ts` (`fitSync`, puro):
+1. Curva de ataques del audio: subida de la log-energía en ventanas de 10 ms cada 5 ms, suavizada ±15 ms.
+2. Golpes esperados: todos los `song.events` (cada D/U/x del patrón y los ↓ extra de cambio de acorde)
+   en `offsetSec + beatToSec(...)`.
+3. Se desliza el conjunto sobre la curva y se elige el desfase de inicio que más suma (±½ pulso,
+   entre 0,15 y 0,6 s: un pulso entero de error es indistinguible en un rasgueo regular). Con un
+   único tempo se busca además un factor de tempo (±3 %, paso 0,1 %) **junto** con el desfase, y
+   solo se acepta si mejora el resultado un 10 % o más y difiere ≥ 0,2 %. Afinado final a 0,5 ms.
+4. Se informa de «golpes que encajan» (con un ataque a ≤ 30 ms) antes → después, y de la confianza
+   (mejor puntuación / media del barrido; < 1,25 = «no hay un punto claro»: no se ofrece aplicar).
+5. «Aplicar» suma el desfase a `offsetSec` y, si procede, reescribe `tempo:` (bpm / factor, 2
+   decimales; con «Deshacer»). Nada cambia hasta pulsar «Aplicar».

@@ -20,6 +20,7 @@ import {
 } from '../song/barCheck';
 import { WAVEFORM_COLORS, STRUM_MARK_COLORS } from './waveform';
 import type { PlaySource } from './chordGrid';
+import { createAutoSyncBox, type AutoSyncBox, type AutoSyncOpts } from './autoSyncBox';
 
 export interface BarCheckAudio {
   offsetSec: number;
@@ -35,10 +36,12 @@ export interface BarCheckOpts {
   onNudgeOffset: (deltaSec: number) => void;
   /** Beat (absolute) being heard now, or null when nothing plays. */
   getPlayBeat: () => number | null;
+  autoSync: AutoSyncOpts;
 }
 
 export interface BarCheckView {
   el: HTMLElement;
+  autoSync: AutoSyncBox;
   /** New text / audio: redraws, keeping the bar when it still exists. */
   setContext(song: Song, audio: BarCheckAudio | null): void;
   setBar(index: number): void;
@@ -85,6 +88,7 @@ export function createBarCheck(opts: BarCheckOpts): BarCheckView {
   const nudgeBtn = (label: string, deltaMs: number): HTMLElement =>
     h('button.grid-mini', { type: 'button', title: `${deltaMs > 0 ? 'Retrasa' : 'Adelanta'} la cuadrícula ${Math.abs(deltaMs)} ms`, onclick: () => opts.onNudgeOffset(deltaMs / 1000) }, label);
 
+  const autoSync = createAutoSyncBox(opts.autoSync);
   const legend = h(
     'ul.check-legend',
     null,
@@ -109,6 +113,7 @@ export function createBarCheck(opts: BarCheckOpts): BarCheckView {
     h('div.check-head', null, prevBtn, title, nextBtn),
     caption,
     h('div.check-transport', null, playBtn, sourceSel, h('label.grid-check', null, metro, h('span', null, 'Clic en cada pulso'))),
+    autoSync.el,
     wrap,
     legend,
     note,
@@ -320,6 +325,7 @@ export function createBarCheck(opts: BarCheckOpts): BarCheckView {
 
   return {
     el,
+    autoSync,
     setContext(nextSong, nextAudio) {
       song = nextSong;
       audio = nextAudio;
