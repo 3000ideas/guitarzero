@@ -1512,3 +1512,23 @@ La barra publica su altura real en `--appbar-h` y las pantallas que ocupan toda 
 el estudio del editor) se colocan debajo. Se quitaron los menús propios de cada pantalla (marca y botones de la
 biblioteca, «← Volver» de ajustes / afinador / editor, «Probar» del editor, pie de ajustes); el botón de la práctica
 que abre sus ajustes pasó a llamarse «Opciones» para no confundirlo con el menú Ajustes.
+
+### 24.2 Cada nivel es una operación explicada
+
+Un nivel es una **operación fija sobre los compases de la canción completa, igual para cualquier canción**
+(`src/song/levels.ts`): cambia los **acordes** (se quedan los N más usados y cada uno de los demás pasa al más
+parecido de ellos) y los **golpes** (todos iguales), y nada más: los compases, dónde cambian los acordes, las
+secciones, el tempo de cada línea y el audio quedan igual.
+
+| Nivel | Acordes | Todos los golpes de la canción |
+|---|---|---|
+| 1 Solo el pulso | los de la canción, no se tocan | ✕ (apagado) en cada tiempo |
+| 2 | los 2 más usados | ↓ en el tiempo 1 de cada compás |
+| 3 | los 3 más usados | ↓ en los tiempos 1 y 3 |
+| 4 | los 4 más usados | ↓ en cada tiempo |
+
+La operación se explica en la propia pantalla: en el cuadro «Niveles» cada nivel muestra «Acordes: …»,
+«Golpes: Todos los golpes de la canción son … de cada compás» (`strumRuleText`), un dibujo de los golpes por
+tiempo del compás (`strumBeats`: ↓ ✕ ·) y «En esta canción: 5 acordes → 2: D A» con los cambios exactos
+(`levelPreview`: E → A · F#m → D · Bm → D). Una línea bajo el selector repite lo mismo para el nivel en el que
+se está, con el botón «Cómo funcionan los niveles».

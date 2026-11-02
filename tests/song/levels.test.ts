@@ -63,3 +63,26 @@ describe('parseLevelId', () => {
     expect(parseLevelId('algo-n')).toBeNull();
   });
 });
+
+describe('explaining the operation of a level', () => {
+  it('strumBeats / strumRuleText say exactly where the strikes are', async () => {
+    const { strumBeats, strumRuleText } = await import('../../src/song/levels');
+    expect(strumBeats(LEVELS[0], 4).map((b) => b.symbol).join('')).toBe('✕✕✕✕');
+    expect(strumBeats(LEVELS[1], 4).map((b) => b.symbol).join('')).toBe('↓···');
+    expect(strumBeats(LEVELS[2], 4).map((b) => b.symbol).join('')).toBe('↓·↓·');
+    expect(strumBeats(LEVELS[3], 4).map((b) => b.symbol).join('')).toBe('↓↓↓↓');
+    expect(strumRuleText(LEVELS[1], 4)).toBe('Todos los golpes de la canción son un golpe hacia abajo (↓) en el tiempo 1 de cada compás. El resto del compás, el acorde sigue sonando.');
+    expect(strumRuleText(LEVELS[2], 4)).toContain('en los tiempos 1 y 3');
+    expect(strumRuleText(LEVELS[3], 4)).toContain('en cada tiempo (1, 2, 3 y 4)');
+    expect(strumRuleText(LEVELS[0], 3)).toContain('un golpe apagado (✕) en cada tiempo (1, 2 y 3)');
+  });
+
+  it('levelPreview lists the chords that change for a given song', async () => {
+    const { levelPreview } = await import('../../src/song/levels');
+    const p2 = levelPreview(SODOMA, LEVELS[1]);
+    expect(p2.before).toEqual(expect.arrayContaining(['D', 'E', 'A', 'F#m', 'Bm']));
+    expect(p2.after).toEqual(['D', 'A']);
+    expect(p2.changes).toEqual(expect.arrayContaining([{ from: 'E', to: 'A' }, { from: 'F#m', to: 'D' }, { from: 'Bm', to: 'D' }]));
+    expect(levelPreview(SODOMA, LEVELS[0]).changes).toEqual([]);
+  });
+});

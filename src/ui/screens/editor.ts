@@ -119,7 +119,7 @@ import { beatToSec, secToBeat, songDurationSec } from '../../song/tempo';
 import { isExampleId } from '../../song/examples';
 import { getSong, saveSong } from '../../song/storage';
 import { copyTrack, deleteTrack, getTrack, hasIndexedDb, putTrack } from '../../song/audioStore';
-import { LEVELS, buildLevelSource, levelSongId, parseLevelId, type LevelSpec } from '../../song/levels';
+import { LEVELS, buildLevelSource, levelPreview, levelSongId, parseLevelId, strumBeats, strumRuleText, type LevelSpec } from '../../song/levels';
 import { getAudioContext } from '../../audio/context';
 import { BackingTrack } from '../../audio/backing';
 import { renderChordTrack } from '../../audio/chordSynth';
@@ -1380,6 +1380,7 @@ export const editorScreen: Screen = {
     const baseId = levelInfo ? levelInfo.baseId : id;
     const currentLevel = levelInfo ? levelInfo.n : 0;
     const levelBar = h('div.level-bar', { role: 'group', 'aria-label': 'Nivel de aprendizaje' });
+    const levelNote = h('div.level-note');
     const levelsList = h('div.levels-list');
     const levelsStatus = h('div.muted.small.levels-status', { role: 'status' });
 
@@ -1390,7 +1391,7 @@ export const editorScreen: Screen = {
         'div.levels-dialog-body',
         null,
         h('h2', null, 'Niveles de aprendizaje'),
-        h('p.muted.small', null, 'Una canción difícil se aprende por pasos. Cada nivel es una versión más sencilla, con su propia cuadrícula (menos acordes, rasgueo más fácil), el mismo audio y el mismo tempo. Se crean a partir de la canción completa.'),
+        h('p.muted.small', null, 'Una canción difícil se aprende por pasos. Cada nivel hace SIEMPRE la misma operación sobre los compases de la canción completa, en cualquier canción: cambia los acordes (se quedan solo los más usados) y cambia los golpes (todos iguales y más fáciles). Los compases, las secciones, el tempo y el audio no cambian, así que cada nivel tiene su propia cuadrícula pero sigue encajando con la grabación.'),
         levelsList,
         levelsStatus,
         h(
@@ -1440,18 +1441,49 @@ export const editorScreen: Screen = {
       levelBar.appendChild(h('span.level-current', null, levelTitleOf(currentLevel)));
     }
 
+    /** Chords before / after a level for THIS song, from the full song (the base the levels are made from). */
+    function previewOf(level: LevelSpec): { text: string; changes: string } {
+      const baseSong = getSong(baseId);
+      if (!baseSong) return { text: '', changes: '' };
+      const p = levelPreview(baseSong.source, level);
+      const changes = p.changes.map((c) => `${c.from} → ${c.to}`).join(' · ');
+      const text = p.changes.length === 0 ? `${p.before.length === 1 ? '1 acorde' : `${p.before.length} acordes`}: ${p.before.join(' ')} (ninguno cambia)` : `${p.before.length} acordes → ${p.after.length}: ${p.after.join(' ')}`;
+      return { text, changes };
+    }
+
+    /** The strikes of a level as one box per beat of the bar: ↓ ✕ or · (nothing). */
+    function strumDiagram(level: LevelSpec): HTMLElement {
+      const beats = analysis.song.timeSignature.beatsPerBar;
+      return h(
+        'div.level-strum',
+        { 'aria-label': 'Golpes de cada compás' },
+        ...strumBeats(level, beats).map((b) => h('span.level-beat', { class: b.symbol === '·' ? 'is-rest' : '' }, h('em', null, String(b.beat)), b.symbol)),
+      );
+    }
+
     function renderLevelList(): void {
       clear(levelsList);
+      const beats = analysis.song.timeSignature.beatsPerBar;
       for (const n of [0, ...LEVELS.map((l) => l.n)]) {
         const level = LEVELS.find((l) => l.n === n) ?? null;
         const levelId = levelSongIdOf(n);
         const exists = getSong(levelId) !== null;
+        const preview = level ? previewOf(level) : null;
         levelsList.appendChild(
           h(
             'div.level-row',
             { class: n === currentLevel ? 'is-current' : '' },
             h('div.level-name', null, h('strong', null, levelTitleOf(n)), n === currentLevel ? h('span.level-here', null, ' ← estás aquí') : null),
-            h('div.muted.small', null, level ? level.summary : 'La canción con todos sus acordes y su rasgueo. Es la base de la que se crean los niveles.'),
+            level
+              ? h(
+                  'div.level-op',
+                  null,
+                  h('div.level-op-line', null, h('strong', null, 'Acordes: '), level.chordsRule),
+                  h('div.level-op-line', null, h('strong', null, 'Golpes: '), strumRuleText(level, beats)),
+                  strumDiagram(level),
+                  preview && preview.text !== '' ? h('div.level-op-line.level-example', null, h('strong', null, 'En esta canción: '), preview.text, preview.changes !== '' ? h('div.muted.small', null, `Cambios: ${preview.changes}`) : null) : null,
+                )
+              : h('div.muted.small', null, 'Todos los acordes de la canción y su rasgueo original. Es la base: cada nivel es una operación sobre sus compases (se cambian los acordes y los golpes, nada más; los compases, las secciones, el tempo y el audio quedan igual).'),
             h(
               'div.level-actions',
               null,
@@ -1464,9 +1496,32 @@ export const editorScreen: Screen = {
       }
     }
 
+    /** One line under the selector: what the level we are in does to this song. */
+    function renderLevelNote(): void {
+      clear(levelNote);
+      const level = LEVELS.find((l) => l.n === currentLevel) ?? null;
+      if (!level) {
+        levelNote.appendChild(h('span', null, h('strong', null, 'Canción completa: '), 'todos los acordes y el rasgueo original. Los niveles son versiones más fáciles hechas a partir de ella.'));
+      } else {
+        const p = previewOf(level);
+        levelNote.appendChild(
+          h(
+            'span',
+            null,
+            h('strong', null, `Nivel ${level.n}: `),
+            `golpes `,
+            strumDiagram(level),
+            ` · acordes ${p.text}${p.changes !== '' ? ` (${p.changes})` : ''}`,
+          ),
+        );
+      }
+      levelNote.appendChild(h('button.level-note-more', { type: 'button', onclick: () => levelsDialog.showModal() }, 'Cómo funcionan los niveles'));
+    }
+
     function renderLevels(): void {
       renderLevelBar();
       renderLevelList();
+      renderLevelNote();
     }
 
     /** Writes (or rewrites) the copy of the FULL song for one level, with the same audio. Returns false on failure. */
@@ -3445,7 +3500,7 @@ export const editorScreen: Screen = {
 
     const textHint = h('div.editor-hint', null, caretEl, h('span', null, 'Ctrl+S guarda al instante'), h('span', null, 'Pulsa en un error para ir a su línea'));
     const topbar = h('div.editor-topbar', null, modeTabs, levelBar);
-    const main = h('div.editor-main', null, topbar, textarea, gridView.el, checkView.el, textHint, audioPanel);
+    const main = h('div.editor-main', null, topbar, levelNote, textarea, gridView.el, checkView.el, textHint, audioPanel);
 
     const panel = h(
       'aside.editor-panel',

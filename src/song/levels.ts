@@ -3,8 +3,12 @@
  * learnt in passes the way a teacher would teach it: first feel the beat and sing over it, then play
  * very few chords with very few strums, then add chords and strums until it is the real song.
  *
- * Every level is a copy of the song text with the chords reduced to the N most used ones (the others
- * become the nearest of those, see music/simplify.ts) and one simple strum pattern for the whole song.
+ * A level is an OPERATION on the bars of the full song, the same for every song:
+ *   1. chords: kept as they are (they are not played: muted strikes);  strum: one muted strike on every beat;
+ *   2. chords: only the 2 most used, every other chord becomes the nearest of those;  strum: one down on beat 1;
+ *   3. chords: only the 3 most used (same rule);  strum: a down on beats 1 and 3;
+ *   4. chords: only the 4 most used (same rule);  strum: a down on every beat.
+ * The bars (how many, where the chords change), the sections, the tempo of every line and the audio are untouched.
  * The audio, its start and the tempo of every line stay the same, so the levels line up with the recording.
  */
 import { simplifyChart } from '../music/simplify';
@@ -19,6 +23,8 @@ export interface LevelSpec {
   summary: string;
   /** Keep only this many chords (null = the chords as they are). */
   maxChords: number | null;
+  /** What the level does to the CHORDS of every bar, in words. */
+  chordsRule: string;
   /** Strum pattern for a meter of `beats` beats per bar (one character per beat or more; always valid). */
   strum: (beats: number) => string;
 }
@@ -38,6 +44,7 @@ export const LEVELS: readonly LevelSpec[] = [
     title: 'Solo el pulso',
     summary: 'Cuerdas apagadas y un golpe en cada tiempo. Sigue el compás y canta o tararea encima. Los acordes aún no importan.',
     maxChords: null,
+    chordsRule: 'No se tocan (cuerdas apagadas), así que los acordes se dejan como están.',
     strum: (b) => 'x-'.repeat(b),
   },
   {
@@ -45,6 +52,7 @@ export const LEVELS: readonly LevelSpec[] = [
     title: 'Dos acordes, un golpe por compás',
     summary: 'Solo los dos acordes más usados y un golpe hacia abajo al empezar cada compás. Lo importante es cambiar a tiempo.',
     maxChords: 2,
+    chordsRule: 'Solo los 2 acordes que más suenan en la canción. Cada uno de los demás se cambia por el más parecido de esos 2.',
     strum: oneDownPerBar,
   },
   {
@@ -52,6 +60,7 @@ export const LEVELS: readonly LevelSpec[] = [
     title: 'Tres acordes, golpes en 1 y 3',
     summary: 'Tres acordes y dos golpes por compás (en el 1 y en el 3). Ya se nota el ritmo de la canción.',
     maxChords: 3,
+    chordsRule: 'Solo los 3 acordes que más suenan. Cada uno de los demás se cambia por el más parecido de esos 3.',
     strum: downsOnOneAndThree,
   },
   {
@@ -59,6 +68,7 @@ export const LEVELS: readonly LevelSpec[] = [
     title: 'Cuatro acordes, un golpe por tiempo',
     summary: 'Cuatro acordes y un golpe hacia abajo en cada tiempo. Casi la canción: solo faltan los acordes raros y el rasgueo con ↑.',
     maxChords: 4,
+    chordsRule: 'Solo los 4 acordes que más suenan. Cada uno de los demás se cambia por el más parecido de esos 4.',
     strum: (b) => 'D-'.repeat(b),
   },
 ];
@@ -100,4 +110,51 @@ export function buildLevelSource(source: string, level: LevelSpec, title: string
   setHeader(chart, 'strum', level.strum(beats));
   setHeader(chart, 'title', title);
   return { source: serializeGrid(chart), chords };
+}
+
+// ---------------------------------------------------------------- explaining the operation
+
+export interface StrumBeat {
+  /** 1-based beat of the bar. */
+  beat: number;
+  /** ↓ a down strum, ✕ a muted strike, · nothing (the chord keeps ringing). */
+  symbol: '↓' | '✕' | '·';
+}
+
+/** The strum of a level as one symbol per beat of the bar (`beats` = beats per bar). */
+export function strumBeats(level: LevelSpec, beats: number): StrumBeat[] {
+  const pattern = level.strum(beats);
+  const per = Math.max(1, Math.round(pattern.length / beats));
+  return Array.from({ length: beats }, (_, i) => {
+    const c = pattern[i * per];
+    return { beat: i + 1, symbol: c === 'x' ? '✕' : c === 'D' ? '↓' : '·' };
+  });
+}
+
+const listBeats = (nums: number[]): string => (nums.length === 1 ? `el tiempo ${nums[0]}` : `los tiempos ${nums.slice(0, -1).join(', ')} y ${nums[nums.length - 1]}`);
+
+/** «Todos los golpes son…», in words, for the beats per bar of the song. */
+export function strumRuleText(level: LevelSpec, beats: number): string {
+  const row = strumBeats(level, beats);
+  const hit = row.filter((b) => b.symbol !== '·');
+  const kind = hit[0]?.symbol === '✕' ? 'un golpe apagado (✕)' : 'un golpe hacia abajo (↓)';
+  const where = hit.length === beats ? `en cada tiempo (${listBeats(hit.map((b) => b.beat)).replace('los tiempos ', '')})` : `en ${listBeats(hit.map((b) => b.beat))}`;
+  const rest = hit.length === beats ? '' : ' El resto del compás, el acorde sigue sonando.';
+  return `Todos los golpes de la canción son ${kind} ${where} de cada compás.${rest}`;
+}
+
+export interface LevelPreview {
+  /** Chords of the song before and after the level. */
+  before: string[];
+  after: string[];
+  /** Each chord that changes and what it becomes. */
+  changes: Array<{ from: string; to: string }>;
+}
+
+/** What the level does to THIS song's chords (without writing anything). */
+export function levelPreview(source: string, level: LevelSpec): LevelPreview {
+  const before = parseSong(source).song.chordNames;
+  if (level.maxChords === null) return { before, after: before, changes: [] };
+  const r = simplifyChart(source, { maxChords: level.maxChords, substituteHard: false, suggestCapo: false, removeExtensions: true, allowSevenths: false });
+  return { before, after: r.chordsAfter, changes: r.substitutions.filter((x) => x.from !== x.to).map((x) => ({ from: x.from, to: x.to })) };
 }
