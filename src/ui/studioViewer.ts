@@ -99,7 +99,7 @@ export function createStudioViewer(opts: StudioViewerOpts): StudioViewer {
     ctx.fillStyle = WAVEFORM_COLORS.bg;
     ctx.fillRect(0, 0, W, HEIGHT);
 
-    // Bar shading: the bar being heard (or chosen) a little lighter.
+    // Bars as clear blocks: every other bar a little lighter, the one being heard lighter still.
     const curBar = barAt(cur);
     const first = Math.max(0, barAt(w0) - 0);
     lastClickMap = [];
@@ -109,10 +109,8 @@ export function createStudioViewer(opts: StudioViewerOpts): StudioViewer {
       const x0 = xOf(b.startBeat);
       const x1 = xOf(b.startBeat + b.beats);
       lastClickMap.push({ x0, x1, bar: i });
-      if (i === curBar) {
-        ctx.fillStyle = 'rgba(255,255,255,0.06)';
-        ctx.fillRect(x0, 0, x1 - x0, HEIGHT);
-      }
+      ctx.fillStyle = i === curBar ? 'rgba(255,255,255,0.10)' : i % 2 === 0 ? 'rgba(255,255,255,0.045)' : 'rgba(255,255,255,0)';
+      ctx.fillRect(x0, 0, x1 - x0, HEIGHT);
     }
 
     // Waveform.
@@ -169,37 +167,47 @@ export function createStudioViewer(opts: StudioViewerOpts): StudioViewer {
       }
     }
 
-    // Chords as wide boxes (a chord lasts until the next one starts).
+    // Chords: ONE box per bar (so a bar never looks cut), the chords written inside it with a divider where one changes.
     ctx.textBaseline = 'middle';
     for (let i = first; i < song.bars.length; i++) {
       const b = song.bars[i];
       if (b.startBeat >= w1) break;
+      const x0 = xOf(b.startBeat) + 3;
+      const x1 = xOf(b.startBeat + b.beats) - 3;
       const cells = barCells(song, i);
+      ctx.fillStyle = i === curBar ? 'rgba(34,211,238,0.20)' : 'rgba(34,211,238,0.10)';
+      ctx.strokeStyle = i === curBar ? 'rgba(34,211,238,0.95)' : 'rgba(34,211,238,0.5)';
+      ctx.lineWidth = i === curBar ? 2 : 1.5;
+      ctx.beginPath();
+      ctx.roundRect(x0, CHORD_Y, x1 - x0, CHORD_H, 8);
+      ctx.fill();
+      ctx.stroke();
+      ctx.lineWidth = 1;
       const starts = cells.map((c, idx) => (c.chord !== null ? idx : -1)).filter((idx) => idx >= 0);
       if (starts.length === 0) {
-        // The bar holds the previous chord: a faint box.
-        ctx.fillStyle = 'rgba(255,255,255,0.04)';
-        ctx.beginPath();
-        ctx.roundRect(xOf(b.startBeat) + 2, CHORD_Y, xOf(b.startBeat + b.beats) - xOf(b.startBeat) - 4, CHORD_H, 6);
-        ctx.fill();
+        ctx.fillStyle = WAVEFORM_COLORS.empty;
+        ctx.font = '16px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('·', (x0 + x1) / 2, CHORD_Y + CHORD_H / 2);
         continue;
       }
+      // A bar that holds the previous chord at its start leaves that part of the box empty.
       starts.forEach((idx, n) => {
         const to = n + 1 < starts.length ? starts[n + 1] : cells.length;
-        const x0 = xOf(b.startBeat + idx) + 2;
-        const x1 = xOf(b.startBeat + to) - 2;
+        const sx0 = n === 0 ? (idx > 0 ? xOf(b.startBeat + idx) : x0) : xOf(b.startBeat + idx);
+        const sx1 = n + 1 < starts.length ? xOf(b.startBeat + to) : x1;
         const cell = cells[idx];
-        const solid = !cell.rest;
-        ctx.fillStyle = solid ? 'rgba(34,211,238,0.16)' : 'rgba(255,255,255,0.05)';
-        ctx.strokeStyle = solid ? 'rgba(34,211,238,0.6)' : WAVEFORM_COLORS.beat;
-        ctx.beginPath();
-        ctx.roundRect(x0, CHORD_Y, x1 - x0, CHORD_H, 6);
-        ctx.fill();
-        ctx.stroke();
-        ctx.fillStyle = solid ? '#e6edf7' : WAVEFORM_COLORS.empty;
-        ctx.font = solid ? 'bold 18px system-ui, sans-serif' : '16px system-ui, sans-serif';
+        if (n > 0 || idx > 0) {
+          ctx.strokeStyle = 'rgba(34,211,238,0.6)';
+          ctx.beginPath();
+          ctx.moveTo(Math.round(sx0) + 0.5, CHORD_Y + 7);
+          ctx.lineTo(Math.round(sx0) + 0.5, CHORD_Y + CHORD_H - 7);
+          ctx.stroke();
+        }
+        ctx.fillStyle = cell.rest ? WAVEFORM_COLORS.empty : '#e6edf7';
+        ctx.font = cell.rest ? '16px system-ui, sans-serif' : 'bold 18px system-ui, sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText(cell.rest ? '–' : cell.chord ?? '', (x0 + x1) / 2, CHORD_Y + CHORD_H / 2);
+        ctx.fillText(cell.rest ? '–' : cell.chord ?? '', (sx0 + sx1) / 2, CHORD_Y + CHORD_H / 2);
       });
     }
     ctx.textBaseline = 'alphabetic';

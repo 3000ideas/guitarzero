@@ -1365,7 +1365,7 @@ página no se desplaza para llegar a los acordes) y se compone de:
   flotante. **Pausar conserva la posición** (`studioPosSec`); elegir un compás o mover el
   deslizador salta ahí (y sigue sonando si sonaba).
 - **Tira de compases** (`src/ui/studioViewer.ts`): 4 compases con la onda del audio, los pulsos
-  numerados, los acordes como cajas anchas, las flechas del rasgueo y los ▲ de golpes del audio.
+  numerados, cada compás como UN bloque (sombreado alterno, la raya gruesa lo delimita y el acorde en curso resaltado) con los acordes escritos dentro y un separador donde cambian, las flechas del rasgueo y los ▲ de golpes del audio.
   Sonando, se desplaza bajo una raya fija (a ~22 %); parada, muestra el compás elegido. Pulsar un
   compás de la tira lo selecciona.
 - **Lista de compases compacta** (una línea de texto = una fila, con `+ compás` y `×n` a la derecha;
