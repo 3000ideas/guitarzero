@@ -576,6 +576,104 @@ export function expandRepeats(chart: GridChart): boolean {
   return true;
 }
 
+// ---------------------------------------------------------------- sections as markers on a continuous run of bars
+
+/**
+ * The `section` item that starts at the bar line `itemIndex` (its first bar begins that section), or -1
+ * when the line continues a section that began earlier. Headers, comments and lyrics between the
+ * section header and the line do not count.
+ */
+export function sectionStartOf(chart: GridChart, itemIndex: number): number {
+  for (let i = itemIndex - 1; i >= 0; i--) {
+    const k = chart.items[i].kind;
+    if (k === 'section') return i;
+    if (k === 'header' || k === 'blank' || k === 'comment' || k === 'lyric') continue;
+    return -1;
+  }
+  return -1;
+}
+
+/** Index of the section item that governs the line `itemIndex` (the last section header before it), or -1. */
+export function sectionIndexAt(chart: GridChart, itemIndex: number): number {
+  for (let i = Math.min(itemIndex, chart.items.length) - 1; i >= 0; i--) if (chart.items[i].kind === 'section') return i;
+  return -1;
+}
+
+/**
+ * Makes the bar `barIndex` of the line `itemIndex` the first bar of a section named `label`. When it
+ * already starts one, the section is just renamed. A bar in the middle of a line splits the line there
+ * (not allowed when the line repeats with `x<n>`). Headers right before the new section's first line
+ * (a `tempo:` written for it) move under the new section header.
+ */
+export function startSectionAt(chart: GridChart, itemIndex: number, barIndex: number, label: string): boolean {
+  const item = barsItem(chart, itemIndex);
+  if (!item || !item.bars[barIndex]) return false;
+  const clean = cleanText(label.replace(/[\][]/g, '')) || 'Sección';
+  /** The name of another section header is the same: a recall of this section would change its meaning. */
+  const reused = (idx: number): boolean => {
+    const it = chart.items[idx];
+    if (!it || it.kind !== 'section') return false;
+    return chart.items.some((o, i) => i !== idx && o.kind === 'section' && o.label.toLowerCase() === it.label.toLowerCase());
+  };
+  if (barIndex === 0) {
+    const existing = sectionStartOf(chart, itemIndex);
+    if (existing >= 0) {
+      if (reused(existing)) return false; // renaming would orphan its recalls
+      setSectionLabel(chart, existing, clean);
+      return true;
+    }
+  } else if (item.repeat !== 1) {
+    return false;
+  }
+  // Cutting a section that repeats (x<n>) or is recalled elsewhere would change the music: refuse.
+  const governing = sectionIndexAt(chart, itemIndex);
+  const gov = governing >= 0 ? chart.items[governing] : null;
+  if (gov && gov.kind === 'section' && (gov.repeat !== 1 || reused(governing))) return false;
+  let lineIndex = itemIndex;
+  if (barIndex > 0) {
+    const tail: GridItem = { kind: 'bars', bars: item.bars.slice(barIndex), repeat: 1, comment: item.comment, beats: item.beats, orig: null };
+    item.bars = item.bars.slice(0, barIndex);
+    item.comment = '';
+    item.orig = null;
+    // The lyric of the original line stays with its first part.
+    lineIndex = itemIndex + 1 + (chart.items[itemIndex + 1]?.kind === 'lyric' ? 1 : 0);
+    chart.items.splice(lineIndex, 0, tail);
+  }
+  let insertAt = lineIndex;
+  const firstContent = chart.items.findIndex((it) => it.kind === 'section' || it.kind === 'bars' || it.kind === 'raw');
+  while (insertAt - 1 > firstContent && chart.items[insertAt - 1].kind === 'header') insertAt--;
+  chart.items.splice(insertAt, 0, { kind: 'section', label: clean, repeat: 1, comment: '', orig: null });
+  return true;
+}
+
+/**
+ * Removes a section header so its bars join the section before them. Refused (false) when the same
+ * name is used by another header (a recall would lose its definition) or the section repeats (`x<n>`).
+ */
+export function removeSectionStart(chart: GridChart, sectionItemIndex: number): boolean {
+  const it = chart.items[sectionItemIndex];
+  if (!it || it.kind !== 'section' || it.repeat !== 1) return false;
+  const key = it.label.toLowerCase();
+  if (chart.items.some((o, i) => i !== sectionItemIndex && o.kind === 'section' && o.label.toLowerCase() === key)) return false;
+  chart.items.splice(sectionItemIndex, 1);
+  return true;
+}
+
+/**
+ * Adds an empty bar at the very end of the song: into the last bar line when it has room and does not
+ * repeat, else as a new line. Null when the chart ends with a recalled section (nothing to add to).
+ */
+export function addBarAtEnd(chart: GridChart): { item: number; bar: number } | null {
+  if (endsWithRecall(chart)) return null;
+  const last = lastBarsIndex(chart);
+  const item = last >= 0 ? barsItem(chart, last) : null;
+  if (!item || item.repeat !== 1) {
+    const at = addBarLine(chart);
+    return at < 0 ? null : { item: at, bar: 0 };
+  }
+  return appendBar(chart, last);
+}
+
 /** Tempo changes smaller than this (bpm) are not written between stretches: they would add noise, not accuracy. */
 export const TEMPO_MAP_MIN_CHANGE = 0.15;
 

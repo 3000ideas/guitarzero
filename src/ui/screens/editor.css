@@ -1482,3 +1482,128 @@
     flex-basis: 100%;
   }
 }
+
+/* ---------------------------------------------------------------- Continuous run of bars, sections as markers */
+.chord-grid-editor .grid-flow {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(calc(var(--cells, 4) * 27px + 14px), 1fr));
+  gap: 6px;
+  align-content: start;
+}
+
+.chord-grid-editor .grid-flow .grid-bar {
+  --sec-h: 215;
+  padding: 2px 3px 3px;
+  border-radius: 8px;
+  border: 1px solid hsl(var(--sec-h) 25% 30% / 0.7);
+  background: hsl(var(--sec-h) 45% 50% / 0.09);
+}
+
+.chord-grid-editor .grid-flow .grid-bar.sec-none { --sec-h: 215; }
+.chord-grid-editor .grid-flow .grid-bar.sec-0 { --sec-h: 190; }
+.chord-grid-editor .grid-flow .grid-bar.sec-1 { --sec-h: 35; }
+.chord-grid-editor .grid-flow .grid-bar.sec-2 { --sec-h: 140; }
+.chord-grid-editor .grid-flow .grid-bar.sec-3 { --sec-h: 290; }
+.chord-grid-editor .grid-flow .grid-bar.sec-4 { --sec-h: 350; }
+.chord-grid-editor .grid-flow .grid-bar.sec-5 { --sec-h: 60; }
+
+.chord-grid-editor .grid-flow .grid-bar.is-start {
+  border-left: 4px solid hsl(var(--sec-h) 70% 55%);
+}
+
+.chord-grid-editor .grid-flow .grid-bar.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.chord-grid-editor .grid-flow .grid-bar.has-issue {
+  border-color: var(--bad);
+}
+
+.chord-grid-editor .grid-bar-top {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 15px;
+  padding: 0 1px 2px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.chord-grid-editor .grid-flow .grid-bar-num {
+  position: static;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.chord-grid-editor .grid-sec-tag {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: hsl(var(--sec-h) 70% 55%);
+  color: #101418;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 15px;
+}
+
+.chord-grid-editor .grid-badge {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.chord-grid-editor .grid-recall {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  border-radius: 8px;
+  border: 1px dashed var(--border);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chord-grid-editor .grid-add-bar {
+  min-height: 40px;
+  border-radius: 8px;
+  border: 1px dashed var(--border);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.chord-grid-editor .grid-add-bar:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.chord-grid-editor .grid-raw {
+  grid-column: 1 / -1;
+}
+
+.chord-grid-editor .pad-section {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.chord-grid-editor .pad-section-label {
+  flex: 1 0 100%;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.chord-grid-editor .pad-section-name {
+  flex: 1 1 8em;
+  min-width: 0;
+}

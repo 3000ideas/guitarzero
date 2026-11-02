@@ -3,16 +3,17 @@ import { parseSong } from '../../src/song/parser';
 import { beatToSec } from '../../src/song/tempo';
 import { EXAMPLE_SONGS } from '../../src/song/examples';
 import {
-  applyTempoMap,
+  addBarAtEnd,
   addBarLine,
   addSection,
   appendBar,
+  applyTempoMap,
   barNumbers,
   beatsAt,
   chartChords,
   deleteBar,
-  expandRepeats,
   duplicateBar,
+  expandRepeats,
   headerValue,
   insertBar,
   lyricOf,
@@ -20,15 +21,19 @@ import {
   normalizeCellValue,
   parseBarCells,
   parseGrid,
+  removeSectionStart,
   retimeBar,
+  sectionIndexAt,
+  sectionStartOf,
   serializeGrid,
-  startPartAt,
   setCell,
   setHeader,
   setLineRepeat,
   setLyric,
   setSectionLabel,
   setSectionRepeat,
+  startPartAt,
+  startSectionAt,
 } from '../../src/song/grid';
 
 const SAMPLE = `title: Mi canción
@@ -410,5 +415,69 @@ describe('startPartAt', () => {
   it('refuses repeated lines and silences that need an impossible tempo', () => {
     expect(startPartAt(parseGrid('tempo: 80\nC . . . | G . . . | x2\n'), 1, 1, { label: 'X', silenceBeats: 0, strum: null, bpm: 80 })).toBe(false);
     expect(startPartAt(parseGrid('tempo: 300\nC . . . | G . . . |\n'), 1, 1, { label: 'X', silenceBeats: 1, strum: null, bpm: 300 })).toBe(false);
+  });
+});
+
+describe('sections as markers', () => {
+  const SRC = 'tempo: 80\n[Estrofa]\nD . . . | E . . . | F . . . | G . . . |\ntempo: 70\nA . . . | B . . . |\n';
+
+  it('sectionStartOf finds where a section begins', () => {
+    const chart = parseGrid(SRC);
+    expect(sectionStartOf(chart, 2)).toBe(1);
+    expect(sectionStartOf(chart, 4)).toBe(-1); // the second line continues the section
+    expect(sectionIndexAt(chart, 4)).toBe(1);
+  });
+
+  it('starts a section in the middle of a line, keeping the music', () => {
+    const chart = parseGrid(SRC);
+    expect(startSectionAt(chart, 2, 2, 'Puente')).toBe(true);
+    const out = serializeGrid(chart);
+    expect(out).toBe('tempo: 80\n[Estrofa]\nD . . . | E . . . |\n[Puente]\nF . . . | G . . . |\ntempo: 70\nA . . . | B . . . |\n');
+    expect(musical(out)).toEqual(musical(SRC));
+    expect(parseSong(out).song.bars.map((b) => b.section)).toEqual(['Estrofa', 'Estrofa', 'Puente', 'Puente', 'Puente', 'Puente']);
+  });
+
+  it('a section at the start of a line takes the tempo header written just before it', () => {
+    const chart = parseGrid(SRC);
+    expect(startSectionAt(chart, 4, 0, 'Final')).toBe(true);
+    expect(serializeGrid(chart)).toBe('tempo: 80\n[Estrofa]\nD . . . | E . . . | F . . . | G . . . |\n[Final]\ntempo: 70\nA . . . | B . . . |\n');
+  });
+
+  it('on a bar that already starts a section it renames it; it refuses to split a repeated line', () => {
+    const chart = parseGrid(SRC);
+    expect(startSectionAt(chart, 2, 0, 'Intro')).toBe(true);
+    expect(serializeGrid(chart).split('\n')[1]).toBe('[Intro]');
+    expect(startSectionAt(parseGrid('C . . . | G . . . | x2\n'), 0, 1, 'X')).toBe(false);
+  });
+
+  it('removes a section start so the bars join the one before; refuses when the name is reused or it repeats', () => {
+    const chart = parseGrid('[A]\nC . . . |\n[B]\nG . . . |\n');
+    expect(removeSectionStart(chart, 2)).toBe(true);
+    expect(serializeGrid(chart)).toBe('[A]\nC . . . |\nG . . . |\n');
+    expect(removeSectionStart(parseGrid('[A]\nC . . . |\n[A]\n'), 0)).toBe(false);
+    expect(removeSectionStart(parseGrid('[A] x2\nC . . . |\n'), 0)).toBe(false);
+  });
+
+  it('addBarAtEnd fills the last line, then starts a new one, and respects repeats', () => {
+    const chart = parseGrid('C . . . | G . . . | Am . . . |\n');
+    expect(addBarAtEnd(chart)).toEqual({ item: 0, bar: 3 });
+    expect(addBarAtEnd(chart)).toEqual({ item: 1, bar: 0 });
+    expect(serializeGrid(chart)).toBe('C . . . | G . . . | Am . . . | . . . . |\n. . . . |\n');
+    const rep = parseGrid('C . . . | x2\n');
+    expect(addBarAtEnd(rep)).toEqual({ item: 1, bar: 0 });
+    expect(addBarAtEnd(parseGrid('[A]\nC . . . |\n[A]\n'))).toBeNull();
+  });
+});
+
+describe('sections: guards that keep the music unchanged', () => {
+  it('does not cut a section that is recalled later, or that repeats, and does not rename a reused one', () => {
+    const recalled = parseGrid('[A]\nC . . . | G . . . |\n[B]\nF . . . |\n[A]\n');
+    expect(startSectionAt(recalled, 1, 1, 'X')).toBe(false); // cut inside A
+    expect(startSectionAt(recalled, 1, 0, 'Z')).toBe(false); // rename A (it is recalled)
+    const repeated = parseGrid('[A] x2\nC . . . | G . . . |\n');
+    expect(startSectionAt(repeated, 1, 1, 'X')).toBe(false);
+    const fine = parseGrid('[A]\nC . . . | G . . . |\n[B]\nF . . . |\n');
+    expect(startSectionAt(fine, 1, 1, 'X')).toBe(true);
+    expect(musical(serializeGrid(fine))).toEqual(musical('[A]\nC . . . | G . . . |\n[B]\nF . . . |\n'));
   });
 });

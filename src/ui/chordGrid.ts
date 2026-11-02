@@ -16,26 +16,26 @@ import {
   GRID_BARS_PER_LINE,
   NC_CELL,
   REST_CELL,
-  addBarLine,
-  addSection,
+  addBarAtEnd,
   appendBar,
   barNumbers,
+  chartBeatsPerBar,
   chartChords,
   deleteBar,
   duplicateBar,
   headerValue,
   insertBar,
-  lyricOf,
   moveBar,
   normalizeCellValue,
   parseGrid,
   serializeGrid,
   setCell,
   setHeader,
-  setLineRepeat,
-  setLyric,
-  setSectionLabel,
+  removeSectionStart,
+  sectionIndexAt,
+  sectionStartOf,
   setSectionRepeat,
+  startSectionAt,
   type GridChart,
   type GridHeaderKey,
   type GridItem,
@@ -426,100 +426,6 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
     );
   }
 
-  function renderBarsRow(item: number, it: Extract<GridItem, { kind: 'bars' }>, numbers: number[]): HTMLElement {
-    const bars = h('div.grid-bars', { style: `--cells:${it.beats}` });
-    it.bars.forEach((bar, b) => {
-      const selectedBar = !!sel && sel.item === item && sel.bar === b;
-      const number = numbers[item] + b;
-      bars.appendChild(
-        h(
-          'div.grid-bar',
-          { class: selectedBar ? 'is-selected' : '', role: 'group', 'aria-label': `Compás ${number}` },
-          h('span.grid-bar-num', null, String(number)),
-          h('div.grid-cells', null, bar.cells.map((value, c) => cellButton(item, b, c, value))),
-        ),
-      );
-    });
-    const lyric = lyricOf(chart, item);
-    const tools = h(
-      'div.grid-row-tools',
-      null,
-      h('button.grid-mini.grid-add', { type: 'button', title: 'Añadir un compás al final de esta línea', onclick: () => addBarTo(item) }, '+ compás'),
-      stepper(it.repeat, 'Repetir la línea', (n) => {
-        setLineRepeat(chart, item, n);
-        commit();
-      }),
-      it.comment !== '' ? h('span.grid-comment', { title: it.comment }, it.comment) : null,
-      textField(lyric, 'Letra', (v) => {
-        setLyric(chart, item, v);
-        commit(false);
-      }, { placeholder: 'letra (opcional)', class: 'grid-lyric' }),
-    );
-    return h('section.grid-row', { class: lyric !== '' ? 'has-lyric' : '' }, bars, tools, issueFor(item + 1));
-  }
-
-  function addBarTo(item: number): void {
-    const at = appendBar(chart, item);
-    if (!at) return;
-    sel = { item: at.item, bar: at.bar, cell: 0 };
-    commit();
-  }
-
-  function renderSection(item: number, it: Extract<GridItem, { kind: 'section' }>): HTMLElement {
-    return h(
-      'div.grid-section',
-      null,
-      textField(it.label, 'Nombre de la sección', (v) => {
-        setSectionLabel(chart, item, v);
-        commit(false);
-      }, { class: 'grid-section-name' }),
-      stepper(it.repeat, 'Repetir la sección', (n) => {
-        setSectionRepeat(chart, item, n);
-        commit();
-      }),
-      chart.items.filter((o) => o.kind === 'section' && o.label.toLowerCase() === it.label.toLowerCase()).length > 1
-        ? null
-        : h(
-        'button.grid-mini',
-        {
-          type: 'button',
-          title: 'Quitar el título de la sección (los compases se quedan)',
-          'aria-label': 'Quitar el título de la sección',
-          onclick: () => {
-            chart.items.splice(item, 1);
-            sel = null;
-            commit();
-          },
-        },
-        '✕',
-      ),
-      issueFor(item + 1),
-    );
-  }
-
-  function renderInlineHeader(item: number, it: Extract<GridItem, { kind: 'header' }>): HTMLElement {
-    const label = it.key === 'tempo' ? 'Cambio de tempo' : it.key === 'time' ? 'Cambio de compás' : it.key === 'strum' ? 'Cambio de rasgueo' : it.key === 'capo' ? 'Cejilla' : it.key;
-    return h(
-      'div.grid-inline-header',
-      null,
-      h('span', null, label),
-      textField(it.value, label, (v) => {
-        const clean = v.trim();
-        if (clean === '') chart.items.splice(item, 1);
-        else {
-          it.value = clean;
-          it.orig = null;
-        }
-        if (it.key === 'time' || it.key === 'strum') {
-          reparse(serializeGrid(chart));
-          return;
-        }
-        commit();
-      }, { class: 'is-narrow' }),
-      issueFor(item + 1),
-    );
-  }
-
   function renderRaw(item: number, it: Extract<GridItem, { kind: 'raw' }>): HTMLElement {
     return h(
       'div.grid-raw',
@@ -533,65 +439,104 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
     );
   }
 
+  /** Tempo / strum / meter changes written between the bars, shown as small badges on the bar they apply to. */
+  function badgeFor(it: Extract<GridItem, { kind: 'header' }>): string {
+    if (it.key === 'tempo') return `♩${it.value}`;
+    if (it.key === 'strum') return `↕ ${it.value}`;
+    if (it.key === 'time') return it.value;
+    return '';
+  }
+
+  /** The song as ONE continuous run of bars: sections are markers on the bar where they start, not breaks. */
+  function renderFlow(): HTMLElement {
+    const flow = h('div.grid-flow', { style: `--cells:${chartBeatsPerBar(chart)}` });
+    const numbers = barNumbers(chart);
+    const first = firstContentIndex();
+    let sectionNo = -1;
+    let sectionLabel = '';
+    let sectionRepeat = 1;
+    let startPending: number | null = null;
+    let badges: string[] = [];
+    chart.items.forEach((it, item) => {
+      if (item < first) return;
+      if (it.kind === 'section') {
+        // A header with no bars under it recalls an earlier section: shown as a small note in the run.
+        const next = chart.items.slice(item + 1).find((o) => o.kind === 'section' || o.kind === 'bars' || o.kind === 'raw');
+        if (!next || next.kind === 'section') {
+          flow.appendChild(h('div.grid-recall', { title: 'Vuelve a insertar esta sección (se edita en la vista Texto)' }, `↻ ${it.label}${it.repeat > 1 ? ` ×${it.repeat}` : ''}`));
+          return;
+        }
+        sectionNo++;
+        sectionLabel = it.label;
+        sectionRepeat = it.repeat;
+        startPending = item;
+        return;
+      }
+      if (it.kind === 'header') {
+        const badge = badgeFor(it);
+        if (badge !== '') badges.push(badge);
+        return;
+      }
+      if (it.kind === 'raw') {
+        flow.appendChild(renderRaw(item, it));
+        return;
+      }
+      if (it.kind !== 'bars') return;
+      const problems = issues.filter((i) => i.line === item + 1);
+      it.bars.forEach((bar, b) => {
+        const selectedBar = !!sel && sel.item === item && sel.bar === b;
+        const starts = b === 0 && startPending !== null;
+        const number = numbers[item] + b;
+        const tags: HTMLElement[] = [];
+        if (starts) tags.push(h('span.grid-sec-tag', { title: 'Inicio de sección: selecciona este compás y usa «Sección» a la derecha para cambiarla' }, `${sectionLabel}${sectionRepeat > 1 ? ` ×${sectionRepeat}` : ''}`));
+        if (b === 0) for (const t of badges) tags.push(h('span.grid-badge', null, t));
+        if (b === it.bars.length - 1 && it.repeat > 1) tags.push(h('span.grid-badge', { title: 'Esta línea se repite' }, `×${it.repeat}`));
+        const cls = ['grid-bar', sectionNo >= 0 ? `sec-${sectionNo % 6}` : 'sec-none'];
+        if (selectedBar) cls.push('is-selected');
+        if (starts) cls.push('is-start');
+        if (problems.length > 0) cls.push('has-issue');
+        flow.appendChild(
+          h(
+            'div',
+            {
+              class: cls.join(' '),
+              role: 'group',
+              'aria-label': `Compás ${number}${starts ? `, empieza ${sectionLabel}` : ''}`,
+              style: `--cells:${it.beats}`,
+              title: problems.map((i) => i.message).join(' · '),
+            },
+            h('div.grid-bar-top', null, h('span.grid-bar-num', null, String(number)), ...tags),
+            h('div.grid-cells', null, bar.cells.map((value, c) => cellButton(item, b, c, value))),
+          ),
+        );
+        if (b === 0) badges = [];
+        if (starts) startPending = null;
+      });
+    });
+    flow.appendChild(h('button.grid-add-bar', { type: 'button', title: 'Añadir un compás al final', onclick: addLine }, '+ compás'));
+    return flow;
+  }
+
   function render(): void {
     if (disposed) return;
     const active = document.activeElement as HTMLElement | null;
     const hadFocus = !!active && root.contains(active);
     const refocusPad = hadFocus && active.classList.contains('pad-input');
     const refocusCell = hadFocus && active.classList.contains('grid-cell');
+    const scroll = body.scrollTop;
     clear(body);
     body.appendChild(renderHeaderCard());
+    // Problems that are not on a bar (headers, comments...) are listed once; those on a bar mark the bar itself.
     const hidden = issues.filter((i) => {
       const it = chart.items[i.line - 1];
-      return !it || it.kind === 'lyric' || it.kind === 'comment' || it.kind === 'blank' || (it.kind === 'header' && i.line - 1 < firstContentIndex());
+      return !it || it.kind !== 'bars';
     });
     if (hidden.length > 0) body.appendChild(h('div.grid-issue.error', null, hidden.map((i) => `Línea ${i.line}: ${i.message}`).join(' · ')));
-    const numbers = barNumbers(chart);
-    let started = false;
-    let any = false;
-    chart.items.forEach((it, item) => {
-      if (!started) {
-        if (it.kind === 'header' || it.kind === 'blank' || it.kind === 'comment') return;
-        started = true;
-      }
-      switch (it.kind) {
-        case 'section':
-          body.appendChild(renderSection(item, it));
-          break;
-        case 'bars':
-          any = true;
-          body.appendChild(renderBarsRow(item, it, numbers));
-          break;
-        case 'header':
-          body.appendChild(renderInlineHeader(item, it));
-          break;
-        case 'raw':
-          body.appendChild(renderRaw(item, it));
-          break;
-        case 'comment':
-          body.appendChild(h('div.grid-text-comment', null, it.text.trim()));
-          break;
-        case 'lyric': {
-          const prev = chart.items[item - 1];
-          if (!prev || prev.kind !== 'bars') body.appendChild(h('div.grid-text-comment', null, `> ${it.text}`));
-          break;
-        }
-        case 'blank':
-          break;
-      }
-    });
-    if (!any) {
-      body.appendChild(h('p.muted.grid-empty', null, 'Aún no hay compases. Pulsa «+ Compás» para empezar y toca una casilla para ponerle un acorde.'));
-    }
-    body.appendChild(
-      h(
-        'div.grid-add-row',
-        null,
-        h('button.btn.btn-sm', { type: 'button', onclick: addLine }, '+ Compás'),
-        h('button.btn.btn-sm', { type: 'button', onclick: addSectionClick }, '+ Sección'),
-      ),
-    );
+    const hasBars = chart.items.some((it) => it.kind === 'bars');
+    if (!hasBars) body.appendChild(h('p.muted.grid-empty', null, 'Aún no hay compases. Pulsa «+ compás» para empezar y toca una casilla para ponerle un acorde.'));
+    body.appendChild(renderFlow());
     renderPad();
+    body.scrollTop = scroll;
     if (refocusPad) pad.querySelector<HTMLInputElement>('.pad-input')?.focus();
     else if (refocusCell) body.querySelector<HTMLElement>('.grid-cell.is-selected')?.focus({ preventScroll: true });
   }
@@ -603,24 +548,16 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
   }
 
   function addLine(): void {
-    const item = addBarLine(chart);
-    if (item < 0) {
+    const at = addBarAtEnd(chart);
+    if (!at) {
       notice = 'La última sección repite otra anterior: añade antes una sección nueva';
       renderPad();
       return;
     }
-    sel = { item, bar: 0, cell: 0 };
+    sel = { item: at.item, bar: at.bar, cell: 0 };
     commit();
     const el = body.querySelector('.grid-cell.is-selected');
     if (el) (el as HTMLElement).scrollIntoView({ block: 'nearest' });
-  }
-
-  function addSectionClick(): void {
-    const names = ['Intro', 'Estrofa', 'Estribillo', 'Puente', 'Final'];
-    const used = chart.items.filter((i) => i.kind === 'section').length;
-    const item = addSection(chart, names[used % names.length]);
-    sel = { item: item + 1, bar: 0, cell: 0 };
-    commit();
   }
 
   // ---------------------------------------------------------------- rendering: pad
@@ -644,6 +581,74 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
     );
   }
 
+  const SECTION_NAMES = ['Intro', 'Estrofa', 'Estribillo', 'Puente', 'Final'];
+
+  /** «Sección» row of the dock: mark / rename / remove the start of a section at the selected bar. */
+  function renderSectionRow(selected: Sel | null): HTMLElement {
+    if (!selected) return h('div.pad-section.is-idle', null, h('span.muted.small', null, 'Toca un compás para marcar dónde empieza una sección'));
+    const startItem = selected.bar === 0 ? sectionStartOf(chart, selected.item) : -1;
+    const governing = sectionIndexAt(chart, selected.item);
+    const current = startItem >= 0 ? (chart.items[startItem] as Extract<GridItem, { kind: 'section' }>) : null;
+    const used = chart.items.filter((i) => i.kind === 'section').length;
+    const suggested = SECTION_NAMES[used % SECTION_NAMES.length];
+    const input = h('input', {
+      type: 'text',
+      class: 'pad-section-name',
+      value: current ? current.label : '',
+      placeholder: current ? 'Nombre de la sección' : suggested,
+      'aria-label': 'Nombre de la sección',
+      autocomplete: 'off',
+      spellcheck: false,
+    }) as HTMLInputElement;
+    const apply = (): void => {
+      const name = input.value.trim() || (current ? current.label : suggested);
+      if (!startSectionAt(chart, selected.item, selected.bar, name)) {
+        notice = 'No se puede aquí: esa línea o su sección se repite (×n) o se reutiliza más abajo';
+        renderPad();
+        return;
+      }
+      commit();
+    };
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        apply();
+      }
+    });
+    const where = governing >= 0 ? (chart.items[governing] as Extract<GridItem, { kind: 'section' }>).label : 'sin sección';
+    const row = h('div.pad-section', null, h('span.pad-section-label', null, current ? 'Empieza la sección' : `Sección: ${where}`), input);
+    if (current) {
+      row.append(
+        h('button.pad-btn.pad-action', { type: 'button', title: 'Cambia el nombre', onclick: apply }, 'Renombrar'),
+        h(
+          'button.pad-btn.pad-action',
+          {
+            type: 'button',
+            title: 'Quita el inicio: estos compases se unen a la sección anterior',
+            onclick: () => {
+              if (!removeSectionStart(chart, startItem)) {
+                notice = 'No se puede quitar: la sección se repite (×n) o su nombre se usa en otro sitio';
+                renderPad();
+                return;
+              }
+              commit();
+            },
+          },
+          'Quitar inicio',
+        ),
+      );
+      row.append(
+        stepper(current.repeat, 'Repetir la sección', (n) => {
+          setSectionRepeat(chart, startItem, n);
+          commit();
+        }),
+      );
+    } else {
+      row.append(h('button.pad-btn.pad-action', { type: 'button', title: 'Esta sección empieza en el compás seleccionado', onclick: apply }, 'Empezar aquí'));
+    }
+    return row;
+  }
+
   function renderPad(): void {
     clear(pad);
     const selected = validSel(sel) ? sel : null;
@@ -664,6 +669,7 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
       h('label.pad-advance', null, h('span', null, 'Luego'), advanceSel),
     );
 
+    const sectionRow = renderSectionRow(selected);
     const usedRow = h('div.pad-row.pad-scroll', { 'aria-label': 'Acordes de la canción' }, used.length === 0 ? h('span.muted.small', null, 'Aquí saldrán los acordes que uses') : used.map((n) => chordButton(n, 'is-used')));
 
     const rootsRow = h('div.pad-row.pad-roots', null);
@@ -767,7 +773,7 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
     );
     if (bars.length === 0 && !selected) barRow.classList.add('is-idle');
 
-    pad.append(info, usedRow, rootsRow, qualityRow, symbols, barRow);
+    pad.append(info, sectionRow, usedRow, rootsRow, qualityRow, symbols, barRow);
     if (notice !== '') pad.appendChild(h('div.pad-notice', { role: 'status' }, notice));
   }
 

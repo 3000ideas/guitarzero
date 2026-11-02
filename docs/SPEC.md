@@ -1388,3 +1388,20 @@ Primera incluida: **Sodoma (acústica)** (`sodoma-acustica`, 3:46, 64 compases, 
 inicio del compás 1 en 3,275 s), con los acordes detectados automáticamente en la grabación
 (confianza baja: hay que revisarlos) y el rasgueo sencillo. El MP3 se publicó sin carátula ni
 metadatos (`-map_metadata -1`). El audio es público en el sitio.
+
+### 22.6 Tablatura continua con marcas de sección
+
+La lista de compases del estudio es **una sola tira continua** (`renderFlow`, `src/ui/chordGrid.ts`):
+todos los compases seguidos, ocho o más por fila según el ancho, sin cortes entre secciones ni entre
+líneas del texto. Cada sección es una **marca** sobre el compás donde empieza (una etiqueta de color en
+la franja del compás, un borde grueso a la izquierda y un tinte suave para todos sus compases). Los
+cambios de tempo / rasgueo / compás escritos entre compases salen como pequeñas etiquetas (♩68.3,
+↕ patrón) y un `×n` marca una línea repetida. La letra ya no se muestra ni se edita en la cuadrícula
+(se conserva en el texto).
+
+**Cambiar dónde empieza una sección:** se selecciona el compás y en la fila «Sección» del panel derecho:
+«Empezar aquí» (con nombre sugerido), «Renombrar», «Quitar inicio» (los compases se unen a la sección
+anterior) y el `×n` de la sección. `startSectionAt` parte la línea de texto por ese compás si hace
+falta y deja bajo la nueva cabecera el `tempo:` que estuviera justo antes; `removeSectionStart` y el
+cambio de nombre se niegan, igual que partir una sección, cuando la sección se repite (`×n`) o su
+nombre se reutiliza más abajo, para no cambiar la música. `addBarAtEnd` añade compases al final.
