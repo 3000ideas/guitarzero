@@ -1373,3 +1373,18 @@ página no se desplaza para llegar a los acordes) y se compone de:
 - **Panel de acordes** fijo a la derecha, con su propio desplazamiento.
 La pantalla del editor usa hasta 1760 px de ancho en monitores grandes. En pantallas estrechas se
 mantiene el diseño apilado anterior.
+
+## 23. Canciones con su audio incluido
+
+`src/song/bundled.ts` (`BUNDLED_SONGS`): canciones que viajan con su audio (`public/audio/*.mp3`,
+servido desde la propia web). Al arrancar (`main.ts`) se crea en la biblioteca una **canción de
+usuario editable** (no un ejemplo de solo lectura) con su texto y los metadatos del audio
+(`offsetSec`, ganancia…), y en segundo plano se descarga el audio al almacén (`putTrack`). Se instala
+una sola vez (bandera `bundled:<id>:v<versión>`): si el usuario la borra no vuelve; si el navegador
+pierde el audio, se vuelve a descargar mientras la canción exista. Una descarga fallida no rompe
+nada y se reintenta al abrir la app.
+
+Primera incluida: **Sodoma (acústica)** (`sodoma-acustica`, 3:46, 64 compases, 69 bpm, La mayor,
+inicio del compás 1 en 3,275 s), con los acordes detectados automáticamente en la grabación
+(confianza baja: hay que revisarlos) y el rasgueo sencillo. El MP3 se publicó sin carátula ni
+metadatos (`-map_metadata -1`). El audio es público en el sitio.

@@ -18,6 +18,7 @@ import { editorScreen } from './ui/screens/editor';
 import { practiceScreen } from './ui/screens/practice';
 import { settingsScreen } from './ui/screens/settings';
 import { tunerScreen } from './ui/screens/tuner';
+import { downloadBundledAudio, installBundledEntries } from './song/bundled';
 
 export type RouteName = 'library' | 'editor' | 'practice' | 'settings' | 'tuner';
 
@@ -152,6 +153,8 @@ function requestPersistentStorage(): void {
 function boot(): void {
   requestPersistentStorage();
   migrateClockBase();
+  // Songs that ship with their audio: library entries now (shown on the first render), audio in the background.
+  void downloadBundledAudio(installBundledEntries());
   const root = document.getElementById('app');
   if (!root) throw new Error('No se encontró el elemento #app');
   const render = createRouter(root);
