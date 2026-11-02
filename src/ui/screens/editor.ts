@@ -108,8 +108,9 @@ import {
 } from '../../music/simplify';
 import { createChordGrid } from '../chordGrid';
 import { createBarCheck } from '../barCheck';
-import { applyTempoMap, parseGrid, retimeBar, serializeGrid } from '../../song/grid';
+import { applyTempoMap, expandRepeats, parseGrid, retimeBar, serializeGrid } from '../../song/grid';
 import { followAudio, type Stretch, type TempoMap } from '../../dsp/tempoMap';
+import type { FollowAction } from '../barCheck';
 import { barDrift, driftJumps, fitSync, type DriftJump, type SyncFit } from '../../dsp/syncFit';
 import { parseSong } from '../../song/parser';
 import { beatToSec, secToBeat, songDurationSec } from '../../song/tempo';
@@ -1138,8 +1139,6 @@ export const editorScreen: Screen = {
       onAnalyzeDrift: () => runDrift(),
       onFixJump: (j) => fixJump(j),
       onFollowRun: () => runFollow(),
-      onFollowApply: () => applyFollow(),
-      onFollowDiscard: () => discardFollow(),
       getPlayBeat: () => {
         const sec = gridPlaySec();
         return gridPlay && sec !== null ? secToBeat(gridPlay.song.tempoSegments, Math.max(0, sec - gridView.getVisualDelaySec())) : null;
@@ -1772,6 +1771,74 @@ export const editorScreen: Screen = {
       checkView.setFollow(null);
     }
 
+    /** Writes every repetition out (x2, reused sections) so each line can follow the recording on its own, then follows again. */
+    function expandAndFollow(): void {
+      const source = textarea.value;
+      const chart = parseGrid(source);
+      const fail = (text: string): void => checkView.setFollow({ text, bad: true, actions: [] });
+      if (!expandRepeats(chart)) {
+        fail('No se pueden escribir las repeticiones automáticamente (hay líneas ilegibles, una sección repetida sin definir o cambios de «time:» / «strum:» a mitad de canción). Hazlo a mano en la vista Texto.');
+        return;
+      }
+      const next = serializeGrid(chart);
+      const before = analyzeSource(source, id).song;
+      const after = analyzeSource(next, id).song;
+      const chords = (s: Song): string => s.bars.map((b) => b.chords.map((c) => `${c.chord.name}:${c.beats}`).join(' ')).join('|');
+      if (chords(before) !== chords(after) || before.events.length !== after.events.length) {
+        fail('Al escribir las repeticiones la música cambiaría: no se ha tocado nada. Hazlo a mano en la vista Texto.');
+        return;
+      }
+      applyText(next); // undoable with «Deshacer»
+      runFollow();
+    }
+
+    /** The strum the AUDIO plays (not the one the text says): shown with a button to use it and follow again. */
+    function detectStrumForFollow(): void {
+      if (!audio || !backing || busy) return;
+      checkView.setFollow(null, true);
+      window.setTimeout(() => {
+        if (unmounted || !audio || !backing) return;
+        const song = analysis.song;
+        const n = song.timeSignature.beatsPerBar;
+        const total = Math.max(0, Math.floor(song.totalBeats));
+        const beatTimes = total >= n * 2 ? Array.from({ length: total + 1 }, (_, k) => audio!.offsetSec + beatToSec(song.tempoSegments, k)) : undefined;
+        let result: StrumDetection;
+        try {
+          result = detectStrumPattern(backing.monoSamples(), sampleRate, { bpm: bpm(), beatsPerBar: n, firstDownbeatSec: firstDownbeatInAudio(audio.offsetSec, bpm(), n), beatTimes });
+        } catch (err) {
+          checkView.setFollow({ text: errorMessage(err, 'No se pudo analizar el rasgueo del audio'), bad: true, actions: [] });
+          return;
+        }
+        const current = currentStrumHeader(textarea.value, n);
+        const usable = isValidStrumPattern(result.pattern, n) && result.confidence >= STRUM_CONFIDENCE_THRESHOLD;
+        if (!usable) {
+          checkView.setFollow({ text: `No se distingue un patrón de rasgueo claro en el audio (${formatStrumDetection(result)}). Prueba a grabarlo tocando en el cuadro «Rasgueo» de la derecha.`, bad: true, actions: [] });
+          return;
+        }
+        if (result.pattern === current) {
+          checkView.setFollow({
+            text: `El audio suena con el mismo rasgueo que tu texto (${current}). Si hay compases con otro ritmo (un puente, un parón…), el patrón único no los cubre: edítalos aparte en la vista Texto con «strum:» a mitad de canción.`,
+            actions: [],
+          });
+          return;
+        }
+        checkView.setFollow({
+          text: `El audio suena con este rasgueo: ${result.pattern} (${formatStrumDetection(result)}). Tu texto tiene: ${current}.`,
+          actions: [
+            {
+              label: 'Usar este rasgueo y volver a seguir',
+              primary: true,
+              run: () => {
+                applyText(rewriteStrumHeader(textarea.value, result.pattern)); // undoable
+                renderStrum();
+                runFollow();
+              },
+            },
+          ],
+        });
+      }, 30);
+    }
+
     /** Follows the recording: a global fit first (offset and overall tempo), then a tempo for every line. */
     function runFollow(): void {
       if (!audio || !backing || busy) return;
@@ -1802,13 +1869,14 @@ export const editorScreen: Screen = {
         }
         const chart = parseGrid(source);
         const { stretches, lines, skipped } = buildStretches(mapSong, chart);
+        const expandAction: FollowAction = { label: 'Escribir las repeticiones y volver a seguir', primary: true, run: () => expandAndFollow() };
         if (stretches.every((s) => !s.retimable)) {
-          checkView.setFollow({ text: 'Ninguna línea del texto se puede ajustar por separado (todas se repiten). Escribe las repeticiones como compases sueltos en la vista Texto.', canApply: false, bad: true });
+          checkView.setFollow({ text: 'Ninguna línea del texto se puede ajustar por separado (todas se repiten: x2 o secciones reutilizadas). Escribiendo las repeticiones como líneas sueltas sí se podrá.', bad: true, actions: [expandAction] });
           return;
         }
         const map: TempoMap = followAudio(samples, sampleRate, offset, mapSong, stretches);
         if (!map.ok) {
-          checkView.setFollow({ text: map.reason, canApply: false, bad: true });
+          checkView.setFollow({ text: map.reason, bad: true, actions: [] });
           return;
         }
         const entries = stretches
@@ -1820,13 +1888,24 @@ export const editorScreen: Screen = {
         const before = Math.round((fit.ok ? fit.before : map.before) * 100);
         const after = Math.round(map.after * 100);
         const changes = Math.max(0, stretches.filter((s) => s.retimable).length);
+        const improves = after > before;
+        if (!improves && after >= 90) {
+          checkView.setFollow({ text: `Ya está todo alineado con el audio: golpes que encajan ${after} % (de ${map.strikes}).`, actions: [] });
+          return;
+        }
+        const actions: FollowAction[] = [];
+        if (improves) actions.push({ label: 'Aplicar', primary: true, run: () => applyFollow() });
+        if (skipped > 0) actions.push({ ...expandAction, primary: !improves });
+        if (!improves) actions.push({ label: 'Detectar el rasgueo del audio', primary: skipped === 0, run: () => detectStrumForFollow() });
         checkView.setFollow({
           text:
             `Se pondrá un tempo a cada línea (${changes} líneas) y se moverá el inicio. Golpes que encajan: ${before} % → ${after} % (de ${map.strikes}).` +
-            (skipped > 0 ? ` ${skipped} tramo${skipped === 1 ? '' : 's'} con repeticiones se deja${skipped === 1 ? '' : 'n'} como está.` : '') +
-            (after <= before ? ' No mejora el encaje: puede que el patrón de rasgueo no sea el de la canción.' : ''),
-          canApply: after > before,
-          bad: after <= before,
+            (skipped > 0 ? ` ${skipped} tramo${skipped === 1 ? '' : 's'} con repeticiones no se puede${skipped === 1 ? '' : 'n'} ajustar por separado y se deja${skipped === 1 ? '' : 'n'} como está.` : '') +
+            (!improves
+              ? ' Ya no hay mejora posible solo moviendo el tiempo. Lo habitual: el rasgueo del texto no es el que suena en esos compases (los desfases de medio pulso, ±200 ms, lo delatan).'
+              : ''),
+          bad: !improves,
+          actions,
         });
       }, 30);
     }
@@ -1836,7 +1915,7 @@ export const editorScreen: Screen = {
       if (!p || !audio) return;
       if (p.source !== textarea.value) {
         discardFollow();
-        checkView.setFollow({ text: 'El texto ha cambiado desde el análisis: vuelve a pulsar «Seguir el audio».', canApply: false, bad: true });
+        checkView.setFollow({ text: 'El texto ha cambiado desde el análisis: vuelve a pulsar «Seguir el audio».', bad: true, actions: [] });
         return;
       }
       stopGridPlay();

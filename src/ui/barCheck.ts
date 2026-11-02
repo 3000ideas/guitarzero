@@ -42,10 +42,14 @@ export interface BarCheckOpts {
   onAnalyzeDrift: () => void;
   /** «Corregir» a jump with a tempo change of its bar. */
   onFixJump: (jump: DriftJump) => void;
-  /** «Seguir el audio»: compute / apply / discard a tempo for every line. */
+  /** «Seguir el audio»: compute a tempo for every line (the result and what to do next come back through `setFollow`). */
   onFollowRun: () => void;
-  onFollowApply: () => void;
-  onFollowDiscard: () => void;
+}
+
+export interface FollowAction {
+  label: string;
+  primary?: boolean;
+  run: () => void;
 }
 
 export interface BarCheckView {
@@ -54,7 +58,7 @@ export interface BarCheckView {
   /** Result of the bar-by-bar analysis (null clears it); `note` is a message for the user. */
   setDrift(drift: readonly BarDrift[] | null, jumps: readonly DriftJump[], note?: string): void;
   /** Result of «Seguir el audio» (null hides it). */
-  setFollow(result: { text: string; canApply: boolean; bad?: boolean } | null, busy?: boolean): void;
+  setFollow(result: { text: string; bad?: boolean; actions: FollowAction[] } | null, busy?: boolean): void;
   /** New text / audio: redraws, keeping the bar when it still exists. */
   setContext(song: Song, audio: BarCheckAudio | null): void;
   setBar(index: number): void;
@@ -104,9 +108,8 @@ export function createBarCheck(opts: BarCheckOpts): BarCheckView {
   const autoSync = createAutoSyncBox(opts.autoSync);
   const followBtn = h('button.btn.btn-sm.btn-primary', { type: 'button', onclick: () => opts.onFollowRun() }, '✨ Seguir el audio') as HTMLButtonElement;
   const followText = h('div.auto-sync-text');
-  const followApply = h('button.btn.btn-sm.btn-primary', { type: 'button', onclick: () => opts.onFollowApply() }, 'Aplicar') as HTMLButtonElement;
-  const followDiscard = h('button.btn.btn-sm', { type: 'button', onclick: () => opts.onFollowDiscard() }, 'Descartar') as HTMLButtonElement;
-  const followResult = h('div.auto-sync-result', { role: 'status' }, followText, h('div.auto-sync-actions', null, followApply, followDiscard));
+  const followActions = h('div.auto-sync-actions');
+  const followResult = h('div.auto-sync-result', { role: 'status' }, followText, followActions);
   followResult.hidden = true;
   const driftBtn = h('button.btn.btn-sm', { type: 'button', onclick: () => opts.onAnalyzeDrift() }, '🔎 Ver dónde se pierde la sincronía') as HTMLButtonElement;
   const driftStrip = h('div.drift-strip');
@@ -417,8 +420,10 @@ export function createBarCheck(opts: BarCheckOpts): BarCheckView {
       followResult.hidden = false;
       followResult.classList.toggle('is-bad', !!result.bad);
       followText.textContent = result.text;
-      followApply.hidden = !result.canApply;
-      followDiscard.textContent = result.canApply ? 'Descartar' : 'Cerrar';
+      followActions.replaceChildren(
+        ...result.actions.map((a) => h(a.primary ? 'button.btn.btn-sm.btn-primary' : 'button.btn.btn-sm', { type: 'button', onclick: a.run }, a.label)),
+        h('button.btn.btn-sm', { type: 'button', onclick: () => { followResult.hidden = true; } }, 'Cerrar'),
+      );
     },
     setContext(nextSong, nextAudio) {
       song = nextSong;

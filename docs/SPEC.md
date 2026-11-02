@@ -1334,3 +1334,9 @@ ruido). `src/dsp/tempoMap.ts` (`followAudio`) sigue la grabación **una sola vez
   como herramienta avanzada.
 - `barDrift` pasó a ser un camino único (Viterbi) en lugar de una búsqueda por compás: un compás
   ruidoso sigue a sus vecinos en vez de saltar a un pulso vecino.
+- **Cuando «Seguir el audio» no basta** (22.4): si hay tramos con repeticiones, ofrece «Escribir las
+  repeticiones y volver a seguir» (`expandRepeats`: `x<n>` y secciones reutilizadas pasan a líneas
+  sueltas; se comprueba que los acordes y los golpes no cambian y se puede deshacer; se niega con
+  líneas ilegibles, secciones sin definir o `time:` / `strum:` a mitad de canción). Si ya no mejora
+  y queda < 90 % (típico: desfases de ±½ pulso porque el audio rasguea distinto del texto), ofrece
+  «Detectar el rasgueo del audio» (`detectStrumPattern`) y «Usar este rasgueo y volver a seguir».

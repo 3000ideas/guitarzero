@@ -10,6 +10,7 @@ import {
   beatsAt,
   chartChords,
   deleteBar,
+  expandRepeats,
   duplicateBar,
   headerValue,
   insertBar,
@@ -349,5 +350,28 @@ describe('applyTempoMap', () => {
     const chart = parseGrid('C . . . | G . . . |\nAm . . . |\n');
     applyTempoMap(chart, [{ item: 0, bpm: 90 }, { item: 1, bpm: 95 }]);
     expect(serializeGrid(chart)).toBe('tempo: 90\nC . . . | G . . . |\ntempo: 95\nAm . . . |\n');
+  });
+});
+
+describe('expandRepeats', () => {
+  const SRC = 'tempo: 90\nstrum: D-D-U-U-\n[Intro] x2\nD . . . | A . . . |\n[Estrofa]\nD . . . | F#m . . . | x2\n> la\nG . . . |\n[Estribillo]\nA . . . | D . . . |\n[Estrofa]\n[Estribillo] x2\n';
+
+  it('writes every repetition out without changing the music', () => {
+    const chart = parseGrid(SRC);
+    expect(expandRepeats(chart)).toBe(true);
+    const out = serializeGrid(chart);
+    expect(musical(out)).toEqual(musical(SRC));
+    expect(out).not.toMatch(/x\d/);
+    expect(parseSong(out).errors.filter((e) => e.severity === 'error')).toEqual([]);
+    // every bar of the song now has its own place in the text
+    const bars = parseSong(out).song.bars;
+    const places = new Set(bars.map((b) => `${b.srcLine}:${b.srcBar}`));
+    expect(places.size).toBe(bars.length);
+  });
+
+  it('refuses what it cannot copy safely', () => {
+    expect(expandRepeats(parseGrid('[A]\nC . . . |\n[B] x2\n'))).toBe(false); // recall of an undefined section
+    expect(expandRepeats(parseGrid('[A]\nC . . . |\nstrum: D-D-U-U-\n[A]\n'))).toBe(false); // strum change in the middle
+    expect(expandRepeats(parseGrid('[A]\nC . . |\n'))).toBe(false); // a line the grid cannot read
   });
 });

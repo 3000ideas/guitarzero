@@ -431,6 +431,74 @@ export function retimeBar(chart: GridChart, itemIndex: number, barIndex: number,
   return true;
 }
 
+/**
+ * Writes every repetition out: `x<n>` on a line becomes n lines, a section with `x<n>` or recalled by
+ * its name (`[Estrofa]` with no bars) becomes its full block each time. The music does not change,
+ * but every bar now has its own line, so each can take its own tempo («Seguir el audio»).
+ * Returns false (chart untouched) when it cannot be done safely: lines the grid cannot read, a
+ * recall of a section that was never defined, or `time:` / `strum:` changes in the middle of the
+ * song (a copy would be read under different headers).
+ */
+export function expandRepeats(chart: GridChart): boolean {
+  const items = chart.items;
+  const firstContent = items.findIndex((it) => it.kind === 'section' || it.kind === 'bars' || it.kind === 'raw');
+  if (firstContent < 0) return true;
+  for (let i = firstContent; i < items.length; i++) {
+    const it = items[i];
+    if (it.kind === 'raw') return false;
+    if (it.kind === 'header' && (it.key === 'time' || it.key === 'strum')) return false;
+  }
+  const clone = (it: GridItem): GridItem => {
+    if (it.kind === 'bars') return { ...it, bars: it.bars.map((b) => ({ cells: [...b.cells] })), repeat: 1, orig: null };
+    return { ...it } as GridItem;
+  };
+  /** A block of items with its `x<n>` lines written out. */
+  const unrollLines = (block: readonly GridItem[]): GridItem[] => {
+    const out: GridItem[] = [];
+    for (const it of block) {
+      if (it.kind === 'bars' && it.repeat > 1) {
+        for (let r = 0; r < it.repeat; r++) out.push({ ...clone(it), orig: r === 0 ? null : null } as GridItem);
+      } else out.push(clone(it));
+    }
+    return out;
+  };
+  const out: GridItem[] = items.slice(0, firstContent);
+  const defs = new Map<string, GridItem[]>();
+  let i = firstContent;
+  while (i < items.length) {
+    const it = items[i];
+    if (it.kind !== 'section') {
+      out.push(...unrollLines([it]));
+      i++;
+      continue;
+    }
+    let j = i + 1;
+    while (j < items.length && items[j].kind !== 'section') j++;
+    const block = items.slice(i + 1, j);
+    const key = it.label.toLowerCase();
+    const defines = block.some((b) => b.kind === 'bars');
+    let body: GridItem[];
+    if (defines) {
+      body = unrollLines(block);
+      defs.set(key, body);
+    } else {
+      const def = defs.get(key);
+      if (!def) return false;
+      body = def;
+    }
+    for (let r = 0; r < it.repeat; r++) {
+      out.push({ kind: 'section', label: it.label, repeat: 1, comment: r === 0 ? it.comment : '', orig: r === 0 && it.repeat === 1 ? it.orig : null });
+      out.push(...body.map(clone));
+      if (!defines && r === 0) {
+        // Lines written under a recall (none, by construction) would have been the section's own: nothing to add.
+      }
+    }
+    i = j;
+  }
+  chart.items = out;
+  return true;
+}
+
 /** Tempo changes smaller than this (bpm) are not written between stretches: they would add noise, not accuracy. */
 export const TEMPO_MAP_MIN_CHANGE = 0.15;
 
