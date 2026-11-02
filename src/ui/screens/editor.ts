@@ -108,7 +108,8 @@ import {
 } from '../../music/simplify';
 import { createChordGrid } from '../chordGrid';
 import { createBarCheck } from '../barCheck';
-import { fitSync, type SyncFit } from '../../dsp/syncFit';
+import { parseGrid, retimeBar, serializeGrid } from '../../song/grid';
+import { barDrift, driftJumps, fitSync, type DriftJump, type SyncFit } from '../../dsp/syncFit';
 import { parseSong } from '../../song/parser';
 import { beatToSec, secToBeat, songDurationSec } from '../../song/tempo';
 import { isExampleId } from '../../song/examples';
@@ -1133,6 +1134,8 @@ export const editorScreen: Screen = {
       onBarChange: () => stopGridPlay(),
       onNudgeOffset: (d) => onGridNudge(d),
       autoSync: { onRun: () => runAutoSync(), onApply: () => applyAutoSync(), onDiscard: () => discardAutoSync() },
+      onAnalyzeDrift: () => runDrift(),
+      onFixJump: (j) => fixJump(j),
       getPlayBeat: () => {
         const sec = gridPlaySec();
         return gridPlay && sec !== null ? secToBeat(gridPlay.song.tempoSegments, Math.max(0, sec - gridView.getVisualDelaySec())) : null;
@@ -1726,6 +1729,45 @@ export const editorScreen: Screen = {
 
     function discardAutoSync(): void {
       showFit(null);
+    }
+
+    /** Bar-by-bar analysis of the whole audio: shows where the audio stops following the grid. */
+    function runDrift(): void {
+      if (!audio || !backing) {
+        checkView.setDrift(null, [], 'Carga un audio en «Pista de audio» para analizarlo.');
+        return;
+      }
+      checkView.setDrift(null, [], 'Analizando…');
+      window.setTimeout(() => {
+        if (unmounted || !audio || !backing) return;
+        const drift = barDrift(backing.monoSamples(), sampleRate, audio.offsetSec, analysis.song);
+        checkView.setDrift(drift, driftJumps(drift));
+      }, 30);
+    }
+
+    /** Writes a tempo change around the bar whose audio length differs from the text, so the bars after it line up again. */
+    function fixJump(jump: DriftJump): void {
+      const song = analysis.song;
+      const bar = song.bars[jump.culpritBar];
+      if (!bar || bar.srcLine === undefined || bar.srcBar === undefined) return;
+      const sameSource = song.bars.filter((b) => b.srcLine === bar.srcLine && b.srcBar === bar.srcBar).length;
+      if (sameSource !== 1) {
+        checkView.setDrift(null, [], `El compás ${jump.culpritBar + 1} se repite en la canción (repetición ×n o sección reutilizada): escribe a mano el cambio de «tempo:» en la vista Texto.`);
+        return;
+      }
+      let bpmHere = song.tempoSegments[0].bpm;
+      for (const seg of song.tempoSegments) if (seg.fromBeat <= bar.startBeat + 1e-9) bpmHere = seg.bpm;
+      const nominal = (bar.beats * 60) / bpmHere;
+      const seconds = nominal + jump.jumpSec;
+      const newBpm = Math.round(((bar.beats * 60) / seconds) * 100) / 100;
+      const chart = parseGrid(textarea.value);
+      const last = jump.culpritBar === song.bars.length - 1;
+      if (!(seconds > 0) || !retimeBar(chart, bar.srcLine - 1, bar.srcBar, newBpm, last ? null : bpmHere)) {
+        checkView.setDrift(null, [], `No se pudo escribir el cambio de tempo del compás ${jump.culpritBar + 1}: hazlo a mano en la vista Texto (tempo: ${newBpm}).`);
+        return;
+      }
+      applyText(serializeGrid(chart));
+      runDrift();
     }
 
     /** Nudges where the song starts in the audio; a playback in progress continues from the same point with the new alignment. */

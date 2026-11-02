@@ -17,6 +17,7 @@ import {
   normalizeCellValue,
   parseBarCells,
   parseGrid,
+  retimeBar,
   serializeGrid,
   setCell,
   setHeader,
@@ -302,5 +303,29 @@ describe('regressions found in review', () => {
     const chart = parseGrid('time: 3/4\nC . . | G . . |\n');
     setHeader(chart, 'time', '');
     expect(serializeGrid(chart)).toBe('C . . . | G . . . |\n');
+  });
+});
+
+describe('retimeBar', () => {
+  it('gives one bar of a line its own tempo and goes back after it', () => {
+    const chart = parseGrid('tempo: 80\nD . . . | F#m . . . | D . . . | A . . . |\nD . . . |\n');
+    expect(retimeBar(chart, 1, 3, 70, 80)).toBe(true);
+    const out = serializeGrid(chart);
+    expect(out).toBe('tempo: 80\nD . . . | F#m . . . | D . . . |\ntempo: 70\nA . . . |\ntempo: 80\nD . . . |\n');
+    const { song } = parseSong(out);
+    expect(song.tempoSegments.map((t) => t.bpm)).toEqual([80, 70, 80]);
+    expect(parseSong(out).errors.filter((e) => e.severity === 'error')).toEqual([]);
+  });
+
+  it('works for the first and the last bar of the song, and refuses repeated lines', () => {
+    const a = parseGrid('tempo: 80\nD . . . | A . . . |\n');
+    expect(retimeBar(a, 1, 0, 90, 80)).toBe(true);
+    expect(serializeGrid(a)).toBe('tempo: 80\ntempo: 90\nD . . . |\ntempo: 80\nA . . . |\n');
+    const b = parseGrid('tempo: 80\nD . . . | A . . . |\n');
+    expect(retimeBar(b, 1, 1, 90, null)).toBe(true);
+    expect(serializeGrid(b)).toBe('tempo: 80\nD . . . |\ntempo: 90\nA . . . |\n');
+    const rep = parseGrid('tempo: 80\nD . . . | A . . . | x2\n');
+    expect(retimeBar(rep, 1, 0, 90, 80)).toBe(false);
+    expect(retimeBar(a, 1, 0, 5, 80)).toBe(false);
   });
 });

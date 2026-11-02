@@ -108,3 +108,50 @@ describe('fitSync', () => {
     expect(describeFit(late)).toMatch(/retrasada/);
   });
 });
+
+describe('barDrift / driftJumps (where the sync is lost)', () => {
+  const { song } = parseSong(SOURCE);
+
+  /** Audio where bar `breakBar` (0-based) lasts `extra` seconds longer; optionally that bar is silent / plays a different rhythm. */
+  function withBreak(breakBar: number, extra: number, silent: boolean): Float32Array {
+    const out = new Float32Array(40 * SR);
+    let seed = 11;
+    for (const e of song.events) {
+      if (silent && e.barIndex === breakBar) continue;
+      const t = 0.5 + beatToSec(song.tempoSegments, e.time) + (e.barIndex > breakBar ? extra : 0);
+      const s0 = Math.round(t * SR);
+      for (let i = 0; i < 0.25 * SR && s0 + i < out.length; i++) {
+        seed = (seed * 1664525 + 1013904223) >>> 0;
+        out[s0 + i] += (Math.sin(i * 0.3) * 0.7 + ((seed / 4294967296) * 2 - 1) * 0.3) * Math.exp(-i / 500);
+      }
+    }
+    return out;
+  }
+
+  it('a steady song has no jumps', async () => {
+    const { barDrift, driftJumps } = await import('../../src/dsp/syncFit');
+    const drift = barDrift(withBreak(99, 0, false), SR, 0.5, song);
+    expect(drift.filter((d) => d.deltaSec !== null).every((d) => Math.abs(d.deltaSec as number) < 0.01)).toBe(true);
+    expect(driftJumps(drift)).toEqual([]);
+  });
+
+  it('finds the bar that lasts longer (its strikes are normal)', async () => {
+    const { barDrift, driftJumps } = await import('../../src/dsp/syncFit');
+    const jumps = driftJumps(barDrift(withBreak(3, 0.2, false), SR, 0.5, song));
+    expect(jumps).toHaveLength(1);
+    expect(jumps[0].culpritBar).toBe(3); // «el compás 4»
+    expect(jumps[0].jumpSec).toBeGreaterThan(0.17);
+    expect(jumps[0].jumpSec).toBeLessThan(0.23);
+  });
+
+  it('finds it even when that bar has a different rhythm (no clear strikes of its own)', async () => {
+    const { barDrift, driftJumps } = await import('../../src/dsp/syncFit');
+    const drift = barDrift(withBreak(3, -0.2, true), SR, 0.5, song);
+    expect(drift[3].deltaSec).toBeNull();
+    const jumps = driftJumps(drift);
+    expect(jumps).toHaveLength(1);
+    expect(jumps[0].culpritBar).toBe(3);
+    expect(jumps[0].jumpSec).toBeLessThan(-0.17);
+    expect(jumps[0].jumpSec).toBeGreaterThan(-0.23);
+  });
+});

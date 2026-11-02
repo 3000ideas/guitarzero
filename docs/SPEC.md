@@ -1298,3 +1298,19 @@ En la sincronía de la cuadrícula y en Comprobar. `src/dsp/syncFit.ts` (`fitSyn
    (mejor puntuación / media del barrido; < 1,25 = «no hay un punto claro»: no se ofrece aplicar).
 5. «Aplicar» suma el desfase a `offsetSec` y, si procede, reescribe `tempo:` (bpm / factor, 2
    decimales; con «Deshacer»). Nada cambia hasta pulsar «Aplicar».
+
+### 22.3 Dónde se pierde la sincronía (cambios de ritmo dentro de la canción)
+
+Un ajuste global (22.2) no basta si un compás dura distinto en el audio que en el texto (una pausa,
+un compás alargado…): todo lo posterior se desfasa. En Comprobar, «🔎 Ver dónde se pierde la
+sincronía» (`barDrift` / `driftJumps` en `src/dsp/syncFit.ts`):
+- Para cada compás se busca el desfase (±½ pulso) usando solo sus golpes; es «?» si el audio no
+  muestra la mayoría de ellos (silencio, otro ritmo) o quedan fuera del audio.
+- Una tira de compases (verde ≤ 25 ms, amarillo ≤ 60 ms, rojo > 60 ms; pulsar uno lo abre) y, si
+  dos compases con respuesta clara difieren ≥ 40 ms, un salto: «el compás N dura X ms más/menos en
+  el audio» (N = el compás justo antes del primero que vuelve a encajar).
+- «Corregir el compás N con un cambio de tempo»: `retimeBar` (`src/song/grid.ts`) parte la línea y
+  escribe `tempo: X` justo antes de ese compás y `tempo:` original justo después
+  (X = pulsos·60 / (duración del texto + salto)), con «Deshacer». No se ofrece si el compás está en
+  una línea con `x<n>` o en una sección reutilizada (se indica cómo hacerlo a mano). Orden
+  recomendado: primero «Ajustar automáticamente» (inicio y tempo global), luego esta herramienta.

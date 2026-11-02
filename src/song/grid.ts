@@ -406,6 +406,31 @@ export function endsWithRecall(chart: GridChart): boolean {
   return false;
 }
 
+/**
+ * Gives ONE bar its own tempo: the bar line is split so that `tempo: bpm` comes right before the
+ * bar and `tempo: restoreBpm` right after it (null = nothing follows, no restore). Used when the
+ * audio's bar lasts longer or shorter than the text says. Refuses a line that repeats (`x2`).
+ */
+export function retimeBar(chart: GridChart, itemIndex: number, barIndex: number, bpm: number, restoreBpm: number | null): boolean {
+  const item = barsItem(chart, itemIndex);
+  if (!item || item.repeat !== 1 || !item.bars[barIndex] || !(bpm >= 20 && bpm <= 400)) return false;
+  const header = (v: number): GridItem => ({ kind: 'header', key: 'tempo', value: String(Math.round(v * 100) / 100), comment: '', orig: null });
+  const part = (bars: GridBar[], comment: string): GridItem => ({ kind: 'bars', bars, repeat: 1, comment, beats: item.beats, orig: null });
+  const before = item.bars.slice(0, barIndex);
+  const after = item.bars.slice(barIndex + 1);
+  const pieces: GridItem[] = [];
+  if (before.length > 0) pieces.push(part(before, ''));
+  pieces.push(header(bpm), part([item.bars[barIndex]], after.length === 0 ? item.comment : ''));
+  if (after.length > 0) {
+    if (restoreBpm !== null) pieces.push(header(restoreBpm));
+    pieces.push(part(after, item.comment));
+  } else if (restoreBpm !== null) {
+    pieces.push(header(restoreBpm));
+  }
+  chart.items.splice(itemIndex, 1, ...pieces);
+  return true;
+}
+
 /** Index of the last bar line of the chart, or -1. */
 export function lastBarsIndex(chart: GridChart): number {
   for (let i = chart.items.length - 1; i >= 0; i--) if (chart.items[i].kind === 'bars') return i;

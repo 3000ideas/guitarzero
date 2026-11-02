@@ -21,6 +21,7 @@ import {
 import { WAVEFORM_COLORS, STRUM_MARK_COLORS } from './waveform';
 import type { PlaySource } from './chordGrid';
 import { createAutoSyncBox, type AutoSyncBox, type AutoSyncOpts } from './autoSyncBox';
+import type { BarDrift, DriftJump } from '../dsp/syncFit';
 
 export interface BarCheckAudio {
   offsetSec: number;
@@ -37,11 +38,17 @@ export interface BarCheckOpts {
   /** Beat (absolute) being heard now, or null when nothing plays. */
   getPlayBeat: () => number | null;
   autoSync: AutoSyncOpts;
+  /** «Ver dónde se pierde la sincronía»: the host analyses the whole audio and calls `setDrift`. */
+  onAnalyzeDrift: () => void;
+  /** «Corregir» a jump with a tempo change of its bar. */
+  onFixJump: (jump: DriftJump) => void;
 }
 
 export interface BarCheckView {
   el: HTMLElement;
   autoSync: AutoSyncBox;
+  /** Result of the bar-by-bar analysis (null clears it); `note` is a message for the user. */
+  setDrift(drift: readonly BarDrift[] | null, jumps: readonly DriftJump[], note?: string): void;
   /** New text / audio: redraws, keeping the bar when it still exists. */
   setContext(song: Song, audio: BarCheckAudio | null): void;
   setBar(index: number): void;
@@ -89,6 +96,16 @@ export function createBarCheck(opts: BarCheckOpts): BarCheckView {
     h('button.grid-mini', { type: 'button', title: `${deltaMs > 0 ? 'Retrasa' : 'Adelanta'} la cuadrícula ${Math.abs(deltaMs)} ms`, onclick: () => opts.onNudgeOffset(deltaMs / 1000) }, label);
 
   const autoSync = createAutoSyncBox(opts.autoSync);
+  const driftBtn = h('button.btn.btn-sm', { type: 'button', onclick: () => opts.onAnalyzeDrift() }, '🔎 Ver dónde se pierde la sincronía') as HTMLButtonElement;
+  const driftStrip = h('div.drift-strip');
+  const driftText = h('div.drift-text');
+  const driftBox = h(
+    'div.check-drift',
+    null,
+    h('div.auto-sync-row', null, driftBtn, h('span.muted.small', null, 'Compara cada compás con el audio: si en un compás la canción cambia (una pausa, más pulsos…) y desde ahí todo se desfasa, se ve aquí.')),
+    driftStrip,
+    driftText,
+  );
   const legend = h(
     'ul.check-legend',
     null,
@@ -114,6 +131,7 @@ export function createBarCheck(opts: BarCheckOpts): BarCheckView {
     caption,
     h('div.check-transport', null, playBtn, sourceSel, h('label.grid-check', null, metro, h('span', null, 'Clic en cada pulso'))),
     autoSync.el,
+    driftBox,
     wrap,
     legend,
     note,
@@ -323,9 +341,56 @@ export function createBarCheck(opts: BarCheckOpts): BarCheckView {
   const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => draw()) : null;
   observer?.observe(wrap);
 
+  function renderDrift(drift: readonly BarDrift[] | null, jumps: readonly DriftJump[], note?: string): void {
+    driftStrip.replaceChildren();
+    driftText.replaceChildren();
+    if (!drift) {
+      if (note) driftText.appendChild(h('p', null, note));
+      return;
+    }
+    for (const d of drift) {
+      const ms = d.deltaSec === null ? null : Math.round(d.deltaSec * 1000);
+      const level = ms === null ? 'none' : Math.abs(ms) <= 25 ? 'ok' : Math.abs(ms) <= 60 ? 'warn' : 'bad';
+      driftStrip.appendChild(
+        h(
+          'button.drift-chip',
+          {
+            type: 'button',
+            class: `lvl-${level}${d.bar === bar ? ' is-current' : ''}`,
+            title: ms === null ? `Compás ${d.bar + 1}: sin respuesta clara (silencio u otro ritmo)` : `Compás ${d.bar + 1}: el audio va ${ms > 0 ? 'detrás' : 'delante'} ${Math.abs(ms)} ms`,
+            onclick: () => setBar(d.bar),
+          },
+          h('span.drift-n', null, String(d.bar + 1)),
+          h('span.drift-ms', null, ms === null ? '?' : `${ms > 0 ? '+' : ''}${ms}`),
+        ),
+      );
+    }
+    if (note) driftText.appendChild(h('p', null, note));
+    if (jumps.length === 0) {
+      driftText.appendChild(h('p', null, 'No hay saltos: el audio y el texto avanzan juntos (los «?» son compases con otro ritmo o sin audio).'));
+      return;
+    }
+    for (const j of jumps) {
+      const ms = Math.round(Math.abs(j.jumpSec) * 1000);
+      driftText.appendChild(
+        h(
+          'div.drift-jump',
+          null,
+          h(
+            'p',
+            null,
+            `Entre los compases ${j.fromBar + 1} y ${j.toBar + 1} el audio se desplaza ${ms} ms. El compás ${j.culpritBar + 1} dura ${ms} ms ${j.jumpSec > 0 ? 'MÁS' : 'MENOS'} en el audio que en el texto; por eso lo que va después deja de coincidir.`,
+          ),
+          h('button.btn.btn-sm.btn-primary', { type: 'button', onclick: () => opts.onFixJump(j) }, `Corregir el compás ${j.culpritBar + 1} con un cambio de tempo`),
+        ),
+      );
+    }
+  }
+
   return {
     el,
     autoSync,
+    setDrift: renderDrift,
     setContext(nextSong, nextAudio) {
       song = nextSong;
       audio = nextAudio;

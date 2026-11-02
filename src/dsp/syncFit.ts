@@ -6,7 +6,7 @@
  * expected strikes over the audio's attack curve to find the start offset (and, when the song
  * has a single tempo, the tempo) that makes them land on the attacks. Pure, testable in Node.
  */
-import type { TempoSegment } from '../types';
+import type { Song, TempoSegment } from '../types';
 import { beatToSec } from '../song/tempo';
 import { energyAttacks } from '../song/barCheck';
 
@@ -96,7 +96,7 @@ export function attackCurve(samples: Float32Array, sampleRate: number): Float32A
   return out;
 }
 
-function sampleAt(curve: Float32Array, sec: number): number {
+export function sampleAt(curve: Float32Array, sec: number): number {
   const x = sec / FLUX_HOP_SEC;
   if (x < 0 || x >= curve.length - 1) return 0;
   const i = Math.floor(x);
@@ -230,4 +230,89 @@ export function describeFit(fit: SyncFit): string {
   }
   parts.push(`Golpes que encajan: ${Math.round(fit.before * 100)} % → ${Math.round(fit.after * 100)} % (de ${fit.strikes}).`);
   return parts.join(' ');
+}
+
+// ---------------------------------------------------------------- bar by bar (where the sync is lost)
+
+/** Below this best / mean score a bar's own strikes do not show a clear alignment. */
+export const BAR_MIN_CONFIDENCE = 1.5;
+/** A change of the bar-to-bar offset beyond this is reported as a jump, seconds. */
+export const JUMP_MIN_SEC = 0.04;
+
+export interface BarDrift {
+  bar: number;
+  /** Audio later (+) or earlier (−) than the grid for the strikes of this bar; null = no clear answer (silence, other rhythm...). */
+  deltaSec: number | null;
+  confidence: number;
+}
+
+export interface DriftJump {
+  /** First confident bar before and after the jump (0-based). */
+  fromBar: number;
+  toBar: number;
+  /** The bar whose length in the audio differs from the text (the last bar before `toBar`). */
+  culpritBar: number;
+  /** Seconds the later part is shifted (positive: the audio is later). */
+  jumpSec: number;
+}
+
+/**
+ * For every bar, how far the audio is from the grid judged only by the strikes of that bar
+ * (±half a beat). A bar whose rhythm differs from the text gets null; the jump between the bars
+ * around it tells whether the length of the audio differs from the text (see `driftJumps`).
+ */
+export function barDrift(
+  samples: Float32Array,
+  sampleRate: number,
+  offsetSec: number,
+  song: Pick<Song, 'bars' | 'events' | 'tempoSegments'>,
+): BarDrift[] {
+  const curve = attackCurve(samples, sampleRate);
+  const duration = samples.length / Math.max(1, sampleRate);
+  // What a clear strike looks like on the curve: a bar «has» its strikes when most of them reach a fraction of that.
+  const sorted = Float32Array.from(curve).sort();
+  const ref = sorted.length > 0 ? sorted[Math.floor(sorted.length * 0.97)] : 0;
+  const byBar: number[][] = song.bars.map(() => []);
+  for (const e of song.events) if (byBar[e.barIndex]) byBar[e.barIndex].push(beatToSec(song.tempoSegments, e.time));
+  return song.bars.map((bar, i): BarDrift => {
+    const secs = byBar[i].filter((t) => offsetSec + t > 0.05 && offsetSec + t < duration - 0.05);
+    if (curve.length === 0 || secs.length < 3 || secs.length < 0.8 * byBar[i].length) return { bar: i, deltaSec: null, confidence: 0 };
+    const beatSec = beatToSec(song.tempoSegments, bar.startBeat + 1) - beatToSec(song.tempoSegments, bar.startBeat);
+    const window = Math.min(0.6, Math.max(0.15, 0.5 * beatSec));
+    let best = -Infinity;
+    let at = 0;
+    let sum = 0;
+    let n = 0;
+    for (let d = -window; d <= window + 1e-9; d += OFFSET_STEP_SEC) {
+      let sc = 0;
+      for (const t of secs) sc += sampleAt(curve, offsetSec + d + t);
+      sc *= 1 - 0.02 * (Math.abs(d) / window); // ties go to the smaller shift
+      sum += sc;
+      n++;
+      if (sc > best) {
+        best = sc;
+        at = d;
+      }
+    }
+    const mean = sum / Math.max(1, n);
+    const confidence = mean > 0 ? best / mean : 0;
+    let present = 0;
+    for (const t of secs) if (sampleAt(curve, offsetSec + at + t) >= 0.2 * ref) present++;
+    const clear = confidence >= BAR_MIN_CONFIDENCE && present / secs.length >= 0.6;
+    return { bar: i, deltaSec: clear ? Math.round(at * 1000) / 1000 : null, confidence };
+  });
+}
+
+/** Where consecutive confident bars disagree by more than `minJumpSec`: the length of the bar before the second one is wrong. */
+export function driftJumps(drift: readonly BarDrift[], minJumpSec = JUMP_MIN_SEC): DriftJump[] {
+  const out: DriftJump[] = [];
+  let prev: BarDrift | null = null;
+  for (const d of drift) {
+    if (d.deltaSec === null) continue;
+    if (prev && prev.deltaSec !== null && Math.abs(d.deltaSec - prev.deltaSec) >= minJumpSec) {
+      out.push({ fromBar: prev.bar, toBar: d.bar, culpritBar: d.bar - 1, jumpSec: d.deltaSec - prev.deltaSec });
+    }
+    prev = d;
+  }
+  return out;
 }
