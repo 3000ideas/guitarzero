@@ -1280,7 +1280,7 @@ de la cuadrícula empieza en el compás seleccionado y al volver lo selecciona.
   texto encaja con el audio.
 - «▶ Escuchar este compás» lo reproduce **en bucle** (canción / canción + acordes / solo acordes,
   con clic opcional); una raya blanca marca la posición. Los botones −100/−10/+10/+100 ms mueven el
-  inicio (`offsetSec`) y el bucle continúa; cambiar de compás o de pestaña lo detiene.
+  inicio (`offsetSec`) y el bucle continúa; cambiar de pestaña lo detiene; cambiar de compás mientras suena sigue sonando con el compás nuevo (en bucle), y si estaba parado sigue parado.
 - Texto de ayuda en la vista: la letra del acorde marca en qué pulso **empieza** ese acorde; los
   golpes los fija el patrón de rasgueo, no la posición de la letra.
 

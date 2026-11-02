@@ -1133,7 +1133,7 @@ export const editorScreen: Screen = {
     const checkTab = h('button.mode-tab', { type: 'button', role: 'tab', onclick: () => setEditMode('check') }, 'Comprobar') as HTMLButtonElement;
     const checkView = createBarCheck({
       onPlayToggle: () => void toggleGridPlay(),
-      onBarChange: () => stopGridPlay(),
+      onBarChange: () => restartGridPlayOnBar(),
       onNudgeOffset: (d) => onGridNudge(d),
       autoSync: { onRun: () => runAutoSync(), onApply: () => applyAutoSync(), onDiscard: () => discardAutoSync() },
       onAnalyzeDrift: () => runDrift(),
@@ -1608,6 +1608,22 @@ export const editorScreen: Screen = {
       p.raf = requestAnimationFrame(gridPlayTick);
     }
 
+    /** Changing bar in «Comprobar» while it plays: the music goes on with the new bar (looped), not silence. */
+    let restartPending = false;
+    function restartGridPlayOnBar(): void {
+      if (editMode !== 'check') {
+        stopGridPlay();
+        return;
+      }
+      if (gridPlayStarting) {
+        restartPending = true; // still starting the previous pass: restart as soon as it is up
+        return;
+      }
+      if (!gridPlay) return;
+      stopGridPlay();
+      void toggleGridPlay();
+    }
+
     /** The view whose «qué escuchar» and clic options apply now. */
     function activeView(): { getPlaySource(): 'chords' | 'song' | 'both'; getMetronome(): boolean } {
       return editMode === 'check' ? checkView : gridView;
@@ -1679,6 +1695,13 @@ export const editorScreen: Screen = {
         console.warn('No se pudo reproducir la canción', err);
       } finally {
         gridPlayStarting = false;
+        if (restartPending) {
+          restartPending = false;
+          if (gridPlay && editMode === 'check') {
+            stopGridPlay();
+            void toggleGridPlay();
+          }
+        }
       }
     }
 
