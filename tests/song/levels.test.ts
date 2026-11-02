@@ -52,3 +52,14 @@ describe('learning levels', () => {
     expect(levelSongId('sodoma-acustica', 2)).toBe('sodoma-acustica-n2');
   });
 });
+
+describe('parseLevelId', () => {
+  it('tells a level copy from a normal song', async () => {
+    const { parseLevelId } = await import('../../src/song/levels');
+    expect(parseLevelId('sodoma-acustica-n2')).toEqual({ baseId: 'sodoma-acustica', n: 2 });
+    expect(parseLevelId('s_abc12xyz-n4')).toEqual({ baseId: 's_abc12xyz', n: 4 });
+    expect(parseLevelId('sodoma-acustica')).toBeNull();
+    expect(parseLevelId('algo-n9')).toBeNull(); // no such level
+    expect(parseLevelId('algo-n')).toBeNull();
+  });
+});

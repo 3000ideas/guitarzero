@@ -1481,3 +1481,17 @@ canción; con un compás elegido, en ese compás; ■ vuelve al inicio de la can
 de clics (3-2-1, el primero acentuado) con el número grande sobre la tira, y después empieza la música. No se
 aplica a saltos, bucles ni reinicios. La marca de reproducción espera en la posición inicial durante la
 cuenta atrás.
+
+### 24.1 Selector de nivel arriba y cuadro «Niveles»
+
+La tarjeta lateral «Aprender por niveles» se sustituyó por un **selector de nivel en la franja de arriba**
+del editor (a la derecha de las pestañas, antes de la barra de reproducción y la onda):
+`NIVEL [Completa] [1] [2] [3] [4] ⋯ <nombre del nivel actual>`. El nivel en el que se está queda
+resaltado y su nombre escrito a la derecha. Cada nivel es **su propia canción con su propia cuadrícula**
+(otros acordes y otro rasgueo), así que elegir un nivel abre esa canción (`#/edit/<id>-nN`); si aún no
+existe se crea al elegirlo, a partir de la **canción completa**, con el mismo audio, inicio y tempo
+(`parseLevelId` reconoce un nivel por su id y localiza la completa). «Completa» vuelve a la base.
+Los niveles aún no creados salen con borde discontinuo. «⋯» abre un **cuadro (`<dialog>`)** con la
+explicación, la lista de niveles (Abrir / Practicar / Crear o Volver a crear, y «estás aquí») y el orden
+de estudio de un profesor, para no llenar la pantalla. «Volver a crear» rehace el nivel desde la completa y
+pierde sus cambios a mano. Con el cuadro abierto, el espacio no reproduce.

@@ -63,6 +63,12 @@ export const LEVELS: readonly LevelSpec[] = [
   },
 ];
 
+/** The song a level copy was made from and its level (`<base>-n2` → base, 2), or null for a normal song. */
+export function parseLevelId(id: string): { baseId: string; n: number } | null {
+  const m = /^(.+)-n([1-9])$/.exec(id);
+  return m && LEVELS.some((l) => l.n === Number(m[2])) ? { baseId: m[1], n: Number(m[2]) } : null;
+}
+
 /** Id of the copy of `songId` for a level. */
 export function levelSongId(songId: string, n: number): string {
   return `${songId}-n${n}`;
