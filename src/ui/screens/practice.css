@@ -1132,3 +1132,128 @@
   opacity: 1;
   color: #3ddc84;
 }
+
+/* ---- compact summary: everything (and "Repetir") fits one screen, portrait or landscape phone ---- */
+.practice-summary {
+  padding: 8px 12px 12px;
+}
+
+.practice-summary-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.practice-summary-titles {
+  min-width: 0;
+}
+
+.practice-summary h2 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.practice-summary-sub {
+  margin: 0;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.practice-summary-repeat {
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding: 0 18px;
+  font-size: 15px;
+}
+
+.practice-summary-stats {
+  grid-template-columns: 2fr 1fr 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.practice-summary-stat {
+  padding: 6px 10px;
+  border-radius: 10px;
+}
+
+.practice-summary-stat.accuracy {
+  grid-column: auto;
+}
+
+.practice-summary-label {
+  font-size: 10px;
+}
+
+.practice-summary-value {
+  font-size: 22px;
+  line-height: 1.15;
+}
+
+.practice-summary-value.small {
+  font-size: 12px;
+}
+
+.practice-summary-detail {
+  font-size: 11px;
+}
+
+.practice-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 8px;
+}
+
+.practice-chip {
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border, #262b36);
+  background: var(--panel, #161a22);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted, #94a3b8);
+}
+
+.practice-chip b {
+  color: var(--text, #e5e7eb);
+}
+
+.practice-chip.is-good {
+  border-color: rgba(34, 197, 94, 0.5);
+}
+
+.practice-chip.is-mid {
+  border-color: rgba(245, 158, 11, 0.55);
+}
+
+.practice-chip.is-bad {
+  border-color: rgba(239, 68, 68, 0.6);
+}
+
+.practice-summary .practice-hintbox {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-bottom: 0;
+  padding: 6px 10px;
+  border-radius: 10px;
+}
+
+.practice-summary .practice-hintbox p {
+  flex: 1 1 200px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.practice-summary .practice-hintbox .btn {
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 12px;
+}

@@ -1505,28 +1505,16 @@ export const practiceScreen: Screen = {
 
       const names = song.chordNames.slice();
       for (const name of Object.keys(summary.perChord)) if (!names.includes(name)) names.push(name);
-      const rows = names.map((name) => {
+      // One chip per chord ("D 3/4"), tinted by how it went: far shorter than a table.
+      const chips = names.map((name) => {
         const pc = summary.perChord[name];
         const total = pc ? pc.total : 0;
         const correct = pc ? pc.correct : 0;
-        return h(
-          'tr',
-          null,
-          h('td', null, name),
-          h('td', null, String(total)),
-          h('td', null, String(correct)),
-          h('td', null, total > 0 ? `${Math.round((correct / total) * 100)} %` : '—'),
-        );
+        const ratio = total > 0 ? correct / total : -1;
+        const tone = ratio < 0 ? '' : ratio >= 0.8 ? ' is-good' : ratio >= 0.5 ? ' is-mid' : ' is-bad';
+        return h('span', { class: `practice-chip${tone}`, title: total > 0 ? `${correct} de ${total} bien` : 'Sin rasgueos' }, h('b', null, name), ` ${total > 0 ? `${correct}/${total}` : '—'}`);
       });
-      const table =
-        names.length > 0
-          ? h(
-              'table.practice-table',
-              null,
-              h('thead', null, h('tr', null, h('th', null, 'Acorde'), h('th', null, 'Rasgueos'), h('th', null, 'Bien'), h('th', null, 'Acierto'))),
-              h('tbody', null, ...rows),
-            )
-          : null;
+      const table = chips.length > 0 ? h('div.practice-chips', null, ...chips) : null;
 
       let hint: HTMLElement | null = null;
       if (judged > 0 && missedRatio >= LOW_INPUT_MISSED_RATIO) {
@@ -1563,18 +1551,17 @@ export const practiceScreen: Screen = {
         );
       }
 
+      // Repeat sits in the top row (always in view, no scrolling); the library is one tap away in the app bar.
       append(summaryEl, [
-        h('h2', null, 'Resumen'),
-        h('div.practice-summary-sub', null, `${reason === 'finished' ? 'Canción completada' : 'Sesión terminada'} · ${song.title || 'Sin título'}`),
-        h('div.practice-summary-stats', null, accuracyStat, stat('Puntuación', String(summary.score)), stat('Mejor racha', String(summary.bestStreak)), stat('Pasadas', String(summary.passes))),
+        h(
+          'div.practice-summary-head',
+          null,
+          h('div.practice-summary-titles', null, h('h2', null, 'Resumen'), h('div.practice-summary-sub', null, `${reason === 'finished' ? 'Canción completada' : 'Sesión terminada'} · ${song.title || 'Sin título'}`)),
+          h('button', { class: 'btn btn-primary practice-summary-repeat', type: 'button', onclick: () => void restart() }, '↻ Repetir'),
+        ),
+        h('div.practice-summary-stats', null, accuracyStat, stat('Puntos', String(summary.score)), stat('Racha', String(summary.bestStreak)), stat('Pasadas', String(summary.passes))),
         table,
         hint,
-        h(
-          'div.practice-summary-actions',
-          null,
-          h('button', { class: 'btn btn-primary', type: 'button', onclick: () => void restart() }, 'Repetir'),
-          h('a', { class: 'btn', href: '#/' }, 'Biblioteca'),
-        ),
       ]);
       playView.hidden = true;
       summaryEl.hidden = false;
