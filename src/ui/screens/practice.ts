@@ -32,6 +32,8 @@ import type {
 import { parseSong } from '../../song/parser';
 import { getFlag, getSong, hasFlag, loadSettings, saveSettings, saveSong, setFlag } from '../../song/storage';
 import { chordToleranceFor, levelDemandOf } from '../../song/levels';
+import { createLevelSong, levelExists, levelFamily, levelSongIdOf, levelSpecOf } from '../../song/levelStore';
+import { isSilent, settingsOfSound, soundOf, toggleMaster, toggleTrack, type SoundState } from '../../game/sound';
 import { getTrack } from '../../song/audioStore';
 import { beatToSec } from '../../song/tempo';
 import { getChordShape } from '../../music/chords';
@@ -484,6 +486,75 @@ export const practiceScreen: Screen = {
       ),
     ) as HTMLDialogElement;
 
+    // ------------------------------------------------------------ sound buttons: 🔊 all · 🎵 song · 🎹 chords · 🥁 metronome
+    // With the crossed speaker nothing sounds and the microphone listens without interference.
+    let rememberedSound: SoundState | null = null;
+    const soundBtn = (icon: string, title: string, onclick: () => void): HTMLButtonElement =>
+      h('button', { class: 'practice-sound-btn', type: 'button', title, 'aria-label': title, onclick }, icon) as HTMLButtonElement;
+    const masterBtn = soundBtn('🔊', 'Silenciar todo', () => void onMasterSound());
+    const songBtn = soundBtn('🎵', 'La canción (grabación original)', () => void onTrackSound('song'));
+    const chordsBtn = soundBtn('🎹', 'Los acordes sintetizados', () => void onTrackSound('chords'));
+    const metroBtn = soundBtn('🥁', 'El metrónomo (un clic en cada pulso)', () => void onMetroSound());
+    const soundGroup = h('div.practice-sound', { role: 'group', 'aria-label': 'Sonido' }, masterBtn, songBtn, chordsBtn, metroBtn);
+
+    function currentSound(): SoundState {
+      return soundOf(settings);
+    }
+
+    function refreshSoundButtons(): void {
+      const s = currentSound();
+      const silent = isSilent(s);
+      masterBtn.textContent = silent ? '🔇' : '🔊';
+      masterBtn.classList.toggle('is-muted', silent);
+      masterBtn.setAttribute('aria-pressed', String(silent));
+      masterBtn.title = silent ? 'Todo en silencio: el micrófono oye sin interferencias. Púlsalo para volver a oír' : 'Silenciar todo (sin canción, acordes ni metrónomo): el micrófono oye sin interferencias';
+      const pairs: Array<[HTMLButtonElement, boolean]> = [[songBtn, s.song], [chordsBtn, s.chords], [metroBtn, s.metronome]];
+      for (const [btn, on] of pairs) {
+        btn.classList.toggle('is-on', on);
+        btn.setAttribute('aria-pressed', String(on));
+      }
+      songBtn.disabled = !audio;
+      chordsBtn.disabled = !audio;
+      songBtn.title = audio ? 'La canción (grabación original): ' + (s.song ? 'suena' : 'en silencio') : 'Esta canción no tiene audio';
+      chordsBtn.title = audio ? 'Los acordes sintetizados: ' + (s.chords ? 'suenan' : 'en silencio') : 'Los acordes suenan junto a un audio: carga uno en el editor';
+      metroBtn.title = 'El metrónomo: ' + (s.metronome ? 'suena' : 'en silencio');
+    }
+
+    /** Puts the sound in `next` through the same handlers the practice options use, so both always agree. */
+    async function applySound(next: SoundState): Promise<void> {
+      const cfg = settingsOfSound(next);
+      if (cfg.metronome !== settings.metronome) {
+        metronomeToggle.checked = cfg.metronome;
+        onMetronomeChange();
+      }
+      if (audio) {
+        if (cfg.backingTrack && cfg.backingSource !== settings.backingSource) {
+          backingSourceSelect.value = cfg.backingSource;
+          await onBackingSourceChange();
+        }
+        if (cfg.backingTrack !== settings.backingTrack) {
+          backingToggle.checked = cfg.backingTrack;
+          await onBackingChange();
+        }
+      }
+      refreshSoundButtons();
+    }
+
+    async function onMasterSound(): Promise<void> {
+      const r = toggleMaster(currentSound(), rememberedSound, { song: audio !== null, chords: false, metronome: true });
+      rememberedSound = r.remember;
+      await applySound(r.next);
+    }
+
+    async function onTrackSound(which: 'song' | 'chords'): Promise<void> {
+      await applySound(toggleTrack(currentSound(), which));
+    }
+
+    async function onMetroSound(): Promise<void> {
+      const s = currentSound();
+      await applySound({ ...s, metronome: !s.metronome });
+    }
+
     const header = h(
       'header.practice-header',
       null,
@@ -491,18 +562,60 @@ export const practiceScreen: Screen = {
       tempoEl,
       liveChordEl,
       noEvalBadge,
+      soundGroup,
       settingsBtn,
       settingsDialog,
     );
 
-    const levelStrip = h('div.practice-demand');
+    // Level selector: [Completa 1 2 3 4] switches to that level's own song (created on the first use), and the
+    // strip says what the level in use demands.
+    const family = levelFamily(id);
+    const levelBar = h('div.practice-levelbar', { role: 'group', 'aria-label': 'Nivel de aprendizaje' }, h('span.practice-levelbar-label', null, 'Nivel'));
+    const levelMsg = h('span.practice-levelmsg', { role: 'status' });
+    for (const n of [0, 1, 2, 3, 4]) {
+      const exists = levelExists(family.baseId, n);
+      levelBar.appendChild(
+        h(
+          'button',
+          {
+            type: 'button',
+            class: `practice-levelbtn${n === family.current ? ' is-active' : ''}${exists ? '' : ' is-missing'}`,
+            'aria-pressed': n === family.current ? 'true' : 'false',
+            title: `${n === 0 ? 'Canción completa' : `Nivel ${n}`}${exists ? '' : ' (aún no creado: se crea al elegirlo)'}`,
+            onclick: () => void goLevel(n),
+          },
+          n === 0 ? 'Completa' : String(n),
+        ),
+      );
+    }
+
+    async function goLevel(n: number): Promise<void> {
+      if (n === family.current) return;
+      const target = levelSongIdOf(family.baseId, n);
+      if (!getSong(target)) {
+        const spec = levelSpecOf(n);
+        if (!spec) {
+          levelMsg.textContent = 'No encuentro la canción completa.';
+          return;
+        }
+        levelMsg.textContent = 'Creando el nivel…';
+        const r = await createLevelSong(family.baseId, spec);
+        if (!r.ok && !getSong(target)) {
+          levelMsg.textContent = r.message;
+          return;
+        }
+      }
+      location.hash = `#/play/${target}`;
+    }
+
+    const levelStrip = h('div.practice-demand', null, levelBar);
     if (levelDemand) {
-      levelStrip.appendChild(h('strong', null, `Nivel ${levelDemand.level.n} · ${levelDemand.level.title}`));
       levelStrip.appendChild(h('span.practice-demand-hit', null, h('b', null, 'Acierto: '), levelDemand.demand.hit));
       levelStrip.appendChild(h('span.practice-demand-miss', null, h('b', null, 'Error: '), levelDemand.demand.miss));
-    } else {
-      levelStrip.hidden = true;
     }
+    levelStrip.appendChild(levelMsg);
+    for (const el of [metronomeToggle, backingToggle, backingSourceSelect]) el.addEventListener('change', () => refreshSoundButtons());
+    refreshSoundButtons();
 
     function openSettings(): void {
       const phase = session.getState().phase;

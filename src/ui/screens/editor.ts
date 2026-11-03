@@ -118,8 +118,9 @@ import { parseSong } from '../../song/parser';
 import { beatToSec, secToBeat, songDurationSec } from '../../song/tempo';
 import { isExampleId } from '../../song/examples';
 import { getSong, saveSong } from '../../song/storage';
-import { copyTrack, deleteTrack, getTrack, hasIndexedDb, putTrack } from '../../song/audioStore';
-import { FULL_SONG_DEMAND, LEVELS, buildLevelSource, levelPreview, levelSongId, parseLevelId, strumBeats, strumRuleText, type LevelSpec } from '../../song/levels';
+import { deleteTrack, getTrack, hasIndexedDb, putTrack } from '../../song/audioStore';
+import { createLevelSong } from '../../song/levelStore';
+import { FULL_SONG_DEMAND, LEVELS, levelPreview, levelSongId, parseLevelId, strumBeats, strumRuleText, type LevelSpec } from '../../song/levels';
 import { getAudioContext } from '../../audio/context';
 import { BackingTrack } from '../../audio/backing';
 import { renderChordTrack } from '../../audio/chordSynth';
@@ -1536,27 +1537,14 @@ export const editorScreen: Screen = {
     /** Writes (or rewrites) the copy of the FULL song for one level, with the same audio. Returns false on failure. */
     async function createLevel(level: LevelSpec): Promise<boolean> {
       flush();
-      const baseSong = getSong(baseId);
-      if (!baseSong) {
-        levelsStatus.textContent = 'No encuentro la canción completa de la que partir.';
-        if (!levelsDialog.open) levelsDialog.showModal();
+      const r = await createLevelSong(baseId, level);
+      if (!r.ok) {
+        levelsStatus.textContent = r.message;
+        if (getSong(baseId) === null && !levelsDialog.open) levelsDialog.showModal();
+        renderLevels();
         return false;
       }
-      const baseTitle = (baseSong.title.trim() || 'Sin título').replace(/\s*·\s*Nivel \d.*$/, '');
-      const title = `${baseTitle} · Nivel ${level.n}: ${level.title}`;
-      const levelId = levelSongId(baseId, level.n);
-      const { source, chords } = buildLevelSource(baseSong.source, level, title);
-      saveSong({ id: levelId, title, artist: baseSong.artist, source, updatedAt: 0, audio: baseSong.audio ? { ...baseSong.audio } : null });
-      if (baseSong.audio) {
-        try {
-          await copyTrack(baseId, levelId);
-        } catch (err) {
-          levelsStatus.textContent = `Se creó el nivel, pero no se pudo copiar el audio: ${errorMessage(err, 'error desconocido')}`;
-          renderLevels();
-          return false;
-        }
-      }
-      levelsStatus.textContent = `Nivel ${level.n} listo con ${chords.length === 1 ? '1 acorde' : `${chords.length} acordes`}: ${chords.join(' ')}`;
+      levelsStatus.textContent = `Nivel ${level.n} listo con ${r.chords.length === 1 ? '1 acorde' : `${r.chords.length} acordes`}: ${r.chords.join(' ')}`;
       renderLevels();
       return true;
     }

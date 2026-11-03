@@ -1551,3 +1551,15 @@ Cada nivel tiene sus propias exigencias en la práctica (`LevelDemand` en `src/s
   que el usuario haya pedido en Ajustes; el nivel 4 usa lo que diga Ajustes.
 - La práctica de un nivel muestra bajo la cabecera una franja «Nivel N · … — Acierto: … — Error: …». El cuadro
   «Niveles» del editor (y la línea bajo el selector) cuentan lo mismo con «Cuenta como acierto» / «Es un error».
+
+### 24.4 Nivel y sonido directamente en la pantalla de practicar
+
+- **Selector de nivel** bajo la cabecera de la práctica: `NIVEL [Completa] [1] [2] [3] [4]`, con el actual resaltado y
+  los no creados con borde discontinuo. Elegir uno abre la práctica de ese nivel (`#/play/<id>-nN`), creándolo antes si no
+  existe (`createLevelSong`, `src/song/levelStore.ts`, compartido con el editor). En un nivel, al lado salen el
+  «Acierto» y el «Error» de ese nivel.
+- **Botones de sonido** en la cabecera (`src/game/sound.ts`, pequeños, a la derecha): **🔊/🔇** (todo), **🎵** la
+  canción (grabación original), **🎹** los acordes sintetizados y **🥁** el metrónomo. La canción y los acordes son una
+  sola pista, así que son excluyentes (pulsar el activo la apaga). **🔇 = no suena nada** (ni canción, ni acordes, ni
+  metrónomo, ni los clics de la cuenta atrás): el micrófono oye sin interferencias. Pulsarlo otra vez devuelve lo que
+  sonaba. Los botones usan los mismos controles que «Opciones» (siempre coinciden); sin audio, 🎵 y 🎹 están desactivados.

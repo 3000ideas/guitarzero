@@ -989,3 +989,95 @@
     display: none;
   }
 }
+
+/* Sound buttons in the header: 🔊/🔇 everything · 🎵 song · 🎹 chords · 🥁 metronome. */
+.practice-sound {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+}
+
+.practice-sound-btn {
+  min-width: 36px;
+  min-height: 34px;
+  padding: 0 8px;
+  border-radius: 9px;
+  border: 1px solid var(--border, #262b36);
+  background: var(--panel, #161a22);
+  color: var(--muted, #8b93a1);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.55;
+}
+
+.practice-sound-btn.is-on {
+  opacity: 1;
+  color: var(--text, #e5e7eb);
+  border-color: var(--accent, #22d3ee);
+  background: rgba(34, 211, 238, 0.14);
+}
+
+.practice-sound-btn:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+
+.practice-sound-btn:first-child {
+  opacity: 1;
+  color: var(--text, #e5e7eb);
+  margin-right: 6px;
+}
+
+.practice-sound-btn.is-muted {
+  border-color: var(--warn, #facc15);
+  background: rgba(250, 204, 21, 0.14);
+}
+
+/* Level selector under the header. */
+.practice-levelbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.practice-levelbar-label {
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted, #8b93a1);
+  padding-right: 3px;
+}
+
+.practice-levelbtn {
+  min-width: 30px;
+  min-height: 28px;
+  padding: 0 9px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--text, #e5e7eb);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.practice-levelbtn.is-missing {
+  border: 1px dashed var(--border, #262b36);
+  color: var(--muted, #8b93a1);
+}
+
+.practice-levelbtn.is-active {
+  background: var(--accent, #22d3ee);
+  border-color: var(--accent, #22d3ee);
+  color: #06222a;
+}
+
+.practice-levelmsg {
+  color: var(--warn, #facc15);
+}
+
+.practice-demand {
+  align-items: center;
+}
