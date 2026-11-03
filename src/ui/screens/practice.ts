@@ -663,10 +663,11 @@ export const practiceScreen: Screen = {
 
     const currentCanvas = h('canvas', { class: 'practice-diagram-canvas' });
     const nextCanvas = h('canvas', { class: 'practice-diagram-canvas' });
+    const currentDiagram = h('div.practice-diagram.current', null, currentCanvas);
     const diagrams = h(
       'div.practice-diagrams',
       null,
-      h('div.practice-diagram.current', null, currentCanvas),
+      currentDiagram,
       h('div.practice-diagram.next', null, h('div.practice-diagram-label', null, 'Siguiente'), nextCanvas),
     );
 
@@ -677,8 +678,8 @@ export const practiceScreen: Screen = {
     const overlay = h('div.practice-overlay', null, startBtn, h('div.practice-overlay-hint', null, 'o pulsa Espacio'), testMicBtn, overlayMsg);
     if (!playable) overlayMsg.textContent = 'La canción no tiene compases válidos: edítala desde la biblioteca.';
     const pausedLabel = h('div.practice-paused-label', { hidden: true }, 'Pausa', h('small', null, 'arrastra la autopista (o ← →) para moverte · toca para reanudar'));
-    // Big, centred read-out of the last strum ("C · Tarde +180 ms" then "✓ C"): the canvas rings sit
-    // near the left edge on a phone, so this is the thing to actually read.
+    // Read-out of the last strum ("C · Tarde +180 ms" then "✓ C"). It sits in a reserved strip above the chord
+    // drawing, NOT over the highway: the upcoming chords must stay visible.
     const feedbackTimingEl = h('div.practice-feedback-timing');
     const feedbackVerdictEl = h('div.practice-feedback-verdict');
     const feedbackEl = h('div.practice-feedback', { hidden: true }, feedbackTimingEl, feedbackVerdictEl);
@@ -697,7 +698,8 @@ export const practiceScreen: Screen = {
         feedbackVerdictEl.textContent = '';
       }, 1300);
     }
-    const stage = h('div.practice-stage', null, canvas, overlay, feedbackEl, pausedLabel);
+    currentDiagram.prepend(feedbackEl);
+    const stage = h('div.practice-stage', null, canvas, overlay, pausedLabel);
     // Scrubbing while paused: drag the highway sideways (or use the bar buttons / ← →) to pick the
     // bar to practise again. Snaps to whole bars because resume() replays a bar in full anyway.
     let dragStartX: number | null = null;
