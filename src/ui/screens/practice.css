@@ -315,14 +315,10 @@
   display: block;
 }
 
-.practice-diagram.current {
-  min-width: 150px;
-}
 
 .practice-diagram.current canvas {
   width: 150px;
-  flex: 1 1 0;
-  min-height: 0;
+  height: 100%;
 }
 
 .practice-diagram.next {
@@ -688,44 +684,15 @@
     flex: 1 1 0;
   }
 
-  .practice-diagram.current {
-    min-width: 0;
-  }
-
-  .practice-diagram.current .practice-feedback {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    width: auto;
-    min-height: 20px;
-    display: flex;
-    flex-wrap: nowrap;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    z-index: 1;
-  }
-
-  .practice-diagram.current .practice-feedback[hidden] {
-    display: flex;
-  }
-
-  .practice-diagram.current .practice-feedback-timing,
-  .practice-diagram.current .practice-feedback-verdict {
-    font-size: 12px;
-    line-height: 20px;
-  }
-
   .practice-diagram.current canvas {
     position: absolute;
-    inset: 22px 0 0 0;
+    inset: 0;
     width: 100%;
-    height: calc(100% - 22px);
+    height: 100%;
   }
 
   .practice-diagram.next {
-    flex: 0 0 30%;
+    flex: 0 0 38%;
     justify-content: flex-start;
   }
 
@@ -798,10 +765,6 @@
 
   .practice-diagrams {
     height: clamp(100px, 16vh, 150px);
-  }
-
-  .practice-diagram.current {
-    min-width: 120px;
   }
 
   .practice-diagram.current canvas {
@@ -966,19 +929,22 @@
 }
 
 .practice-feedback {
-  /* A reserved strip above the chord drawing (hidden = invisible but keeps its space, so nothing jumps). */
-  flex: 0 0 auto;
-  width: 100%;
-  min-height: 38px;
-  text-align: center;
-  padding: 2px 4px;
-  border-radius: 8px;
-  background: rgba(15, 17, 22, 0.55);
-  overflow: hidden;
+  /* Lives in the level row: right of the selector, same height whether shown or not (hidden = invisible). */
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  min-width: 190px;
+  justify-content: flex-end;
+  white-space: nowrap;
 }
 .practice-feedback[hidden] {
-  display: block;
+  display: inline-flex;
   visibility: hidden;
+}
+.practice-demand .practice-demand-hit,
+.practice-demand .practice-demand-miss {
+  order: 2;
 }
 
 .practice-feedback-timing {

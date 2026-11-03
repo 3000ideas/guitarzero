@@ -108,8 +108,8 @@ describe('clamp / rowOf / scale helpers', () => {
     expect(pxPerBeatFor(2000)).toBe(160);
   });
 
-  it('strikeX = 0.25 * width and eventX moves with the beat', () => {
-    expect(strikeXFor(800)).toBe(200);
+  it('strikeX = 0.35 * width and eventX moves with the beat', () => {
+    expect(strikeXFor(800)).toBe(280);
     expect(eventX(4, 4, 200, 100)).toBe(200);
     expect(eventX(5, 4, 200, 100)).toBe(300);
     expect(eventX(3.5, 4, 200, 100)).toBe(150);
@@ -331,7 +331,7 @@ describe('computeLayout', () => {
       [320, 200],
     ]) {
       const L = computeLayout(w, h);
-      expect(L.strikeX).toBe(0.25 * w);
+      expect(L.strikeX).toBe(0.35 * w);
       expect(L.pxPerBeat).toBe(pxPerBeatFor(w));
       expect(L.stringsTop).toBeGreaterThan(L.chordNameY);
       expect(L.chordNameY).toBeGreaterThan(L.headerY);

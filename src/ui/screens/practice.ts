@@ -625,6 +625,7 @@ export const practiceScreen: Screen = {
       levelStrip.appendChild(h('span.practice-demand-miss', null, h('b', null, 'Error: '), levelDemand.demand.miss));
     }
     levelStrip.appendChild(levelMsg);
+
     for (const el of [metronomeToggle, backingToggle, backingSourceSelect]) el.addEventListener('change', () => refreshSoundButtons());
     refreshSoundButtons();
 
@@ -678,11 +679,11 @@ export const practiceScreen: Screen = {
     const overlay = h('div.practice-overlay', null, startBtn, h('div.practice-overlay-hint', null, 'o pulsa Espacio'), testMicBtn, overlayMsg);
     if (!playable) overlayMsg.textContent = 'La canción no tiene compases válidos: edítala desde la biblioteca.';
     const pausedLabel = h('div.practice-paused-label', { hidden: true }, 'Pausa', h('small', null, 'arrastra la autopista (o ← →) para moverte · toca para reanudar'));
-    // Read-out of the last strum ("C · Tarde +180 ms" then "✓ C"). It sits in a reserved strip above the chord
-    // drawing, NOT over the highway: the upcoming chords must stay visible.
+    // Read-out of the last strum ("C · Tarde +180 ms" then "✓ C"), shown in the level row.
     const feedbackTimingEl = h('div.practice-feedback-timing');
     const feedbackVerdictEl = h('div.practice-feedback-verdict');
     const feedbackEl = h('div.practice-feedback', { hidden: true }, feedbackTimingEl, feedbackVerdictEl);
+    levelStrip.insertBefore(feedbackEl, levelBar.nextSibling); // right of the level selector, never over the highway or the chord drawing
     let feedbackTimer: number | null = null;
     function showFeedback(timing: string | null, verdict: { text: string; kind: string } | null): void {
       if (timing !== null) feedbackTimingEl.textContent = timing;
@@ -698,7 +699,6 @@ export const practiceScreen: Screen = {
         feedbackVerdictEl.textContent = '';
       }, 1300);
     }
-    currentDiagram.prepend(feedbackEl);
     const stage = h('div.practice-stage', null, canvas, overlay, pausedLabel);
     // Scrubbing while paused: drag the highway sideways (or use the bar buttons / ← →) to pick the
     // bar to practise again. Snaps to whole bars because resume() replays a bar in full anyway.
