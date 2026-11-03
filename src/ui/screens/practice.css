@@ -1081,3 +1081,14 @@
 .practice-demand {
   align-items: center;
 }
+
+.practice-hit {
+  font-size: 0.9rem;
+  color: var(--muted, #8a8f98);
+  opacity: 0.35;
+  transition: opacity 0.12s, color 0.12s;
+}
+.practice-hit.is-on {
+  opacity: 1;
+  color: #3ddc84;
+}

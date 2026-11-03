@@ -448,6 +448,16 @@ export const practiceScreen: Screen = {
     const levelEl = h('div.practice-level', { title: 'Nivel de entrada' }, levelFill, levelGate);
     const liveChordEl = h('div.practice-chord-live', { title: 'Acorde detectado' }, '—');
     const noEvalBadge = h('span.badge.practice-badge', { hidden: true }, 'Sin evaluación');
+    // Flashes on every strum the microphone detects, so a missed hit can be told apart: no flash = not heard,
+    // flash but "Perdido" = heard but out of time.
+    const hitDot = h('span.practice-hit', { title: 'Se enciende cada vez que el micrófono oye un golpe', 'aria-label': 'Golpe detectado' }, '●');
+    let hitFlashTimer = 0;
+    const unsubHit = source.onFrame((f) => {
+      if (!f.onset) return;
+      hitDot.classList.add('is-on');
+      window.clearTimeout(hitFlashTimer);
+      hitFlashTimer = window.setTimeout(() => hitDot.classList.remove('is-on'), 180);
+    });
     const agcNotice = h('div.practice-agc', { hidden: true });
 
     let sectionSelect: HTMLSelectElement | null = null;
@@ -561,6 +571,7 @@ export const practiceScreen: Screen = {
       titleEl,
       tempoEl,
       liveChordEl,
+      hitDot,
       noEvalBadge,
       soundGroup,
       settingsBtn,
@@ -812,6 +823,32 @@ export const practiceScreen: Screen = {
       setMicStatus('active');
       updateAgcNotice();
       return true;
+    }
+
+    // Watchdog: the capture context can be suspended behind our back (tab switch, phone call, headphones plugged
+    // in) and the track can end; either way the meter freezes and nothing is heard. Resume / restart quietly.
+    let watchSince = 0;
+    let restarting = false;
+    function watchMic(micOn: boolean): void {
+      if (disposed || restarting || !settings.listen || session.getState().phase !== 'playing') return;
+      const now = performance.now();
+      const healthy = micOn && mic.context.state === 'running';
+      if (healthy) {
+        watchSince = 0;
+        return;
+      }
+      if (watchSince === 0) watchSince = now;
+      if (now - watchSince < 800) return;
+      watchSince = 0;
+      restarting = true;
+      void (async () => {
+        try {
+          if (micOn) await mic.context.resume().catch(noop);
+          else await startMic();
+        } finally {
+          restarting = false;
+        }
+      })();
     }
 
     /** "Probar micrófono" / "Reintentar": starts the mic and turns listening on when it works. */
@@ -1366,6 +1403,7 @@ export const practiceScreen: Screen = {
 
       const micOn = mic.isRunning();
       if (micStatus === 'active' && !micOn) setMicStatus('ended');
+      watchMic(micOn);
       const rms = micOn ? state.live.rmsDb : LEVEL_MIN_DB;
       const levelPct = Math.round(clamp((rms - LEVEL_MIN_DB) / (LEVEL_MAX_DB - LEVEL_MIN_DB), 0, 1) * 100);
       if (levelPct !== hud.levelPct) {
@@ -1559,6 +1597,8 @@ export const practiceScreen: Screen = {
     return () => {
       disposed = true;
       cancelAnimationFrame(raf);
+      unsubHit();
+      window.clearTimeout(hitFlashTimer);
       disposeSession();
       source.dispose();
       mic.stop();
