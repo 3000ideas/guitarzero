@@ -663,14 +663,15 @@
     flex-direction: row-reverse;
   }
 
+  /* Side by side: two upright chord boxes (current big, next smaller), each as tall as the strip allows. */
   .practice-diagrams {
-    flex: 0 0 30%;
-    flex-direction: column;
+    flex: 0 0 38%;
+    flex-direction: row;
     align-items: stretch;
     height: auto;
     min-height: 0;
-    gap: 4px;
-    padding: 4px 8px;
+    gap: 6px;
+    padding: 4px 6px;
   }
 
   /* Absolutely positioned canvases: their size is always definite inside the flexed items. */
@@ -678,10 +679,11 @@
     position: relative;
     height: auto;
     min-height: 0;
+    min-width: 0;
   }
 
   .practice-diagram.current {
-    flex: 1 1 0;
+    flex: 3 1 0;
   }
 
   .practice-diagram.current canvas {
@@ -692,17 +694,27 @@
   }
 
   .practice-diagram.next {
-    flex: 0 0 38%;
+    flex: 2 1 0;
     justify-content: flex-start;
+  }
+
+  .practice-diagram.next .practice-diagram-label {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 10px;
+    line-height: 12px;
   }
 
   .practice-diagram.next canvas {
     position: absolute;
-    top: 16px;
+    top: 12px;
     bottom: 0;
-    left: 15%;
-    width: 70%;
-    height: calc(100% - 16px);
+    left: 0;
+    width: 100%;
+    height: calc(100% - 12px);
   }
 
   .practice-right {

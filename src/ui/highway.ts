@@ -99,7 +99,7 @@ export function pxPerBeatFor(width: number): number {
 }
 
 export function strikeXFor(width: number): number {
-  return 0.35 * width;
+  return 0.42 * width;
 }
 
 /** Horizontal position of a beat-time given the current song beat. */

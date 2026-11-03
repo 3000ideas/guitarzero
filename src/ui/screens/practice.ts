@@ -620,10 +620,7 @@ export const practiceScreen: Screen = {
     }
 
     const levelStrip = h('div.practice-demand', null, levelBar);
-    if (levelDemand) {
-      levelStrip.appendChild(h('span.practice-demand-hit', null, h('b', null, 'Acierto: '), levelDemand.demand.hit));
-      levelStrip.appendChild(h('span.practice-demand-miss', null, h('b', null, 'Error: '), levelDemand.demand.miss));
-    }
+    // (What each level counts as a hit is explained in the editor's level dialog, not here: the row stays one line.)
     levelStrip.appendChild(levelMsg);
 
     for (const el of [metronomeToggle, backingToggle, backingSourceSelect]) el.addEventListener('change', () => refreshSoundButtons());
@@ -1354,7 +1351,9 @@ export const practiceScreen: Screen = {
         c.fillText('N.C.', w / 2, hgt / 2);
         return;
       }
-      drawChordDiagram(c, shapes[chord.name] ?? null, { x: 0, y: 0, w, h: hgt }, { title: chord.name, showFingers: true, muted });
+      // Keep an upright chord-box shape (about 4:5) centred in the canvas instead of stretching it to fill.
+      const boxW = Math.min(w, hgt * 0.8);
+      drawChordDiagram(c, shapes[chord.name] ?? null, { x: (w - boxW) / 2, y: 0, w: boxW, h: hgt }, { title: chord.name, showFingers: true, muted });
     }
 
     function progressRange(state: SessionState): { from: number; to: number } {
