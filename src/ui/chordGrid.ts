@@ -714,7 +714,8 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
       advance = advanceSel.value as AdvanceMode;
     });
 
-    const info = h('div.pad-info', null, h('span.pad-where', null, selected ? `Compás ${barNo} · pulso ${selected.cell + 1}` : 'Toca una casilla'));
+    // Nothing to say until a cell is chosen: the idle hint only took room.
+    const info = h('div.pad-info', { hidden: !selected }, h('span.pad-where', null, selected ? `Compás ${barNo} · pulso ${selected.cell + 1}` : ''));
 
     const sectionRow = renderSectionRow(selected);
     const usedRow = h('div.pad-row.pad-scroll', { 'aria-label': 'Acordes de la canción' }, used.length === 0 ? h('span.muted.small', null, 'Aquí saldrán los acordes que uses') : used.map((n) => chordButton(n, 'is-used')));

@@ -2477,3 +2477,13 @@
     display: none;
   }
 }
+
+.chord-grid-editor .pad-info[hidden] {
+  display: none;
+}
+
+@media (orientation: landscape) and (max-height: 520px) {
+  .chord-grid-editor .pad-info {
+    font-size: 11px;
+  }
+}
