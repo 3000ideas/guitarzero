@@ -2308,3 +2308,38 @@
     max-width: 100%;
   }
 }
+
+/* Pad groups that fold away: the chords stay in view, the rest is one tap. */
+.chord-grid-editor .pad-fold {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.chord-grid-editor .pad-fold > summary {
+  cursor: pointer;
+  padding: 5px 10px;
+  font-size: 13px;
+  color: var(--muted);
+  list-style: none;
+}
+
+.chord-grid-editor .pad-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.chord-grid-editor .pad-fold > summary::before {
+  content: '▸ ';
+}
+
+.chord-grid-editor .pad-fold[open] > summary::before {
+  content: '▾ ';
+}
+
+.chord-grid-editor .pad-fold[open] {
+  padding-bottom: 6px;
+}
+
+.chord-grid-editor .pad-fold > :not(summary) {
+  margin: 4px 6px 0;
+}

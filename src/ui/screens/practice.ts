@@ -106,6 +106,10 @@ const noop = (): void => {};
 /** Upper bound on waiting for AudioContext.resume() before starting/resuming the session. */
 const RESUME_WAIT_MS = 1000;
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+/** How long Reanudar / Empezar wait for the microphone or the screen lock before going on without them. */
+const SETUP_WAIT_MS = 2500;
+/** `p`, or `fallback` when it takes longer than `ms`: a stuck permission prompt must never freeze the practice. */
+const withTimeout = <T>(p: Promise<T>, ms: number, fallback: T): Promise<T> => Promise.race([p, delay(ms).then(() => fallback)]);
 
 // ------------------------------------------------------------------ pure helpers
 
@@ -1088,7 +1092,7 @@ export const practiceScreen: Screen = {
         // session never starts against a still-suspended context (the rAF guard would pause it).
         const resumed = ctx.resume().catch(noop);
         if (settings.listen) {
-          const ok = await startMic();
+          const ok = await withTimeout(startMic(), SETUP_WAIT_MS, true);
           if (disposed) return;
           if (!ok) {
             settings = { ...settings, listen: false };
@@ -1101,7 +1105,7 @@ export const practiceScreen: Screen = {
           await ensureBackingLoaded();
           if (disposed) return;
         }
-        await requestWakeLock();
+        await withTimeout(requestWakeLock(), 1000, undefined);
         await Promise.race([resumed, delay(RESUME_WAIT_MS)]);
         if (disposed || session.getState().phase !== 'idle') return;
         const run = runs[selectedRun];
@@ -1122,7 +1126,9 @@ export const practiceScreen: Screen = {
       try {
         const resumed = ctx.resume().catch(noop);
         if (settings.listen && !mic.isRunning()) {
-          const ok = await startMic();
+          // Bounded: if the microphone does not answer, practise anyway (the watchdog keeps trying) instead of
+          // leaving the Reanudar button dead.
+          const ok = await withTimeout(startMic(), SETUP_WAIT_MS, true);
           if (disposed) return;
           if (!ok) {
             settings = { ...settings, listen: false };
@@ -1130,7 +1136,7 @@ export const practiceScreen: Screen = {
             session.setSettings({ listen: false });
           }
         }
-        await requestWakeLock();
+        await withTimeout(requestWakeLock(), 1000, undefined);
         await Promise.race([resumed, delay(RESUME_WAIT_MS)]);
         if (disposed || session.getState().phase !== 'paused') return;
         session.resume();

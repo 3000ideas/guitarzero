@@ -688,6 +688,7 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
     return row;
   }
 
+  const padOpen = new Set<string>();
   function renderPad(): void {
     clear(pad);
     const selected = validSel(sel) ? sel : null;
@@ -775,9 +776,8 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
       h('button.pad-btn.pad-action', { type: 'button', title: 'Esta casilla sigue con el acorde anterior', onclick: () => write('') }, '· Mantener'),
       h('button.pad-btn.pad-action', { type: 'button', title: 'Silencio', onclick: () => write(REST_CELL) }, '– Silencio'),
       h('button.pad-btn.pad-action', { type: 'button', title: 'Sin acorde', onclick: () => write(NC_CELL) }, 'N.C.'),
-      typed,
-      h('button.pad-btn.pad-action', { type: 'button', onclick: submitTyped }, 'OK'),
     );
+    const typedRow = h('div.pad-row', null, typed, h('button.pad-btn.pad-action', { type: 'button', onclick: submitTyped }, 'OK'));
 
     const barRow = h(
       'div.pad-row.pad-scroll',
@@ -812,7 +812,25 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
     );
     if (bars.length === 0 && !selected) barRow.classList.add('is-idle');
 
-    pad.append(info, sectionRow, usedRow, rootsRow, qualityRow, symbols, barRow);
+    // What is needed on every edit stays in view (chords, roots, hold/rest); the rest folds away, and stays as left.
+    const fold = (key: string, title: string, ...kids: Array<HTMLElement | null>): HTMLElement => {
+      const d = h('details.pad-fold', { open: padOpen.has(key) }, h('summary', null, title), ...kids) as HTMLDetailsElement;
+      d.addEventListener('toggle', () => {
+        if (d.open) padOpen.add(key);
+        else padOpen.delete(key);
+      });
+      return d;
+    };
+    pad.append(
+      info,
+      usedRow,
+      rootsRow,
+      symbols,
+      fold('quality', 'Tipo de acorde (m, 7, maj7…)', qualityRow),
+      fold('typed', 'Escribir otro acorde', typedRow),
+      fold('bar', 'Compás: duplicar, mover, borrar', barRow),
+      fold('section', 'Sección', sectionRow),
+    );
     if (notice !== '') pad.appendChild(h('div.pad-notice', { role: 'status' }, notice));
   }
 
