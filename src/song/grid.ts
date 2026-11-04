@@ -884,3 +884,149 @@ export function chartChords(chart: GridChart): string[] {
 export function lineOfItem(itemIndex: number): number {
   return itemIndex + 1;
 }
+
+// ---------------------------------------------------------------- a section made from an analysed stretch of audio
+
+export interface SectionFromSpan {
+  /** Section name ([Intro]). */
+  label: string;
+  /** Tempo of the new bars. */
+  bpm: number;
+  /** Tempo of the bars that follow the new ones (the one in effect where the replaced bars began). */
+  resumeBpm: number;
+  /** Number of bars of the section. */
+  bars: number;
+  /** One entry per bar, from the first: `D`, or `F#m+E` for two chords sharing the bar equally. Missing = the bar holds. */
+  chords: readonly string[];
+}
+
+/** The cells of one bar for a chord entry (`D`, `F#m+E`, `-`, `N.C.`), or null when it is not valid. */
+export function barCellsFromEntry(entry: string, beats: number): string[] | null {
+  const parts = entry.split('+').map((p) => p.trim());
+  if (parts.length === 0 || parts.some((p) => p === '' || normalizeCellValue(p) === null)) return null;
+  if (beats % parts.length !== 0) return null;
+  const cells = Array.from({ length: beats }, () => '');
+  const step = beats / parts.length;
+  parts.forEach((p, i) => {
+    cells[i * step] = normalizeCellValue(p) ?? '';
+  });
+  return cells;
+}
+
+/**
+ * Replaces bars (`removed`: bar lines of the chart, in text order and next to each other) with a new
+ * section: its own `tempo:` before it, the section header, the bars (4 per line) and the old tempo
+ * again after it. Returns an error text (Spanish) and leaves the chart untouched when it cannot be done.
+ */
+export function replaceBarsWithSection(chart: GridChart, removed: ReadonlyArray<{ item: number; bar: number }>, spec: SectionFromSpan): { ok: boolean; reason: string } {
+  const fail = (reason: string): { ok: boolean; reason: string } => ({ ok: false, reason });
+  if (removed.length === 0) return fail('No hay compases en ese tramo que sustituir.');
+  if (!(spec.bpm >= 20 && spec.bpm <= 400) || !(spec.resumeBpm >= 20 && spec.resumeBpm <= 400)) return fail('El tempo no es válido.');
+  if (!Number.isInteger(spec.bars) || spec.bars < 1 || spec.bars > 64) return fail('El número de compases no es válido.');
+  for (const r of removed) {
+    const item = barsItem(chart, r.item);
+    if (!item || !item.bars[r.bar]) return fail('Esos compases no se pueden sustituir.');
+    if (item.repeat !== 1) return fail('Un compás del tramo está en una línea con repetición (x2): quítala antes.');
+  }
+  // Must be consecutive bars of the text.
+  const order = removed.slice().sort((a, b) => a.item - b.item || a.bar - b.bar);
+  for (let k = 1; k < order.length; k++) {
+    const p = order[k - 1];
+    const c = order[k];
+    if (c.item === p.item) {
+      if (c.bar !== p.bar + 1) return fail('Los compases del tramo no están seguidos en el texto.');
+    } else {
+      const pItem = barsItem(chart, p.item);
+      if (!pItem || p.bar !== pItem.bars.length - 1 || c.bar !== 0) return fail('Los compases del tramo no están seguidos en el texto.');
+      for (let i = p.item + 1; i < c.item; i++) if (chart.items[i].kind === 'bars' || chart.items[i].kind === 'raw') return fail('Los compases del tramo no están seguidos en el texto.');
+    }
+  }
+  const first = order[0];
+  const firstItem = barsItem(chart, first.item);
+  if (!firstItem) return fail('Esos compases no se pueden sustituir.');
+  const beats = firstItem.beats;
+  const barsCells: GridBar[] = [];
+  for (let b = 0; b < spec.bars; b++) {
+    const entry = (spec.chords[b] ?? '').trim();
+    if (entry === '') {
+      barsCells.push(emptyBar(beats, ''));
+      continue;
+    }
+    const cells = barCellsFromEntry(entry, beats);
+    if (!cells) return fail(`No entiendo el acorde «${entry}» del compás ${b + 1}. Usa por ejemplo D, F#m o F#m+E (dos acordes en un compás).`);
+    barsCells.push({ cells });
+  }
+  // Everything validated: from here on the chart changes.
+  const label = cleanText(spec.label.replace(/[\][]/g, '')) || 'Sección';
+  const fmt = (v: number): string => String(Math.round(v * 100) / 100);
+  const tempoHeader = (bpm: number): GridItem => ({ kind: 'header', key: 'tempo', value: fmt(bpm), comment: '', orig: null });
+  // The section the last replaced bar belonged to: what is left after the new section goes back under it.
+  const last = order[order.length - 1];
+  let tailLabel = 'Parte';
+  for (let i = last.item; i >= 0; i--) {
+    const it = chart.items[i];
+    if (it.kind === 'section') {
+      tailLabel = it.label;
+      break;
+    }
+  }
+  let list = order.map((r) => ({ ...r }));
+  // Split the first line when the replaced stretch starts in the middle of it.
+  if (first.bar > 0) {
+    const head = { ...firstItem, bars: firstItem.bars.slice(0, first.bar), orig: null as string | null };
+    const tail = { ...firstItem, bars: firstItem.bars.slice(first.bar), orig: null as string | null };
+    chart.items.splice(first.item, 1, head, tail);
+    list = list.map((r) => (r.item === first.item ? { item: r.item + 1, bar: r.bar - first.bar } : r.item > first.item ? { item: r.item + 1, bar: r.bar } : r));
+  }
+  let insertAt = list[0].item;
+  // A section header right before the replaced bars goes with them (or stays with what is left of them).
+  let k = insertAt - 1;
+  while (k >= 0 && (chart.items[k].kind === 'comment' || chart.items[k].kind === 'blank')) k--;
+  const absorbed = k >= 0 && chart.items[k].kind === 'section';
+  if (absorbed) insertAt = k;
+  const before = chart.items.slice(0, insertAt);
+  const leadingTempo = before.findIndex((it) => it.kind === 'header' && it.key === 'tempo');
+  const atStart = !before.some((it) => it.kind === 'section' || it.kind === 'bars' || it.kind === 'raw');
+  const noBarsBefore = !before.some((it) => it.kind === 'bars');
+  const block: GridItem[] = [];
+  // At the very start the leading `tempo:` is the section's; anywhere else the section carries its own.
+  if (!atStart || leadingTempo < 0) block.push(tempoHeader(spec.bpm));
+  else {
+    const t = chart.items[leadingTempo];
+    if (t.kind === 'header') {
+      t.value = fmt(spec.bpm);
+      t.orig = null;
+    }
+  }
+  block.push({ kind: 'section', label, repeat: 1, comment: '', orig: null });
+  for (let i = 0; i < barsCells.length; i += GRID_BARS_PER_LINE) {
+    block.push({ kind: 'bars', bars: barsCells.slice(i, i + GRID_BARS_PER_LINE), repeat: 1, comment: '', beats, orig: null });
+  }
+  block.push(tempoHeader(spec.resumeBpm));
+  // The first bar of the song needs a chord of its own: a hold would have nothing to hold.
+  if (noBarsBefore) {
+    const firstBlock = block.find((it) => it.kind === 'bars') as Extract<GridItem, { kind: 'bars' }> | undefined;
+    if (firstBlock && firstBlock.bars[0].cells[0] === '') firstBlock.bars[0].cells[0] = REST_CELL;
+  }
+  chart.items.splice(insertAt, 0, ...block);
+  const blockEnd = insertAt + block.length;
+  const shifted = list.map((r) => ({ item: r.item >= insertAt ? r.item + block.length : r.item, bar: r.bar }));
+  for (let k = shifted.length - 1; k >= 0; k--) deleteBar(chart, shifted[k].item, shifted[k].bar);
+  // The header that was in front of the replaced bars (with a comment between) may be left empty: it would turn
+  // into a recall of a section that was never defined.
+  if (absorbed && chart.items[blockEnd]?.kind === 'section') {
+    let j = blockEnd + 1;
+    while (j < chart.items.length && (chart.items[j].kind === 'comment' || chart.items[j].kind === 'blank')) j++;
+    if (j >= chart.items.length || chart.items[j].kind === 'section') chart.items.splice(blockEnd, 1);
+  }
+  // Whatever bars are left after the new section must not fall under it: give them their section back.
+  for (let i = blockEnd; i < chart.items.length; i++) {
+    const it = chart.items[i];
+    if (it.kind === 'section') break;
+    if (it.kind === 'bars' || it.kind === 'raw') {
+      chart.items.splice(blockEnd, 0, { kind: 'section', label: `${tailLabel} 2`, repeat: 1, comment: '', orig: null });
+      break;
+    }
+  }
+  return { ok: true, reason: '' };
+}

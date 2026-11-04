@@ -110,7 +110,9 @@ import { createChordGrid } from '../chordGrid';
 import { createBarCheck } from '../barCheck';
 import { createStudioViewer } from '../studioViewer';
 import { energyAttacks } from '../../song/barCheck';
-import { applyTempoMap, expandRepeats, parseGrid, prependLeadIn, restrumBar, retimeBar, serializeGrid, startPartAt, strumAt } from '../../song/grid';
+import { applyTempoMap, expandRepeats, parseGrid, prependLeadIn, replaceBarsWithSection, restrumBar, retimeBar, serializeGrid, startPartAt, strumAt } from '../../song/grid';
+import { createSpanDialog } from '../spanDialog';
+import type { SpanResult } from '../../dsp/spanAnalysis';
 import { followAudio, type Stretch, type TempoMap } from '../../dsp/tempoMap';
 import type { FollowAction } from '../barCheck';
 import { barDrift, driftJumps, firstSoundSec, fitSync, type DriftJump, type SyncFit } from '../../dsp/syncFit';
@@ -1131,8 +1133,10 @@ export const editorScreen: Screen = {
 
     // Two ways to edit the same text: the text itself or the chord grid (SPEC section 22).
     let editMode: EditorMode = loadEditorMode();
-    const gridView = createChordGrid({ onChange: (next) => applyText(next), onTogglePlay: () => void toggleGridPlay(), onSourceChange: () => stopGridPlay(), onNudgeOffset: (d) => onGridNudge(d), autoSync: { onRun: () => runAutoSync(), onApply: () => applyAutoSync(), onDiscard: () => discardAutoSync() },
+    const gridView = createChordGrid({ onSpan: () => spanDialog.open(), onChange: (next) => applyText(next), onTogglePlay: () => void toggleGridPlay(), onSourceChange: () => stopGridPlay(), onNudgeOffset: (d) => onGridNudge(d), autoSync: { onRun: () => runAutoSync(), onApply: () => applyAutoSync(), onDiscard: () => discardAutoSync() },
       onStop: () => studioStop(),
+      onSkip: (d) => studioJump(studioCurrentSec() + d),
+      onRewind: () => studioJump(songStartSec()),
       onSeek: (sec) => studioSeek(sec),
       onSelectCell: (pos) => studioSelect(pos),
       onLoopChange: () => studioLoopChanged(),
@@ -1848,6 +1852,61 @@ export const editorScreen: Screen = {
         }
       }
       gridView.setLeadInOffer(leadOffer);
+    }
+
+    // ------------------------------------------------------------ «Tramo…»: analyse a stretch and make a section of it
+
+    const spanDialog = createSpanDialog({
+      getAudio: () => (audio && backing ? { samples: backing.monoSamples(), sampleRate } : null),
+      getPlayheadAudioSec: () => (audio ? audio.offsetSec + studioCurrentSec() : null),
+      getBeatsPerBar: () => analysis.song.timeSignature.beatsPerBar,
+      onCreate: (res, label, chords) => createSectionFromSpan(res, label, chords),
+    });
+
+    function createSectionFromSpan(res: SpanResult, label: string, chords: string[]): { error: string | null; message: string } {
+      if (!audio) return { error: 'Carga primero el audio de la canción.', message: '' };
+      stopGridPlay();
+      const song = analysis.song;
+      const segs = song.tempoSegments;
+      // The bars of the text that sit inside the stretch (by their middle), as lines of the chart.
+      const removed: Array<{ item: number; bar: number }> = [];
+      let firstRemoved = -1;
+      // A bar of a section that is recalled or repeated shows up several times with the same place in the text:
+      // replacing it would change the original definition, not the bars in the stretch.
+      const seenAt = new Map<string, number>();
+      for (const b of song.bars) if (b.srcLine !== undefined && b.srcBar !== undefined) seenAt.set(`${b.srcLine}:${b.srcBar}`, (seenAt.get(`${b.srcLine}:${b.srcBar}`) ?? 0) + 1);
+      let repeated = false;
+      song.bars.forEach((b, i) => {
+        const mid = audio ? audio.offsetSec + beatToSec(segs, b.startBeat + b.beats / 2) : 0;
+        if (mid < res.firstBeatSec - 0.02 || mid >= res.endSec) return;
+        if (b.srcLine === undefined || b.srcBar === undefined) return;
+        if ((seenAt.get(`${b.srcLine}:${b.srcBar}`) ?? 0) > 1) repeated = true;
+        if (firstRemoved < 0) firstRemoved = i;
+        removed.push({ item: b.srcLine - 1, bar: b.srcBar });
+      });
+      if (removed.length === 0) return { error: 'En ese tramo no hay compases escritos que sustituir.', message: '' };
+      if (repeated) return { error: 'El tramo incluye compases de una sección repetida (x2 o recordada): quita la repetición del texto y vuelve a intentarlo.', message: '' };
+      if (res.bars > 64) return { error: 'Son demasiados compases (más de 64): marca un tramo más corto.', message: '' };
+      let resumeBpm = song.tempo;
+      for (const seg of segs) {
+        if (seg.fromBeat <= song.bars[firstRemoved].startBeat) resumeBpm = seg.bpm;
+        else break;
+      }
+      const chart = parseGrid(textarea.value);
+      const done = replaceBarsWithSection(chart, removed, { label, bpm: res.bpm, resumeBpm, bars: res.bars, chords });
+      if (!done.ok) return { error: done.reason, message: '' };
+      const atStart = firstRemoved === 0;
+      studioPosSec = null;
+      applyText(serializeGrid(chart)); // undoable with «Deshacer»
+      if (atStart) setOffset(res.firstBeatSec); // the new first bar is where the stretch starts
+      dismissLeadIn();
+      studioPosSec = null;
+      syncStudio();
+      const name = label.trim() === '' ? 'Sección' : label.trim();
+      return {
+        error: null,
+        message: `Hecho: «${name}» con ${res.bars} compases a ${String(res.bpm).replace('.', ',')} bpm.${atStart ? '' : ' Revisa el resto con «Seguir el audio».'} Cierra esta ventana para verla.`,
+      };
     }
 
     /** Writes the missing beginning: rests up to where the guitar enters, then the first chord, and moves the start of the audio. */
@@ -3520,7 +3579,7 @@ export const editorScreen: Screen = {
       formatHelp(),
     );
 
-    const screen = h('main.screen.editor', null, header, h('div.editor-body', null, main, panel), levelsDialog);
+    const screen = h('main.screen.editor', null, header, h('div.editor-body', null, main, panel), levelsDialog, spanDialog.el);
     root.appendChild(screen);
 
     textarea.addEventListener('input', onInput);

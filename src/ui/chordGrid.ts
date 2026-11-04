@@ -50,6 +50,10 @@ export interface ChordGridOpts {
   onStop?: () => void;
   /** The position slider moved to `sec` (song seconds). */
   onSeek?: (sec: number) => void;
+  /** ⏮ / ⏪ / ⏩: jump by `deltaSec` (negative = back) from where the music is. */
+  onSkip?: (deltaSec: number) => void;
+  /** ⏮: back to the start of the song. */
+  onRewind?: () => void;
   /** A cell was selected by the user (the host moves the playback position there). */
   onSelectCell?: (pos: { item: number; bar: number; cell: number }) => void;
   /** The loop choice changed. */
@@ -64,6 +68,8 @@ export interface ChordGridOpts {
   onNudgeOffset?: (deltaSec: number) => void;
   /** «Ajustar automáticamente» of the sync panel. */
   autoSync?: AutoSyncOpts;
+  /** «Tramo…»: analyse a stretch of the audio and make a section of it. */
+  onSpan?: () => void;
 }
 
 /** localStorage key of the visual delay of the playing mark, in ms. */
@@ -157,6 +163,11 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
   let lastPlayheadBar = '';
   let audioReady = false;
   const playBtn = h('button.btn.btn-sm.btn-primary.grid-play', { type: 'button', title: 'Reproducir / pausar (espacio)', onclick: () => opts.onTogglePlay?.() }, '▶ Escuchar') as HTMLButtonElement;
+  const skipBtn = (label: string, title: string, onclick: () => void): HTMLButtonElement =>
+    h('button.btn.btn-sm.grid-skip', { type: 'button', title, 'aria-label': title, onclick }, label) as HTMLButtonElement;
+  const rewindBtn = skipBtn('⏮', 'Volver al principio de la canción', () => opts.onRewind?.());
+  const backBtn = skipBtn('⏪ 5 s', 'Retroceder 5 segundos', () => opts.onSkip?.(-5));
+  const forwardBtn = skipBtn('5 s ⏩', 'Adelantar 5 segundos', () => opts.onSkip?.(5));
   const stopBtn = h('button.btn.btn-sm.grid-stop', { type: 'button', title: 'Parar y volver al compás seleccionado', onclick: () => opts.onStop?.() }, '■') as HTMLButtonElement;
   const timeEl = h('span.grid-time', null, '0:00 / 0:00');
   const seekEl = h('input', { type: 'range', min: '0', max: '1', step: '0.05', value: '0', class: 'grid-seek', 'aria-label': 'Posición' }) as HTMLInputElement;
@@ -243,7 +254,8 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
   );
   // Landscape phone: the secondary controls (countdown, click, loop, sync) hide behind this button.
   const moreCtl = h('button.btn.btn-sm.grid-more', { type: 'button', title: 'Más controles: cuenta atrás, clic, repetir, sincronía', 'aria-label': 'Más controles', onclick: () => moreCtl.classList.toggle('is-open', transport.classList.toggle('is-expanded')) }, '⋯') as HTMLButtonElement;
-  const transport = h('div.grid-transport', null, h('div.grid-transport-row', null, playBtn, stopBtn, sourceSel, moreCtl, countdownLabel, metroLabel, loopSel), audioHint, syncBox);
+  const spanBtn = h('button.btn.btn-sm.grid-span', { type: 'button', title: 'Analizar un tramo del audio (su tempo y dónde empiezan los compases) y crear una sección con él', onclick: () => opts.onSpan?.() }, 'Tramo…') as HTMLButtonElement;
+  const transport = h('div.grid-transport', null, h('div.grid-transport-row', null, playBtn, stopBtn, rewindBtn, backBtn, forwardBtn, sourceSel, moreCtl, countdownLabel, metroLabel, loopSel, spanBtn), audioHint, syncBox);
   const viewerSlot = h('div.grid-viewer-slot');
   // The position bar sits right under the strip with the wave and the chords.
   const seekRow = h(
@@ -702,12 +714,7 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
       advance = advanceSel.value as AdvanceMode;
     });
 
-    const info = h(
-      'div.pad-info',
-      null,
-      h('span.pad-where', null, selected ? `Compás ${barNo} · pulso ${selected.cell + 1}` : 'Toca una casilla'),
-      h('label.pad-advance', null, h('span', null, 'Luego'), advanceSel),
-    );
+    const info = h('div.pad-info', null, h('span.pad-where', null, selected ? `Compás ${barNo} · pulso ${selected.cell + 1}` : 'Toca una casilla'));
 
     const sectionRow = renderSectionRow(selected);
     const usedRow = h('div.pad-row.pad-scroll', { 'aria-label': 'Acordes de la canción' }, used.length === 0 ? h('span.muted.small', null, 'Aquí saldrán los acordes que uses') : used.map((n) => chordButton(n, 'is-used')));
@@ -828,6 +835,7 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
       symbols,
       fold('quality', 'Tipo de acorde (m, 7, maj7…)', qualityRow),
       fold('typed', 'Escribir otro acorde', typedRow),
+      fold('advance', 'Después de escribir un acorde', h('label.pad-advance', null, advanceSel)),
       fold('bar', 'Compás: duplicar, mover, borrar', barRow),
       fold('section', 'Sección', sectionRow),
     );
@@ -938,6 +946,7 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
       const wasAvailable = audioReady;
       audioReady = available;
       for (const o of Array.from(sourceSel.options)) if (o.value !== 'chords') o.disabled = !available;
+      spanBtn.disabled = !available;
       if (available && !wasAvailable) sourceSel.value = 'both'; // a track was just loaded: compare it with the chords
       if (!available && sourceSel.value !== 'chords') sourceSel.value = 'chords';
       audioHint.textContent = available

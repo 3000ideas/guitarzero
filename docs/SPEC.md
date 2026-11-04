@@ -1563,3 +1563,37 @@ Cada nivel tiene sus propias exigencias en la práctica (`LevelDemand` en `src/s
   sola pista, así que son excluyentes (pulsar el activo la apaga). **🔇 = no suena nada** (ni canción, ni acordes, ni
   metrónomo, ni los clics de la cuenta atrás): el micrófono oye sin interferencias. Pulsarlo otra vez devuelve lo que
   sonaba. Los botones usan los mismos controles que «Opciones» (siempre coinciden); sin audio, 🎵 y 🎹 están desactivados.
+
+## 26. Analizar un tramo y crear una sección
+
+- **«Tramo…»** (en los controles extra de la barra de reproducción, tras **⋯** en un móvil horizontal) abre una ventana:
+  «Desde» / «Hasta» (tiempo del audio; «Aquí» toma la posición actual de la música), «¿Cuántos compases son?»
+  (opcional) y «Analizar». Al abrirla propone el tramo desde el primer golpe hasta el golpe que sigue a la primera
+  pausa larga (≥ 2,5 s).
+- **Análisis** (`src/dsp/spanAnalysis.ts`): ajusta una rejilla de pulsos (tempo y fino ±80 ms) a la curva de ataques
+  del tramo. El primer compás se **ancla en «Desde»** (con música llena de contratiempos la rejilla no sabe sola
+  dónde empieza el compás). Sin número de compases elige el tempo mejor puntuado y, si el doble puntúa casi igual
+  (≥ 85 %), el doble; con el número de compases, el tempo sale de la duración del tramo. Resultado: tempo, nº de
+  compases y el segundo del audio en el que empieza cada uno.
+- **Crear sección** (`replaceBarsWithSection` en `src/song/grid.ts`): sustituye los compases del texto cuyo centro cae
+  en el tramo por una sección nueva (nombre y acordes a elegir: `D F#m D A D F#m+E D D`, `+` = dos acordes en un compás,
+  mitad y mitad), con su `tempo:` delante y el tempo anterior detrás. Si el tramo empieza al principio de la canción,
+  el compás 1 pasa al segundo de audio hallado (inicio de la canción); si no, se avisa de revisar con «Seguir el
+  audio». Se puede deshacer. Rechaza (sin tocar nada) compases no seguidos, líneas con repetición o acordes que no
+  entiende.
+
+### 26.1 Editor en un móvil horizontal («pantalla limpia»)
+
+- Cabecera de una fila (título + **☰ Más**; sin «Guardado»/«Guardar», se guarda solo). **☰ Más** abre una vista con el
+  resumen, problemas, acordes, rasgueo, simplificar y el audio; **← Volver** regresa a la cuadrícula.
+- La explicación del nivel está tras **ⓘ**. Cuenta atrás, clic, repetir, sincronía y «Tramo…» están tras **⋯**.
+- La tabla de acordes es una columna fija a la derecha (acordes usados, raíces, mantener/silencio); «Tipo de acorde»,
+  «Escribir otro acorde», «Después de escribir un acorde», «Compás» y «Sección» son menús plegables que recuerdan si
+  se abrieron. La franja de la onda baja a ~130 px.
+
+- **Límites de «Crear sección»**: no se puede si el tramo incluye compases de una sección repetida (`x2` o recordada
+  por nombre) ni si son más de 64 compases. Los compases que quedan tras el tramo conservan su sección (o pasan a
+  «<nombre> 2»); una cabecera que se queda vacía se elimina. Cambiar «Desde», «Hasta» o los compases invalida el
+  resultado anterior.
+- **Controles de reproducción del editor**: ▶/⏸, ■, **⏮** (principio de la canción), **⏪ 5 s** y **5 s ⏩**; los
+  saltos siguen reproduciendo si estaba sonando.

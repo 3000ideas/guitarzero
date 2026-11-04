@@ -2245,12 +2245,14 @@
 
   .chord-grid-editor .grid-transport .grid-check,
   .chord-grid-editor .grid-transport .grid-loop,
+  .chord-grid-editor .grid-transport .grid-span,
   .chord-grid-editor .grid-transport .grid-sync {
     display: none;
   }
 
   .chord-grid-editor .grid-transport.is-expanded .grid-check,
   .chord-grid-editor .grid-transport.is-expanded .grid-loop,
+  .chord-grid-editor .grid-transport.is-expanded .grid-span,
   .chord-grid-editor .grid-transport.is-expanded .grid-sync {
     display: inline-flex;
   }
@@ -2342,4 +2344,136 @@
 
 .chord-grid-editor .pad-fold > :not(summary) {
   margin: 4px 6px 0;
+}
+
+
+/* ---------------------------------------------------------------- «Analizar un tramo» (modal) */
+.span-dialog {
+  width: min(520px, 94vw);
+  max-height: 90vh;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  color: var(--text);
+  overflow-y: auto;
+}
+
+.span-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.span-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.span-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.span-body p {
+  margin: 0;
+}
+
+.span-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.span-row label,
+.span-make label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.span-time,
+.span-bars,
+.span-label,
+.span-chords {
+  min-height: 34px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 15px;
+  box-sizing: border-box;
+}
+
+.span-time {
+  width: 7.5em;
+}
+
+.span-bars {
+  width: 6em;
+}
+
+.span-make {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.span-make[hidden] {
+  display: none;
+}
+
+.span-status {
+  min-height: 1.2em;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.span-status.is-error {
+  color: var(--bad);
+}
+
+.span-summary {
+  font-size: 15px;
+}
+
+.span-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 6px 0;
+}
+
+.span-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.span-warn {
+  font-size: 12px;
+  color: var(--warn);
+}
+
+
+/* ---- Clean screen on a landscape phone: only what editing needs; the rest is behind the menus. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .editor .save-status,
+  .editor .screen-header > .btn:not(.editor-more-btn),
+  .editor .level-label,
+  .chord-grid-editor .grid-head,
+  .chord-grid-editor .grid-audio-hint,
+  .chord-grid-editor .grid-seekhint {
+    display: none;
+  }
 }

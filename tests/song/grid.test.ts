@@ -8,6 +8,7 @@ import {
   addSection,
   appendBar,
   applyTempoMap,
+  barCellsFromEntry,
   barNumbers,
   beatsAt,
   chartChords,
@@ -23,6 +24,7 @@ import {
   parseGrid,
   prependLeadIn,
   removeSectionStart,
+  replaceBarsWithSection,
   retimeBar,
   sectionIndexAt,
   sectionStartOf,
@@ -35,6 +37,7 @@ import {
   setSectionRepeat,
   startPartAt,
   startSectionAt,
+  type GridChart,
 } from '../../src/song/grid';
 
 const SAMPLE = `title: Mi canción
@@ -504,5 +507,109 @@ describe('prependLeadIn', () => {
   it('refuses without bars or with less than a beat', () => {
     expect(prependLeadIn(parseGrid('tempo: 80\n'), 2)).toBe(0);
     expect(prependLeadIn(parseGrid('C . . . |\n'), 0.4)).toBe(0);
+  });
+});
+
+describe('replaceBarsWithSection', () => {
+  const SONG = ['tempo: 68.5', 'time: 4/4', '', '[Estrofa]', '- D . . |', 'D . . . |', '[Puente]', 'D . . E | D . . . | D . . . | A . . . |', 'D . . . | A . . . |', ''].join('\n');
+  const spec = { label: 'Intro', bpm: 137, resumeBpm: 68.5, bars: 8, chords: ['D', 'F#m', 'D', 'A', 'D', 'F#m+E', 'D', 'D'] };
+
+  function bars(chart: GridChart): Array<{ item: number; bar: number }> {
+    const out: Array<{ item: number; bar: number }> = [];
+    chart.items.forEach((it, i) => {
+      if (it.kind === 'bars') it.bars.forEach((_, b) => out.push({ item: i, bar: b }));
+    });
+    return out;
+  }
+
+  it('replaces the first bars with a section at its own tempo and keeps the rest under its own section', () => {
+    const chart = parseGrid(SONG);
+    const r = replaceBarsWithSection(chart, bars(chart).slice(0, 4), spec);
+    expect(r).toEqual({ ok: true, reason: '' });
+    const text = serializeGrid(chart);
+    expect(text).toContain('tempo: 137');
+    expect(text).not.toContain('tempo: 68.5\ntime');
+    expect(text).toContain('[Intro]');
+    expect(text).toContain('D . . . | F#m . . . | D . . . | A . . . |');
+    expect(text).toContain('D . . . | F#m . E . | D . . . | D . . . |');
+    expect(text).not.toContain('[Estrofa]');
+    expect(text.indexOf('tempo: 68.5')).toBeGreaterThan(text.indexOf('F#m . E .'));
+    expect(text.indexOf('[Puente]')).toBeGreaterThan(text.indexOf('tempo: 68.5'));
+    const { song, errors } = parseSong(text);
+    expect(errors.filter((e) => e.severity === 'error')).toEqual([]);
+    expect(song.bars).toHaveLength(8 + 2 + 2);
+    expect(song.tempoSegments[0].bpm).toBe(137);
+    expect(song.bars[0].section).toBe('Intro');
+    expect(song.bars[8].section).toBe('Puente');
+    expect(song.bars[6].chords.map((c) => c.chord.name)).toEqual(['D']);
+    expect(song.bars[5].chords.map((c) => c.chord.name)).toEqual(['F#m', 'E']);
+  });
+
+  it('puts the section in the middle of a song with a tempo before and after it', () => {
+    const chart = parseGrid(SONG);
+    const r = replaceBarsWithSection(chart, bars(chart).slice(2, 4), { ...spec, bars: 2, chords: ['E', 'A'] });
+    expect(r.ok).toBe(true);
+    const text = serializeGrid(chart);
+    expect(text).toContain('tempo: 137');
+    expect(text.match(/tempo: 68\.5/g)?.length).toBe(2);
+    const { song, errors } = parseSong(text);
+    expect(errors.filter((e) => e.severity === 'error')).toEqual([]);
+    expect(song.bars.map((b) => b.section)).toContain('Intro');
+  });
+
+  it('splits a line when the stretch starts in the middle of it and gives what is left its own section', () => {
+    const chart = parseGrid(SONG);
+    const r = replaceBarsWithSection(chart, bars(chart).slice(3, 5), { ...spec, label: 'Puente B', bars: 2, chords: ['E', 'A'] });
+    expect(r.ok).toBe(true);
+    const text = serializeGrid(chart);
+    const { song, errors } = parseSong(text);
+    expect(errors.filter((e) => e.severity === 'error')).toEqual([]);
+    expect(song.bars.map((b) => b.section)).toEqual(['Estrofa', 'Estrofa', 'Puente', 'Puente B', 'Puente B', 'Puente 2', 'Puente 2', 'Puente 2']);
+    expect(text).toContain('D . . E |');
+  });
+
+  it('does not touch a later tempo when the song has no tempo header before the stretch', () => {
+    const chart = parseGrid(['time: 4/4', '[A]', 'D . . . | A . . . | C . . . |', 'tempo: 90', '[B]', 'E . . . |', ''].join('\n'));
+    const r = replaceBarsWithSection(chart, bars(chart).slice(0, 2), { ...spec, bars: 2, chords: ['G', 'C'], resumeBpm: 120 });
+    expect(r.ok).toBe(true);
+    const { song, errors } = parseSong(serializeGrid(chart));
+    expect(errors.filter((e) => e.severity === 'error')).toEqual([]);
+    expect(song.tempoSegments[0].bpm).toBe(137);
+    expect(song.tempoSegments.map((t) => t.bpm)).toContain(120);
+    expect(song.tempoSegments.map((t) => t.bpm)).toContain(90);
+  });
+
+  it('keeps a chord on the first bar of the song even with a comment or an empty section before the stretch', () => {
+    const chart = parseGrid(['tempo: 100', '[Intro]', '# nota', 'D . . . | A . . . |', ''].join('\n'));
+    const r = replaceBarsWithSection(chart, bars(chart), { ...spec, label: 'Nueva', bars: 2, chords: [] });
+    expect(r.ok).toBe(true);
+    const { errors } = parseSong(serializeGrid(chart));
+    expect(errors.filter((e) => e.severity === 'error')).toEqual([]);
+  });
+
+  it('leaves the bars that follow the stretch in their own section', () => {
+    const chart = parseGrid(['tempo: 100', '[Verso]', 'D . . . | A . . . | E . . . | G . . . |', ''].join('\n'));
+    const r = replaceBarsWithSection(chart, bars(chart).slice(0, 2), { ...spec, bars: 2, chords: ['D', 'A'] });
+    expect(r.ok).toBe(true);
+    const { song, errors } = parseSong(serializeGrid(chart));
+    expect(errors.filter((e) => e.severity === 'error')).toEqual([]);
+    expect(song.bars.map((b) => b.section)).toEqual(['Intro', 'Intro', 'Verso', 'Verso']);
+  });
+
+  it('refuses what it cannot do and leaves the chart as it was', () => {
+    const chart = parseGrid(SONG);
+    const before = serializeGrid(chart);
+    expect(replaceBarsWithSection(chart, [], spec).ok).toBe(false);
+    expect(replaceBarsWithSection(chart, bars(chart).slice(0, 2), { ...spec, chords: ['D', 'H#'] }).ok).toBe(false);
+    expect(replaceBarsWithSection(chart, [bars(chart)[0], bars(chart)[3]], spec).ok).toBe(false);
+    expect(replaceBarsWithSection(chart, bars(chart).slice(0, 2), { ...spec, bpm: 5 }).ok).toBe(false);
+    expect(serializeGrid(chart)).toBe(before);
+  });
+
+  it('reads one or two chords per bar', () => {
+    expect(barCellsFromEntry('D', 4)).toEqual(['D', '', '', '']);
+    expect(barCellsFromEntry('F#m+E', 4)).toEqual(['F#m', '', 'E', '']);
+    expect(barCellsFromEntry('D+A+E', 4)).toBeNull();
+    expect(barCellsFromEntry('Hm', 4)).toBeNull();
   });
 });
