@@ -1597,3 +1597,13 @@ Cada nivel tiene sus propias exigencias en la práctica (`LevelDemand` en `src/s
   resultado anterior.
 - **Controles de reproducción del editor**: ▶/⏸, ■, **⏮** (principio de la canción), **⏪ 5 s** y **5 s ⏩**; los
   saltos siguen reproduciendo si estaba sonando.
+
+### 26.2 Marcar el tramo sobre la onda
+
+La ventana «Marca un tramo» ya no pide tiempos: dibuja la onda de la canción (`src/ui/spanPicker.ts`) con el tramo
+como una banda. **Arrastra sobre la onda** para marcar uno nuevo y **arrastra los bordes** para ajustarlo; los dos
+extremos se pegan al golpe más cercano (±0,35 s; los golpes se ven como triángulos naranjas). Se acerca solo al tramo
+(«Ver toda la canción» muestra todo; al marcar desde la vista completa se acerca para afinar). Al soltar se analiza
+solo y las **líneas de compás numeradas** se dibujan sobre la onda; el cuadro «Compases» fuerza el número y el botón
+«¿Son N compases?» cambia a la lectura al doble de velocidad con un toque. Luego se ponen nombre y acordes y se crea
+la sección.

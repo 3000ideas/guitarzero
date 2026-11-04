@@ -1858,7 +1858,6 @@ export const editorScreen: Screen = {
 
     const spanDialog = createSpanDialog({
       getAudio: () => (audio && backing ? { samples: backing.monoSamples(), sampleRate } : null),
-      getPlayheadAudioSec: () => (audio ? audio.offsetSec + studioCurrentSec() : null),
       getBeatsPerBar: () => analysis.song.timeSignature.beatsPerBar,
       onCreate: (res, label, chords) => createSectionFromSpan(res, label, chords),
     });

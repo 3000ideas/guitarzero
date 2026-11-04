@@ -2349,8 +2349,8 @@
 
 /* ---------------------------------------------------------------- «Analizar un tramo» (modal) */
 .span-dialog {
-  width: min(520px, 94vw);
-  max-height: 90vh;
+  width: min(760px, 96vw);
+  max-height: 94vh;
   padding: 12px 14px;
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -2485,5 +2485,66 @@
 @media (orientation: landscape) and (max-height: 520px) {
   .chord-grid-editor .pad-info {
     font-size: 11px;
+  }
+}
+
+
+.span-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.span-canvas {
+  display: block;
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.span-picker-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.span-picker-bar .span-hint {
+  flex: 1 1 auto;
+}
+
+.span-result-slot {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.span-bars-label {
+  flex: 0 0 auto;
+}
+
+@media (orientation: landscape) and (max-height: 520px) {
+  .span-dialog {
+    padding: 8px 10px;
+  }
+
+  .span-body {
+    gap: 4px;
+  }
+
+  .span-picker-bar .span-hint {
+    display: none;
+  }
+
+  .span-make {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    padding-top: 4px;
+  }
+
+  .span-make > .muted {
+    display: none;
   }
 }
