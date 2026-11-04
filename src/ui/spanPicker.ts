@@ -17,6 +17,8 @@ export interface SpanPicker {
   getSelection(): { fromSec: number; toSec: number } | null;
   /** Bar lines (audio seconds) of the analysis, or an empty list. */
   setBars(starts: readonly number[]): void;
+  /** The playing position (audio seconds), or null. */
+  setPlayhead(sec: number | null): void;
   /** Shows the whole track (true) or frames the stretch (false). */
   showAll(all: boolean): void;
   redraw(): void;
@@ -44,6 +46,7 @@ export function createSpanPicker(opts: SpanPickerOpts): SpanPicker {
   let sel: { fromSec: number; toSec: number } | null = null;
   let bars: readonly number[] = [];
   let viewAll = false;
+  let playhead: number | null = null;
   let view = { t0: 0, t1: 1 };
   let drag: { kind: 'new' | 'from' | 'to'; anchorSec: number } | null = null;
   let disposed = false;
@@ -171,6 +174,11 @@ export function createSpanPicker(opts: SpanPickerOpts): SpanPicker {
         ctx.fillRect(Math.round(x) + 1, waveH / 2 - 8, 1, 16);
       }
     }
+    if (playhead !== null && playhead >= view.t0 && playhead <= view.t1) {
+      const x = xOf(playhead, w);
+      ctx.fillStyle = WAVEFORM_COLORS.playhead;
+      ctx.fillRect(Math.round(x) - 1, 0, 2, waveH);
+    }
     // The bars of the analysis.
     ctx.textAlign = 'left';
     ctx.font = 'bold 11px system-ui, sans-serif';
@@ -265,6 +273,10 @@ export function createSpanPicker(opts: SpanPickerOpts): SpanPicker {
     },
     setBars(starts) {
       bars = starts;
+      draw();
+    },
+    setPlayhead(sec) {
+      playhead = sec;
       draw();
     },
     showAll(all) {

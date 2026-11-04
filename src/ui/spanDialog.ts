@@ -17,6 +17,11 @@ export interface SpanDialogOpts {
   getAudio(): SpanAudio | null;
   /** Beats per bar of the song. */
   getBeatsPerBar(): number;
+  /** Plays the marked stretch from `fromSec` to `toSec` (audio seconds), with a click at each of `clicks` when given. */
+  play(fromSec: number, toSec: number, clicks: ReadonlyArray<{ t: number; accent: boolean }>): void;
+  stop(): void;
+  /** Audio seconds being played, or null when nothing plays. */
+  getPlayingSec(): number | null;
   /** Writes the section. Returns an error text (Spanish) or null when it worked, plus what to tell the user. */
   onCreate(result: SpanResult, label: string, chords: string[]): { error: string | null; message: string };
 }
@@ -46,13 +51,56 @@ export function createSpanDialog(opts: SpanDialogOpts): SpanDialog {
   let current: SpanResult | null = null;
   let loadedSamples: Float32Array | null = null;
   let timer = 0;
+  let raf = 0;
+  let playing = false;
 
   barsInput.addEventListener('input', () => analyze());
+
+  const clickBox = h('input', { type: 'checkbox', checked: true }) as HTMLInputElement;
+  const playBtn = h('button.btn.btn-sm.btn-primary', { type: 'button', onclick: () => togglePlay() }, '▶ Oír el tramo') as HTMLButtonElement;
+  const playRow = h('div.span-play', null, playBtn, h('label.grid-check', { title: 'Un clic en cada pulso (más fuerte en el primero de cada compás) para oír si las líneas caen en los golpes' }, clickBox, h('span', null, 'Con clics de compás')));
+
+  function stopPlay(): void {
+    if (playing) opts.stop();
+    playing = false;
+    cancelAnimationFrame(raf);
+    picker.setPlayhead(null);
+    playBtn.textContent = '▶ Oír el tramo';
+  }
+
+  function togglePlay(): void {
+    if (playing) {
+      stopPlay();
+      return;
+    }
+    const sel = picker.getSelection();
+    if (!opts.getAudio() || !sel) return;
+    const clicks: Array<{ t: number; accent: boolean }> = [];
+    if (clickBox.checked && current) {
+      const beat = 60 / current.bpm;
+      for (const b of current.barStarts) for (let k = 0; k < current.beatsPerBar; k++) clicks.push({ t: b + k * beat, accent: k === 0 });
+    }
+    opts.play(sel.fromSec, sel.toSec, clicks);
+    playing = true;
+    playBtn.textContent = '■ Parar';
+    const tick = (): void => {
+      if (!playing) return;
+      const t = opts.getPlayingSec();
+      if (t === null || t > sel.toSec + 0.05) {
+        stopPlay();
+        return;
+      }
+      picker.setPlayhead(t);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+  }
 
   const body = h(
     'div.span-body',
     null,
     picker.el,
+    playRow,
     h('div.span-row', null, h('label.span-bars-label', null, h('span', null, 'Compases'), barsInput), h('div.span-result-slot', null, status, result)),
     make,
   );
@@ -68,6 +116,7 @@ export function createSpanDialog(opts: SpanDialogOpts): SpanDialog {
   }
 
   function stale(): void {
+    stopPlay();
     current = null;
     make.hidden = true;
     clearNode(result);
@@ -137,7 +186,10 @@ export function createSpanDialog(opts: SpanDialogOpts): SpanDialog {
     current = null;
   }
 
-  dialog.addEventListener('close', () => window.clearTimeout(timer));
+  dialog.addEventListener('close', () => {
+    window.clearTimeout(timer);
+    stopPlay();
+  });
 
   return {
     el: dialog,

@@ -1607,3 +1607,8 @@ extremos se pegan al golpe más cercano (±0,35 s; los golpes se ven como trián
 solo y las **líneas de compás numeradas** se dibujan sobre la onda; el cuadro «Compases» fuerza el número y el botón
 «¿Son N compases?» cambia a la lectura al doble de velocidad con un toque. Luego se ponen nombre y acordes y se crea
 la sección.
+
+**Oír el tramo**: el botón **▶ Oír el tramo** reproduce la grabación original entre los dos bordes de la banda (con una
+raya blanca que avanza sobre la onda) y, con «Con clics de compás», un clic en cada pulso del análisis (más fuerte en
+el primero de cada compás), para comprobar de oído que las líneas caen en los golpes y ajustar el inicio y el final.
+Cambiar la banda o el número de compases para la reproducción; se para sola al llegar al borde.

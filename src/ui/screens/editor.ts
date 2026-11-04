@@ -1859,8 +1859,45 @@ export const editorScreen: Screen = {
     const spanDialog = createSpanDialog({
       getAudio: () => (audio && backing ? { samples: backing.monoSamples(), sampleRate } : null),
       getBeatsPerBar: () => analysis.song.timeSignature.beatsPerBar,
+      play: (fromSec, toSec, clicks) => void playSpan(fromSec, toSec, clicks),
+      stop: () => stopSpanPlay(),
+      getPlayingSec: () => (spanPlay ? spanPlay.fromSec + (spanPlay.ctx.currentTime - spanPlay.whenWall) : null),
       onCreate: (res, label, chords) => createSectionFromSpan(res, label, chords),
     });
+
+    let spanPlay: { ctx: AudioContext; whenWall: number; fromSec: number } | null = null;
+
+    function stopSpanPlay(): void {
+      if (!spanPlay) return;
+      spanPlay = null;
+      backing?.stop();
+      metronome?.clear();
+    }
+
+    /** Plays the original recording from `fromSec` to `toSec` (audio seconds) with a click at each given time. */
+    async function playSpan(fromSec: number, toSec: number, clicks: ReadonlyArray<{ t: number; accent: boolean }>): Promise<void> {
+      if (!audio || !backing) return;
+      stopGridPlay();
+      stopPreview();
+      stopSpanPlay();
+      const ctx = getAudioContext();
+      try {
+        await ctx.resume();
+      } catch {
+        /* the tap that started this allows it */
+      }
+      const whenWall = ctx.currentTime + 0.12;
+      backing.setGain(audio.gain);
+      backing.start(whenWall, fromSec, 1);
+      if (clicks.length > 0) {
+        const m = ensureMetronome();
+        for (const c of clicks) if (c.t >= fromSec - 0.001 && c.t < toSec) m.scheduleClick(whenWall + (c.t - fromSec), c.accent);
+      }
+      spanPlay = { ctx, whenWall, fromSec };
+      window.setTimeout(() => {
+        if (spanPlay && spanPlay.whenWall === whenWall) stopSpanPlay();
+      }, (toSec - fromSec + 0.3) * 1000);
+    }
 
     function createSectionFromSpan(res: SpanResult, label: string, chords: string[]): { error: string | null; message: string } {
       if (!audio) return { error: 'Carga primero el audio de la canción.', message: '' };
