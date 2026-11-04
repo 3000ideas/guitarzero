@@ -51,13 +51,25 @@ export interface StudioViewer {
 export const VIEW_BARS = 4;
 /** Where the playhead sits while playing, as a fraction of the strip width. */
 export const PLAYHEAD_AT = 0.22;
-const HEIGHT = 236;
-const TOP = 18;
-const WAVE_H = 96;
-const RULER_Y = TOP + WAVE_H;
-const CHORD_Y = RULER_Y + 20;
-const CHORD_H = 40;
-const ARROW_Y = CHORD_Y + CHORD_H + 4;
+// Strip geometry (CSS px). A landscape phone has barely 300 px of height, so there the strip is compact.
+let HEIGHT = 236;
+let TOP = 18;
+let WAVE_H = 96;
+let RULER_Y = TOP + WAVE_H;
+let CHORD_Y = RULER_Y + 20;
+let CHORD_H = 40;
+let ARROW_Y = CHORD_Y + CHORD_H + 4;
+
+function applyLayout(): void {
+  const compact = typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(orientation: landscape) and (max-height: 520px)').matches;
+  TOP = compact ? 14 : 18;
+  WAVE_H = compact ? 40 : 96;
+  RULER_Y = TOP + WAVE_H;
+  CHORD_Y = RULER_Y + (compact ? 16 : 20);
+  CHORD_H = compact ? 30 : 40;
+  ARROW_Y = CHORD_Y + CHORD_H + 4;
+  HEIGHT = compact ? ARROW_Y + 24 : 236;
+}
 
 export function createStudioViewer(opts: StudioViewerOpts): StudioViewer {
   let song: Song | null = null;
@@ -132,6 +144,7 @@ export function createStudioViewer(opts: StudioViewerOpts): StudioViewer {
 
   function draw(): void {
     if (disposed || !song || song.bars.length === 0) return;
+    applyLayout();
     const dpr = Math.max(1, window.devicePixelRatio || 1);
     const W = Math.max(320, Math.floor(el.clientWidth || 640));
     if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(HEIGHT * dpr)) {

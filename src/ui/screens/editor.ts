@@ -1689,6 +1689,7 @@ export const editorScreen: Screen = {
       checkView.setContext(analysis.song, audio && backing ? { offsetSec: audio.offsetSec, samples: backing.monoSamples(), sampleRate } : null);
     }
 
+    let gridScrolled = false;
     function setEditMode(mode: EditorMode): void {
       const previous = editMode;
       editMode = mode;
@@ -1710,6 +1711,14 @@ export const editorScreen: Screen = {
       if (grid) {
         gridView.setSource(textarea.value, analysis.issues);
         syncStudio();
+        // Landscape phone: the grid is as tall as the screen, so bring it to the top (the title rows scroll away).
+        if (!gridScrolled && window.matchMedia?.('(orientation: landscape) and (max-height: 520px)').matches) {
+          gridScrolled = true;
+          window.setTimeout(() => {
+            const appbarH = document.querySelector('.appbar')?.getBoundingClientRect().height ?? 0;
+            window.scrollTo({ top: Math.max(0, gridView.el.getBoundingClientRect().top + window.scrollY - appbarH - 4) });
+          }, 350);
+        }
         if (previous === 'check') {
           const b = analysis.song.bars[checkView.getBar()];
           if (b && b.srcLine !== undefined && b.srcBar !== undefined) gridView.selectCell({ item: b.srcLine - 1, bar: b.srcBar, cell: 0 });

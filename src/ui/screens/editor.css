@@ -1277,7 +1277,7 @@
   cursor: pointer;
 }
 
-@media (min-width: 1100px) {
+@media (min-width: 1100px), (orientation: landscape) and (max-height: 520px) {
   .chord-grid-editor {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 300px;
@@ -1432,7 +1432,7 @@
   }
 }
 
-@media (min-width: 1100px) {
+@media (min-width: 1100px), (orientation: landscape) and (max-height: 520px) {
   /* One line of bars per text line, with its small tools to the right (the lyric field opens on hover). */
   .chord-grid-editor .grid-row {
     position: relative;
@@ -1715,7 +1715,7 @@
   background: rgba(34, 211, 238, 0.18);
 }
 
-@media (min-width: 1100px) {
+@media (min-width: 1100px), (orientation: landscape) and (max-height: 520px) {
   .chord-grid-editor {
     grid-template-rows: auto auto auto minmax(0, 1fr);
     grid-template-areas:
@@ -1994,4 +1994,148 @@
   display: block;
   flex-basis: 100%;
   margin-top: 2px;
+}
+
+
+/* ---------------------------------------------------------------- Landscape phone: everything on one screen */
+@media (orientation: landscape) and (max-height: 520px) {
+  .editor .screen-header {
+    padding: 2px 0;
+    margin: 0;
+    min-height: 0;
+  }
+
+  .editor .screen-header .muted.small {
+    display: none;
+  }
+
+  .editor .editor-title {
+    font-size: 16px;
+    margin: 0;
+  }
+
+  .editor .screen-header .btn {
+    min-height: 32px;
+    padding: 0 12px;
+  }
+
+  .editor .editor-topbar {
+    flex-wrap: nowrap;
+    gap: 8px;
+  }
+
+  .editor .mode-tabs .btn,
+  .editor .mode-tabs button {
+    min-height: 30px;
+    padding: 0 10px;
+    font-size: 13px;
+  }
+
+  .editor .level-bar {
+    flex-wrap: nowrap;
+    padding: 1px 4px;
+  }
+
+  .editor .level-bar button {
+    min-height: 28px;
+    min-width: 28px;
+  }
+
+  .editor .level-note {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 8px;
+    font-size: 12px;
+  }
+
+  .editor .level-note > span {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .editor .level-note-more {
+    flex: 0 0 auto;
+    min-height: 24px;
+    padding: 0 8px;
+  }
+
+  .chord-grid-editor {
+    grid-template-columns: minmax(0, 1fr) 230px;
+    height: calc(100vh - var(--appbar-h, 0px) - 112px);
+    min-height: 250px;
+    gap: 4px 8px;
+  }
+
+  .chord-grid-editor .grid-transport-row {
+    overflow-x: auto;
+    gap: 6px;
+  }
+
+  .chord-grid-editor .grid-transport-row > * {
+    flex-shrink: 0;
+  }
+
+  .chord-grid-editor .grid-transport .btn,
+  .chord-grid-editor .grid-transport button {
+    min-height: 30px;
+    padding: 0 10px;
+  }
+
+  .chord-grid-editor .grid-pad {
+    padding: 6px;
+    gap: 4px;
+  }
+
+  .chord-grid-editor .grid-pad .pad-btn {
+    min-height: 30px;
+    padding: 1px 7px;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 520px) {
+  .editor .level-note {
+    flex-wrap: nowrap;
+  }
+
+  .chord-grid-editor .grid-transport {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+  }
+
+  .chord-grid-editor .grid-transport-row {
+    flex: 1 1 0;
+    min-width: 0;
+    flex-wrap: nowrap;
+  }
+
+  .editor .screen-header {
+    flex-wrap: nowrap;
+  }
+}
+
+/* Landscape phone: the grid fills the screen (scroll the title/level rows away); the pad is a narrow side column. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .screen.editor {
+    padding: 6px 10px;
+    gap: 6px;
+  }
+
+  .editor .editor-body,
+  .editor .editor-main {
+    gap: 6px;
+  }
+
+  .chord-grid-editor {
+    height: calc(100vh - var(--appbar-h, 0px) - 8px);
+    min-height: 280px;
+  }
+
+  .chord-grid-editor .grid-seekrow .grid-seekhint {
+    display: none;
+  }
 }
