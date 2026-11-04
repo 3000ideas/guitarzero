@@ -1689,7 +1689,6 @@ export const editorScreen: Screen = {
       checkView.setContext(analysis.song, audio && backing ? { offsetSec: audio.offsetSec, samples: backing.monoSamples(), sampleRate } : null);
     }
 
-    let gridScrolled = false;
     function setEditMode(mode: EditorMode): void {
       const previous = editMode;
       editMode = mode;
@@ -1711,14 +1710,6 @@ export const editorScreen: Screen = {
       if (grid) {
         gridView.setSource(textarea.value, analysis.issues);
         syncStudio();
-        // Landscape phone: the grid is as tall as the screen, so bring it to the top (the title rows scroll away).
-        if (!gridScrolled && window.matchMedia?.('(orientation: landscape) and (max-height: 520px)').matches) {
-          gridScrolled = true;
-          window.setTimeout(() => {
-            const appbarH = document.querySelector('.appbar')?.getBoundingClientRect().height ?? 0;
-            window.scrollTo({ top: Math.max(0, gridView.el.getBoundingClientRect().top + window.scrollY - appbarH - 4) });
-          }, 350);
-        }
         if (previous === 'check') {
           const b = analysis.song.bars[checkView.getBar()];
           if (b && b.srcLine !== undefined && b.srcBar !== undefined) gridView.selectCell({ item: b.srcLine - 1, bar: b.srcBar, cell: 0 });
@@ -3501,11 +3492,21 @@ export const editorScreen: Screen = {
       null,
       h('div.grow', null, titleEl, h('div.muted.small', null, 'Editor · los cambios se guardan solos')),
       statusEl,
+      h('button.btn.editor-more-btn', { type: 'button', title: 'Resumen, problemas, acordes, rasgueo, simplificar y audio', onclick: () => toggleMore() }, '☰ Más'),
       h('button.btn', { type: 'button', onclick: saveWithFeedback, title: 'Guardar ahora (Ctrl+S)' }, 'Guardar'),
     );
+    // Landscape phone: the song's side panels (summary, issues, chords, strum, simplify, audio) are one tap away
+    // instead of a long scroll under the grid.
+    const moreBtn = header.querySelector('.editor-more-btn') as HTMLButtonElement;
+    function toggleMore(): void {
+      const open = screen.classList.toggle('more-open');
+      moreBtn.textContent = open ? '← Volver' : '☰ Más';
+      window.scrollTo({ top: 0 });
+    }
+    const noteBtn = h('button.btn.btn-sm.level-note-toggle', { type: 'button', title: 'Qué hace este nivel', 'aria-label': 'Qué hace este nivel', onclick: () => noteBtn.classList.toggle('is-open', levelNote.classList.toggle('is-open')) }, 'ⓘ') as HTMLButtonElement;
 
     const textHint = h('div.editor-hint', null, caretEl, h('span', null, 'Ctrl+S guarda al instante'), h('span', null, 'Pulsa en un error para ir a su línea'));
-    const topbar = h('div.editor-topbar', null, modeTabs, levelBar);
+    const topbar = h('div.editor-topbar', null, modeTabs, levelBar, noteBtn);
     const main = h('div.editor-main', null, topbar, levelNote, textarea, gridView.el, checkView.el, textHint, audioPanel);
 
     const panel = h(

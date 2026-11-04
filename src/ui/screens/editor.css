@@ -2139,3 +2139,172 @@
     display: none;
   }
 }
+
+/* ================================================================ Landscape phone — final layout
+   The page scrolls; the transport row and the chord pad stay in view (sticky); everything secondary is one tap away. */
+.editor-more-btn,
+.level-note-toggle,
+.chord-grid-editor .grid-more {
+  display: none;
+}
+
+@media (orientation: landscape) and (max-height: 520px) {
+  .editor-more-btn,
+  .level-note-toggle,
+  .chord-grid-editor .grid-more {
+    display: inline-flex;
+    align-items: center;
+    min-height: 30px;
+  }
+
+  .editor-more-btn {
+    padding: 0 10px;
+  }
+
+  /* Level explanation: behind the ⓘ button. */
+  .editor .level-note {
+    display: none;
+  }
+
+  .editor .level-note.is-open {
+    display: flex;
+  }
+
+  /* The side panels and the audio card: only in the «Más» view. */
+  .editor .editor-panel,
+  .editor .audio-panel {
+    display: none;
+  }
+
+  .screen.editor.more-open .editor-panel,
+  .screen.editor.more-open .audio-panel {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .screen.editor.more-open .editor-main > :not(.audio-panel):not(.editor-topbar) {
+    display: none;
+  }
+
+  .screen.editor.more-open .editor-topbar {
+    display: none;
+  }
+
+  .editor .editor-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* One compact top row: title · save/menu */
+  .editor .screen-header {
+    gap: 8px;
+  }
+
+  .editor .editor-title {
+    max-width: 40vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .editor .save-status {
+    display: none;
+  }
+
+  /* The grid: transport (sticky) / strip + seek + bars on the left, the pad as a sticky column on the right. */
+  .chord-grid-editor {
+    height: auto;
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr) 210px;
+    grid-template-rows: auto auto auto auto;
+    grid-template-areas:
+      'transport transport'
+      'viewer pad'
+      'seek pad'
+      'bars pad';
+    gap: 4px 8px;
+    align-items: start;
+  }
+
+  .chord-grid-editor .grid-transport {
+    position: sticky;
+    top: var(--appbar-h, 0px);
+    z-index: 8;
+    padding: 3px 0;
+    background: var(--bg, #0f1116);
+    flex-wrap: wrap;
+  }
+
+  .chord-grid-editor .grid-transport-row {
+    overflow: visible;
+    flex-wrap: nowrap;
+  }
+
+  .chord-grid-editor .grid-transport.is-expanded .grid-transport-row {
+    flex-wrap: wrap;
+  }
+
+  .chord-grid-editor .grid-transport .grid-check,
+  .chord-grid-editor .grid-transport .grid-loop,
+  .chord-grid-editor .grid-transport .grid-sync {
+    display: none;
+  }
+
+  .chord-grid-editor .grid-transport.is-expanded .grid-check,
+  .chord-grid-editor .grid-transport.is-expanded .grid-loop,
+  .chord-grid-editor .grid-transport.is-expanded .grid-sync {
+    display: inline-flex;
+  }
+
+  .chord-grid-editor .grid-transport.is-expanded .grid-sync {
+    display: block;
+  }
+
+  .chord-grid-editor .grid-more.is-open {
+    background: var(--accent, #22d3ee);
+    color: #04210f;
+  }
+
+  .chord-grid-editor .grid-body {
+    overflow: visible;
+    max-height: none;
+    padding-right: 0;
+  }
+
+  .chord-grid-editor .grid-pad {
+    grid-row: 2 / span 3;
+    align-self: start;
+    position: sticky;
+    top: calc(var(--appbar-h, 0px) + 40px);
+    max-height: calc(100vh - var(--appbar-h, 0px) - 46px);
+    overflow-y: auto;
+  }
+
+  .chord-grid-editor .grid-seekrow {
+    min-height: 0;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 520px) {
+  .chord-grid-editor .grid-transport-row select {
+    flex: 0 1 150px;
+    width: 150px;
+    min-width: 0;
+    max-width: 150px;
+    min-height: 30px;
+    font-size: 13px;
+  }
+
+  .chord-grid-editor .grid-pad {
+    overflow-x: hidden;
+  }
+
+  .chord-grid-editor .grid-pad .pad-scroll {
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+
+  .chord-grid-editor .grid-pad .pad-input {
+    min-width: 0;
+    max-width: 100%;
+  }
+}

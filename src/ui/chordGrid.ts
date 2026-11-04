@@ -161,7 +161,7 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
   const timeEl = h('span.grid-time', null, '0:00 / 0:00');
   const seekEl = h('input', { type: 'range', min: '0', max: '1', step: '0.05', value: '0', class: 'grid-seek', 'aria-label': 'Posición' }) as HTMLInputElement;
   seekEl.addEventListener('input', () => opts.onSeek?.(Number(seekEl.value)));
-  const loopSel = h('select', { 'aria-label': 'Repetir' }) as HTMLSelectElement;
+  const loopSel = h('select.grid-loop', { 'aria-label': 'Repetir' }) as HTMLSelectElement;
   for (const [value, label] of [['off', 'Sin bucle'], ['bar', 'Repetir el compás'], ['section', 'Repetir la sección']]) loopSel.appendChild(h('option', { value }, label));
   loopSel.addEventListener('change', () => opts.onLoopChange?.());
   const sourceSel = h('select', { 'aria-label': 'Qué escuchar' }) as HTMLSelectElement;
@@ -241,7 +241,9 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
       h('span.muted.small', null, 'Solo mueve la marca, no el sonido: úsalo si la marca va por delante o por detrás de lo que oyes (p. ej. con auriculares Bluetooth).'),
     ),
   );
-  const transport = h('div.grid-transport', null, h('div.grid-transport-row', null, playBtn, stopBtn, sourceSel, countdownLabel, metroLabel, loopSel), audioHint, syncBox);
+  // Landscape phone: the secondary controls (countdown, click, loop, sync) hide behind this button.
+  const moreCtl = h('button.btn.btn-sm.grid-more', { type: 'button', title: 'Más controles: cuenta atrás, clic, repetir, sincronía', 'aria-label': 'Más controles', onclick: () => moreCtl.classList.toggle('is-open', transport.classList.toggle('is-expanded')) }, '⋯') as HTMLButtonElement;
+  const transport = h('div.grid-transport', null, h('div.grid-transport-row', null, playBtn, stopBtn, sourceSel, moreCtl, countdownLabel, metroLabel, loopSel), audioHint, syncBox);
   const viewerSlot = h('div.grid-viewer-slot');
   // The position bar sits right under the strip with the wave and the chords.
   const seekRow = h(
