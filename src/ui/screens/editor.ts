@@ -146,6 +146,48 @@ export const MINI_DIAGRAM_W = 96;
 export const MINI_DIAGRAM_H = 112;
 /** Linear gain of a freshly loaded backing track. */
 export const DEFAULT_TRACK_GAIN = 0.8;
+
+/**
+ * Side panels that fold: tapping a card's title hides the rest of the card (and remembers it), so the user keeps
+ * on screen only what they are working with.
+ */
+function makeFoldable(cards: HTMLElement[]): void {
+  cards.forEach((card, n) => {
+    const title = card.querySelector<HTMLElement>(':scope > .card-title, :scope > h2, :scope > h3');
+    if (!title) return;
+    const key = `gz.fold.${(title.textContent ?? String(n)).trim().toLowerCase().replace(/[^a-z0-9áéíóúñ]+/g, '-').slice(0, 40)}`;
+    let folded = false;
+    try {
+      folded = localStorage.getItem(key) === '1';
+    } catch {
+      /* default open */
+    }
+    title.classList.add('fold-title');
+    title.setAttribute('role', 'button');
+    title.tabIndex = 0;
+    const apply = (): void => {
+      card.classList.toggle('is-folded', folded);
+      title.setAttribute('aria-expanded', String(!folded));
+    };
+    const toggle = (): void => {
+      folded = !folded;
+      apply();
+      try {
+        localStorage.setItem(key, folded ? '1' : '0');
+      } catch {
+        /* not remembered */
+      }
+    };
+    title.addEventListener('click', toggle);
+    title.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') {
+        ev.preventDefault();
+        toggle();
+      }
+    });
+    apply();
+  });
+}
 /** Bars with metronome clicks in "Escuchar con metrónomo" (after the one-bar lead-in). */
 export const PREVIEW_BARS = 8;
 /** Seconds between the click and the start of a test listen. */
@@ -1133,7 +1175,7 @@ export const editorScreen: Screen = {
 
     // Two ways to edit the same text: the text itself or the chord grid (SPEC section 22).
     let editMode: EditorMode = loadEditorMode();
-    const gridView = createChordGrid({ onSpan: () => spanDialog.open(), onChange: (next) => applyText(next), onTogglePlay: () => void toggleGridPlay(), onSourceChange: () => stopGridPlay(), onNudgeOffset: (d) => onGridNudge(d), autoSync: { onRun: () => runAutoSync(), onApply: () => applyAutoSync(), onDiscard: () => discardAutoSync() },
+    const gridView = createChordGrid({ onSpan: () => spanDialog.open(), onFocus: (on) => setGridFocus(on), onChange: (next) => applyText(next), onTogglePlay: () => void toggleGridPlay(), onSourceChange: () => stopGridPlay(), onNudgeOffset: (d) => onGridNudge(d), autoSync: { onRun: () => runAutoSync(), onApply: () => applyAutoSync(), onDiscard: () => discardAutoSync() },
       onStop: () => studioStop(),
       onSkip: (d) => studioJump(studioCurrentSec() + d),
       onRewind: () => studioJump(songStartSec()),
@@ -1979,6 +2021,17 @@ export const editorScreen: Screen = {
       const mode = gridView.getLoop();
       if (mode === 'off') return null;
       const song = analysis.song;
+      if (mode === 'range') {
+        const r = gridView.getLoopRange();
+        if (!r) return null;
+        const at = (p: { item: number; bar: number }, after: number): number => song.bars.findIndex((b, i) => i >= after && b.srcLine === p.item + 1 && b.srcBar === p.bar);
+        let a = at(r.from, 0);
+        let z = at(r.to, 0);
+        if (a < 0 || z < 0) return null;
+        if (z < a) [a, z] = [z, a];
+        const lastBar = song.bars[z];
+        return { fromSec: barStartSec(a), endSec: beatToSec(song.tempoSegments, lastBar.startBeat + lastBar.beats) };
+      }
       const idx = barIndexAtSec(studioCurrentSec());
       if (!song.bars[idx]) return null;
       let a = idx;
@@ -3598,6 +3651,21 @@ export const editorScreen: Screen = {
       moreBtn.textContent = open ? '← Volver' : '☰ Más';
       window.scrollTo({ top: 0 });
     }
+    /** The grid alone, filling the window (and the browser's full screen when it allows it). */
+    function setGridFocus(on: boolean): void {
+      screen.classList.toggle('grid-focus', on);
+      gridView.setFocus(on);
+      try {
+        if (on && !document.fullscreenElement) void document.documentElement.requestFullscreen?.().catch(() => undefined);
+        else if (!on && document.fullscreenElement) void document.exitFullscreen?.().catch(() => undefined);
+      } catch {
+        /* no full screen API: the layout alone is enough */
+      }
+    }
+    const onFullscreenChange = (): void => {
+      if (!document.fullscreenElement && screen.classList.contains('grid-focus')) setGridFocus(false);
+    };
+    document.addEventListener('fullscreenchange', onFullscreenChange);
     const noteBtn = h('button.btn.btn-sm.level-note-toggle', { type: 'button', title: 'Qué hace este nivel', 'aria-label': 'Qué hace este nivel', onclick: () => noteBtn.classList.toggle('is-open', levelNote.classList.toggle('is-open')) }, 'ⓘ') as HTMLButtonElement;
 
     const textHint = h('div.editor-hint', null, caretEl, h('span', null, 'Ctrl+S guarda al instante'), h('span', null, 'Pulsa en un error para ir a su línea'));
@@ -3617,6 +3685,7 @@ export const editorScreen: Screen = {
 
     const screen = h('main.screen.editor', null, header, h('div.editor-body', null, main, panel), levelsDialog, spanDialog.el);
     root.appendChild(screen);
+    makeFoldable([...Array.from(panel.querySelectorAll<HTMLElement>(':scope > .card')), audioPanel]);
 
     textarea.addEventListener('input', onInput);
     textarea.addEventListener('input', onManualInput);
@@ -3673,6 +3742,8 @@ export const editorScreen: Screen = {
       stopGridPlay();
       document.removeEventListener('keydown', onSpaceKey);
       document.removeEventListener('keyup', onSpaceKey);
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
+      if (document.fullscreenElement) void document.exitFullscreen?.().catch(() => undefined);
       studio.dispose();
       checkView.dispose();
       gridView.dispose();

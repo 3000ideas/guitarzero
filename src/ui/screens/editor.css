@@ -2555,3 +2555,76 @@
   flex-wrap: wrap;
   gap: 10px;
 }
+
+
+/* ---------------------------------------------------------------- Foldable side cards */
+.editor .fold-title {
+  cursor: pointer;
+  user-select: none;
+}
+
+.editor .fold-title::before {
+  content: '▾ ';
+}
+
+.editor .card.is-folded > :not(.fold-title) {
+  display: none;
+}
+
+.editor .card.is-folded > .fold-title {
+  margin-bottom: 0;
+}
+
+.editor .card.is-folded > .fold-title::before {
+  content: '▸ ';
+}
+
+/* ---------------------------------------------------------------- Loop between two bars */
+.chord-grid-editor .grid-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chord-grid-editor .grid-range[hidden] {
+  display: none;
+}
+
+.chord-grid-editor .grid-bar.in-loop {
+  border-color: var(--warn, #f59e0b);
+  box-shadow: inset 0 0 0 1px var(--warn, #f59e0b);
+}
+
+/* ---------------------------------------------------------------- The grid alone, full screen */
+.editor.grid-focus > .screen-header,
+.editor.grid-focus .editor-topbar,
+.editor.grid-focus .level-note,
+.editor.grid-focus .editor-hint,
+.editor.grid-focus .audio-panel,
+.editor.grid-focus .editor-panel {
+  display: none;
+}
+
+.editor.grid-focus .editor-body {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}
+
+.editor.grid-focus {
+  padding-top: 8px;
+}
+
+.editor.grid-focus .chord-grid-editor {
+  height: calc(100vh - 16px - var(--appbar-h, 0px));
+  min-height: 0;
+}
+
+.editor.grid-focus .chord-grid-editor .grid-bars {
+  grid-template-columns: repeat(auto-fill, minmax(calc(var(--cells, 4) * 30px + 12px), 1fr));
+  gap: 6px;
+}
+
+.editor.grid-focus .chord-grid-editor .grid-cell {
+  min-height: 40px;
+}

@@ -68,6 +68,8 @@ export interface ChordGridOpts {
   onNudgeOffset?: (deltaSec: number) => void;
   /** «Ajustar automáticamente» of the sync panel. */
   autoSync?: AutoSyncOpts;
+  /** The grid went full screen (true) or came back (false): the host hides everything else. */
+  onFocus?: (on: boolean) => void;
   /** «Tramo…»: analyse a stretch of the audio and make a section of it. */
   onSpan?: () => void;
 }
@@ -78,7 +80,7 @@ export const VISUAL_DELAY_LIMIT_MS = 500;
 
 export type PlaySource = 'chords' | 'song' | 'both';
 /** What «Escuchar» repeats: nothing, the selected bar, or the section of the selected bar. */
-export type LoopMode = 'off' | 'bar' | 'section';
+export type LoopMode = 'off' | 'bar' | 'section' | 'range';
 
 export interface ChordGridView {
   el: HTMLElement;
@@ -92,6 +94,10 @@ export interface ChordGridView {
   /** True when the «cuenta atrás» option (3 s before the music) is on. */
   getCountdown(): boolean;
   getLoop(): LoopMode;
+  /** The bars chosen for the «entre compases» loop (first and last, inclusive), or null until both are set. */
+  getLoopRange(): { from: { item: number; bar: number }; to: { item: number; bar: number } } | null;
+  /** Syncs the full-screen button (e.g. when the browser leaves full screen by itself). */
+  setFocus(on: boolean): void;
   /** The text changed (or its diagnostics did): re-read it. Cheap when it is the grid's own text. */
   setSource(source: string, issues: readonly ParseError[]): void;
   /** Marks the cell being played (null = none) without redrawing the grid. */
@@ -173,8 +179,21 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
   const seekEl = h('input', { type: 'range', min: '0', max: '1', step: '0.05', value: '0', class: 'grid-seek', 'aria-label': 'Posición' }) as HTMLInputElement;
   seekEl.addEventListener('input', () => opts.onSeek?.(Number(seekEl.value)));
   const loopSel = h('select.grid-loop', { 'aria-label': 'Repetir' }) as HTMLSelectElement;
-  for (const [value, label] of [['off', 'Sin bucle'], ['bar', 'Repetir el compás'], ['section', 'Repetir la sección']]) loopSel.appendChild(h('option', { value }, label));
-  loopSel.addEventListener('change', () => opts.onLoopChange?.());
+  for (const [value, label] of [['off', 'Sin bucle'], ['bar', 'Repetir el compás'], ['section', 'Repetir la sección'], ['range', 'Repetir de un compás a otro']]) loopSel.appendChild(h('option', { value }, label));
+  // «Repetir de un compás a otro»: select a bar, press «Inicio»; select another, press «Fin».
+  let loopFrom: { item: number; bar: number } | null = null;
+  let loopTo: { item: number; bar: number } | null = null;
+  const rangeInfo = h('span.grid-range-info.muted.small', null, '');
+  const rangeStartBtn = h('button.btn.btn-sm.grid-range-btn', { type: 'button', title: 'El compás seleccionado es donde empieza el bucle', onclick: () => setRangeEnd('from') }, '⟦ Inicio aquí') as HTMLButtonElement;
+  const rangeEndBtn = h('button.btn.btn-sm.grid-range-btn', { type: 'button', title: 'El compás seleccionado es donde acaba el bucle', onclick: () => setRangeEnd('to') }, 'Fin aquí ⟧') as HTMLButtonElement;
+  const rangeBox = h('span.grid-range', null, rangeStartBtn, rangeEndBtn, rangeInfo);
+  rangeBox.hidden = true;
+  loopSel.addEventListener('change', () => {
+    rangeBox.hidden = loopSel.value !== 'range';
+    render();
+    opts.onLoopChange?.();
+  });
+  const fullBtn = h('button.btn.btn-sm.grid-full', { type: 'button', title: 'Ver la cuadrícula a pantalla completa (Esc para volver)', onclick: () => opts.onFocus?.(!fullBtn.classList.contains('is-on')) }, '⛶ Pantalla completa') as HTMLButtonElement;
   const sourceSel = h('select', { 'aria-label': 'Qué escuchar' }) as HTMLSelectElement;
   const sourceOptions: Array<[PlaySource, string]> = [
     ['chords', 'Solo acordes'],
@@ -255,7 +274,7 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
   // Landscape phone: the secondary controls (countdown, click, loop, sync) hide behind this button.
   const moreCtl = h('button.btn.btn-sm.grid-more', { type: 'button', title: 'Más controles: cuenta atrás, clic, repetir, sincronía', 'aria-label': 'Más controles', onclick: () => moreCtl.classList.toggle('is-open', transport.classList.toggle('is-expanded')) }, '⋯') as HTMLButtonElement;
   const spanBtn = h('button.btn.btn-sm.grid-span', { type: 'button', title: 'Analizar un tramo del audio (su tempo y dónde empiezan los compases) y crear una sección con él', onclick: () => opts.onSpan?.() }, 'Tramo…') as HTMLButtonElement;
-  const transport = h('div.grid-transport', null, h('div.grid-transport-row', null, playBtn, stopBtn, rewindBtn, backBtn, forwardBtn, sourceSel, moreCtl, countdownLabel, metroLabel, loopSel, spanBtn), audioHint, syncBox);
+  const transport = h('div.grid-transport', null, h('div.grid-transport-row', null, playBtn, stopBtn, rewindBtn, backBtn, forwardBtn, sourceSel, moreCtl, countdownLabel, metroLabel, loopSel, rangeBox, spanBtn, fullBtn), audioHint, syncBox);
   const viewerSlot = h('div.grid-viewer-slot');
   // The position bar sits right under the strip with the wave and the chords.
   const seekRow = h(
@@ -310,6 +329,32 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
       if (it.kind === 'bars') it.bars.forEach((_, bar) => out.push({ item, bar }));
     });
     return out;
+  }
+
+  function validBar(p: { item: number; bar: number } | null): p is { item: number; bar: number } {
+    if (!p) return false;
+    const it = chart.items[p.item];
+    return !!it && it.kind === 'bars' && !!it.bars[p.bar];
+  }
+
+  function updateRangeInfo(): void {
+    const numbers = barNumbers(chart);
+    const a = validBar(loopFrom) ? numbers[loopFrom.item] + loopFrom.bar : null;
+    const z = validBar(loopTo) ? numbers[loopTo.item] + loopTo.bar : null;
+    rangeInfo.textContent =
+      a !== null && z !== null ? `Compases ${Math.min(a, z)}–${Math.max(a, z)}` : a !== null ? `Desde el ${a}: marca el fin` : z !== null ? `Hasta el ${z}: marca el inicio` : 'Elige un compás y pulsa «Inicio»';
+  }
+
+  function setRangeEnd(which: 'from' | 'to'): void {
+    if (!sel || !validSel(sel)) {
+      rangeInfo.textContent = 'Primero toca un compás de la cuadrícula';
+      return;
+    }
+    const pos = { item: sel.item, bar: sel.bar };
+    if (which === 'from') loopFrom = pos;
+    else loopTo = pos;
+    render();
+    opts.onLoopChange?.();
   }
 
   function validSel(s: Sel | null): s is Sel {
@@ -544,6 +589,11 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
         if (b === it.bars.length - 1 && it.repeat > 1) tags.push(h('span.grid-badge', { title: 'Esta línea se repite' }, `×${it.repeat}`));
         const cls = ['grid-bar', sectionNo >= 0 ? `sec-${sectionNo % 6}` : 'sec-none'];
         if (selectedBar) cls.push('is-selected');
+        if (loopSel.value === 'range' && loopFrom && loopTo) {
+          const a = numbers[loopFrom.item] + loopFrom.bar;
+          const z = numbers[loopTo.item] + loopTo.bar;
+          if (number >= Math.min(a, z) && number <= Math.max(a, z)) cls.push('in-loop');
+        }
         if (starts) cls.push('is-start');
         if (problems.length > 0) cls.push('has-issue');
         flow.appendChild(
@@ -576,6 +626,7 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
     const refocusCell = hadFocus && active.classList.contains('grid-cell');
     const scroll = body.scrollTop;
     clear(body);
+    updateRangeInfo();
     body.appendChild(renderHeaderCard());
     // Problems that are not on a bar (headers, comments...) are listed once; those on a bar mark the bar itself.
     const hidden = issues.filter((i) => {
@@ -986,6 +1037,13 @@ export function createChordGrid(opts: ChordGridOpts): ChordGridView {
     },
     getLoop() {
       return loopSel.value as LoopMode;
+    },
+    getLoopRange() {
+      return validBar(loopFrom) && validBar(loopTo) ? { from: { ...loopFrom }, to: { ...loopTo } } : null;
+    },
+    setFocus(on) {
+      fullBtn.classList.toggle('is-on', on);
+      fullBtn.textContent = on ? '✕ Salir de pantalla completa' : '⛶ Pantalla completa';
     },
     dispose() {
       disposed = true;

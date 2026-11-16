@@ -1612,3 +1612,12 @@ la sección.
 raya blanca que avanza sobre la onda) y, con «Con clics de compás», un clic en cada pulso del análisis (más fuerte en
 el primero de cada compás), para comprobar de oído que las líneas caen en los golpes y ajustar el inicio y el final.
 Cambiar la banda o el número de compases para la reproducción; se para sola al llegar al borde.
+
+### 26.3 Editor en el ordenador: pantalla completa, paneles plegables y bucle entre compases
+
+- **⛶ Pantalla completa** (barra de la cuadrícula): oculta cabecera, pestañas, paneles laterales y pista de audio y deja la cuadrícula
+  (datos de la canción, onda, compases y teclado) ocupando la ventana; usa además la pantalla completa del navegador. Esc o «✕ Salir…» vuelve.
+- **Paneles plegables**: pulsar el título de cada tarjeta lateral (Resumen, Errores, Acordes, Rasgueo, Simplificar, Pista de audio) pliega o despliega
+  su contenido; se recuerda en `localStorage` (`gz.fold.*`).
+- **Repetir de un compás a otro** (`LoopMode 'range'`): se elige un compás y se pulsa «⟦ Inicio aquí», se elige otro y «Fin aquí ⟧»; los compases
+  del bucle se marcan en naranja y «Escuchar» los repite sin parar (la reproducción ya resalta compás, pulso y acorde).
