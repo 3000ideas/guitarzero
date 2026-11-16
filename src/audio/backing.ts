@@ -16,6 +16,8 @@
 const DEFAULT_OUTPUT_LATENCY_SEC = 0.03;
 /** Time constant of the gain ramp on setGain (avoids zipper noise from the volume slider). */
 const GAIN_RAMP_TAU_SEC = 0.01;
+/** Highest playback gain (300 %): a quiet recording can be raised well above its own level. */
+export const MAX_TRACK_GAIN = 3;
 
 export interface BackingTrackInfo {
   durationSec: number;
@@ -52,13 +54,27 @@ export class BackingTrack {
   private source: AudioBufferSourceNode | null = null;
   private mono: Float32Array | null = null;
   private gainValue = 1;
+  private limiter: DynamicsCompressorNode | null = null;
   private disposed = false;
 
   constructor(ctx: AudioContext) {
     this.ctx = ctx;
     this.gainNode = ctx.createGain();
     this.gainNode.gain.value = this.gainValue;
-    this.gainNode.connect(ctx.destination);
+    // Gains above 1 boost a quiet recording; a limiter after the gain keeps the loud peaks from clipping.
+    try {
+      const limiter = ctx.createDynamicsCompressor();
+      limiter.threshold.value = -6;
+      limiter.knee.value = 6;
+      limiter.ratio.value = 20;
+      limiter.attack.value = 0.003;
+      limiter.release.value = 0.15;
+      this.gainNode.connect(limiter);
+      limiter.connect(ctx.destination);
+      this.limiter = limiter;
+    } catch {
+      this.gainNode.connect(ctx.destination);
+    }
   }
 
   /** The decoded audio, or null before load() (or after dispose()). */
@@ -174,9 +190,9 @@ export class BackingTrack {
     disconnectQuietly(source);
   }
 
-  /** Linear playback gain, clamped to 0..1, ramped briefly to avoid clicks. */
+  /** Linear playback gain, clamped to 0..MAX_TRACK_GAIN, ramped briefly to avoid clicks. */
   setGain(g: number): void {
-    const v = Number.isFinite(g) ? Math.min(1, Math.max(0, g)) : this.gainValue;
+    const v = Number.isFinite(g) ? Math.min(MAX_TRACK_GAIN, Math.max(0, g)) : this.gainValue;
     this.gainValue = v;
     const param = this.gainNode.gain;
     try {
@@ -226,5 +242,7 @@ export class BackingTrack {
     this.decoded = null;
     this.mono = null;
     disconnectQuietly(this.gainNode);
+    if (this.limiter) disconnectQuietly(this.limiter);
+    this.limiter = null;
   }
 }

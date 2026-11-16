@@ -41,7 +41,7 @@ import { getAudioContext } from '../../audio/context';
 import { MicError, MicInput } from '../../audio/mic';
 import { MicDetectorSource, detectorOptsFromSettings } from '../../audio/micDetector';
 import { Metronome } from '../../audio/metronome';
-import { BackingTrack } from '../../audio/backing';
+import { BackingTrack, MAX_TRACK_GAIN } from '../../audio/backing';
 import { renderChordTrack } from '../../audio/chordSynth';
 import { PracticeSession } from '../../game/engine';
 import { HighwayRenderer, countInStartBeat, lowerBound, pxPerBeatFor, timingText } from '../highway';
@@ -383,9 +383,9 @@ export const practiceScreen: Screen = {
       type: 'range',
       class: 'practice-volume',
       min: '0',
-      max: '100',
+      max: String(MAX_TRACK_GAIN * 100),
       step: '1',
-      value: String(Math.round(clamp(audio ? audio.gain : 0.8, 0, 1) * 100)),
+      value: String(Math.round(clamp(audio ? audio.gain : 0.8, 0, MAX_TRACK_GAIN) * 100)),
       'aria-label': 'Volumen de la pista',
       title: 'Volumen de la pista',
       oninput: () => onBackingVolume(),
@@ -1055,7 +1055,7 @@ export const practiceScreen: Screen = {
 
     function onBackingVolume(): void {
       if (!audio) return;
-      const pct = clamp(Math.round(Number(backingVolume.value)), 0, 100);
+      const pct = clamp(Math.round(Number(backingVolume.value)), 0, MAX_TRACK_GAIN * 100);
       if (!Number.isFinite(pct)) return;
       const gain = pct / 100;
       if (gain === audio.gain) return;

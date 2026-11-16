@@ -723,7 +723,7 @@ Tipos (ya añadidos a `types.ts`): `AudioTrackInfo`, `StoredSong.audio`, `TempoE
 - Escucha de prueba: "▶ Escuchar con metrónomo" (reanuda el contexto; reproduce desde
   `offset − 1 compás` si ≥ 0, si no desde 0; clics de `Metronome` en cada beat de la rejilla
   durante 8 compases, acento en el 1; playhead moviéndose en la forma de onda con rAF) y "▶
-  Desde aquí" (desde el último `onSeek`, sin clics); "■ Parar". Volumen (0–100 %) → `gain`.
+  Desde aquí" (desde el último `onSeek`, sin clics); "■ Parar". Volumen (0–300 %; por encima de 100 % se sube el audio y un limitador evita que distorsione) → `gain`.
 - Todo cambio de `offsetSec`/`gain` se guarda con `saveSong` (debounce 300 ms).
 
 ### Practicar

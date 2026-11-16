@@ -124,7 +124,7 @@ import { deleteTrack, getTrack, hasIndexedDb, putTrack } from '../../song/audioS
 import { createLevelSong } from '../../song/levelStore';
 import { FULL_SONG_DEMAND, LEVELS, levelPreview, levelSongId, parseLevelId, strumBeats, strumRuleText, type LevelSpec } from '../../song/levels';
 import { getAudioContext } from '../../audio/context';
-import { BackingTrack } from '../../audio/backing';
+import { BackingTrack, MAX_TRACK_GAIN } from '../../audio/backing';
 import { renderChordTrack } from '../../audio/chordSynth';
 import { Metronome } from '../../audio/metronome';
 import { estimateTempo } from '../../dsp/tempoEstimate';
@@ -1330,7 +1330,7 @@ export const editorScreen: Screen = {
       '▶ Desde aquí',
     ) as HTMLButtonElement;
     const stopBtn = h('button.btn.btn-sm', { type: 'button', disabled: true, onclick: () => stopPreview() }, '■ Parar') as HTMLButtonElement;
-    const volumeInput = h('input', { type: 'range', min: '0', max: '100', step: '1', class: 'audio-volume', 'aria-label': 'Volumen de la pista' });
+    const volumeInput = h('input', { type: 'range', min: '0', max: String(MAX_TRACK_GAIN * 100), step: '1', class: 'audio-volume', 'aria-label': 'Volumen de la pista' });
     const volumeValue = h('span.audio-volume-value.muted.small', null, '80 %');
     volumeInput.addEventListener('input', () => onVolumeInput());
     const previewRow = h(
@@ -2842,7 +2842,7 @@ export const editorScreen: Screen = {
       trackName.title = audio.name;
       trackMeta.textContent = `${fmtSeconds(audio.durationSec)} · ${formatMegabytes(audio.size)}`;
       offsetInput.value = audio.offsetSec.toFixed(2);
-      const pct = Math.round(clamp(audio.gain, 0, 1) * 100);
+      const pct = Math.round(clamp(audio.gain, 0, MAX_TRACK_GAIN) * 100);
       volumeInput.value = String(pct);
       volumeValue.textContent = `${pct} %`;
     }
@@ -3331,7 +3331,7 @@ export const editorScreen: Screen = {
 
     function onVolumeInput(): void {
       if (!audio) return;
-      const pct = clamp(Math.round(Number(volumeInput.value)), 0, 100);
+      const pct = clamp(Math.round(Number(volumeInput.value)), 0, MAX_TRACK_GAIN * 100);
       if (!Number.isFinite(pct)) return;
       volumeValue.textContent = `${pct} %`;
       const gain = pct / 100;
