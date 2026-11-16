@@ -10,7 +10,7 @@ import { h } from './dom';
 import { isExampleId } from '../song/examples';
 
 export interface AppBarRoute {
-  name: 'library' | 'editor' | 'practice' | 'settings' | 'tuner';
+  name: 'library' | 'editor' | 'practice' | 'follow' | 'settings' | 'tuner';
   params: Record<string, string>;
 }
 
@@ -78,7 +78,7 @@ export function createAppBar(): AppBar {
       mark(tunerLink, route.name === 'tuner');
       mark(settingsLink, route.name === 'settings');
       const id = route.params.id;
-      const inSong = (route.name === 'editor' || route.name === 'practice') && typeof id === 'string';
+      const inSong = (route.name === 'editor' || route.name === 'practice' || route.name === 'follow') && typeof id === 'string';
       songGroup.hidden = !inSong;
       if (inSong) {
         practiceLink.setAttribute('href', `#/play/${id}`);

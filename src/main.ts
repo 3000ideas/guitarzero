@@ -1,7 +1,7 @@
 /**
  * Bootstrap and hash router (SPEC.md section 8).
  *
- * Routes: `#/` (library), `#/edit/:id` (editor), `#/play/:id` (practice), `#/settings`,
+ * Routes: `#/` (library), `#/edit/:id` (editor), `#/play/:id` (practice), `#/follow/:id` (play along), `#/settings`,
  * `#/tuner`. Ids must match ID_RE. An unknown route or a missing song id redirects with
  * `location.replace('#/')`. On the initial load and on every `hashchange` the current screen
  * is unmounted (`current?.()`), the root is emptied (`replaceChildren`) and the new screen is
@@ -16,12 +16,13 @@ import { DEFAULT_SETTINGS } from './types';
 import { libraryScreen } from './ui/screens/library';
 import { editorScreen } from './ui/screens/editor';
 import { practiceScreen } from './ui/screens/practice';
+import { followScreen } from './ui/screens/follow';
 import { settingsScreen } from './ui/screens/settings';
 import { tunerScreen } from './ui/screens/tuner';
 import { downloadBundledAudio, installBundledEntries } from './song/bundled';
 import { createAppBar } from './ui/appbar';
 
-export type RouteName = 'library' | 'editor' | 'practice' | 'settings' | 'tuner';
+export type RouteName = 'library' | 'editor' | 'practice' | 'follow' | 'settings' | 'tuner';
 
 export interface Route {
   name: RouteName;
@@ -37,6 +38,7 @@ const SCREENS: Record<RouteName, Screen> = {
   library: libraryScreen,
   editor: editorScreen,
   practice: practiceScreen,
+  follow: followScreen,
   settings: settingsScreen,
   tuner: tunerScreen,
 };
@@ -70,17 +72,17 @@ export function parseRoute(hash: string): Route | null {
   if (parts.length === 1 && parts[0] === '') return { name: 'library', params: {} };
   if (parts.length === 1 && parts[0] === 'settings') return { name: 'settings', params: {} };
   if (parts.length === 1 && parts[0] === 'tuner') return { name: 'tuner', params: {} };
-  if (parts.length === 2 && (parts[0] === 'edit' || parts[0] === 'play')) {
+  if (parts.length === 2 && (parts[0] === 'edit' || parts[0] === 'play' || parts[0] === 'follow')) {
     const id = parts[1];
     if (!isValidId(id)) return null;
-    return { name: parts[0] === 'edit' ? 'editor' : 'practice', params: { id } };
+    return { name: parts[0] === 'edit' ? 'editor' : parts[0] === 'follow' ? 'follow' : 'practice', params: { id } };
   }
   return null;
 }
 
 /** True when the route can be mounted: routes with an `id` need an existing song. */
 export function routeIsAvailable(route: Route): boolean {
-  if (route.name === 'editor' || route.name === 'practice') {
+  if (route.name === 'editor' || route.name === 'practice' || route.name === 'follow') {
     const id = route.params.id;
     return typeof id === 'string' && getSong(id) !== null;
   }
@@ -96,6 +98,8 @@ export function titleForRoute(route: Route): string {
       return `${APP_NAME} — Editor`;
     case 'practice':
       return `${APP_NAME} — Practicar`;
+    case 'follow':
+      return `${APP_NAME} — Seguir`;
     case 'settings':
       return `${APP_NAME} — Ajustes`;
     case 'tuner':

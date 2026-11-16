@@ -1621,3 +1621,13 @@ Cambiar la banda o el número de compases para la reproducción; se para sola al
   su contenido; se recuerda en `localStorage` (`gz.fold.*`).
 - **Repetir de un compás a otro** (`LoopMode 'range'`): se elige un compás y se pulsa «⟦ Inicio aquí», se elige otro y «Fin aquí ⟧»; los compases
   del bucle se marcan en naranja y «Escuchar» los repite sin parar (la reproducción ya resalta compás, pulso y acorde).
+
+### 26.4 Pantalla «Seguir» (`#/follow/:id`)
+
+Para tocar siguiendo la canción, sin micrófono ni puntuación. Botón «Seguir» en cada canción de la biblioteca.
+- Suena la grabación (o los acordes sintetizados si no hay audio; selector «Qué suena» cuando hay ambos). Un solo marcador por compás:
+  el compás que suena se ilumina cuando empieza y un relleno avanza por dentro (no se marcan los pulsos uno a uno).
+- Arriba: acorde de ahora (grande, con su diagrama girado), el siguiente y los próximos acordes. La cuadrícula se desplaza sola.
+- Reproductor: ▶/⏸, ⏮ (al principio del tramo o de la canción), ⏪/⏩ 5 s, compás anterior/siguiente, barra de posición, Espacio y flechas.
+- Tramo: pulsar un compás salta ahí; arrastrar (o Mayús+clic, o ＋/− compás) elige varios compases; ese tramo es lo que suena y, con
+  «Bucle», se repite. «✕ Quitar tramo» vuelve a la canción entera.

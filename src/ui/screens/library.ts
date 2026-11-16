@@ -374,6 +374,7 @@ export const libraryScreen: Screen = {
       );
 
       const practice = h('a.btn.btn-primary', { href: `#/play/${meta.id}`, title: 'Practicar esta canción' }, 'Practicar');
+      const follow = h('a.btn', { href: `#/follow/${meta.id}`, title: 'Seguir la canción: suena y la cuadrícula va pasando' }, 'Seguir');
 
       const edit = meta.builtin
         ? h(
@@ -426,7 +427,7 @@ export const libraryScreen: Screen = {
         head,
         info,
         chips.length > 0 ? h('div.song-chords', null, chips) : null,
-        h('div.song-actions', null, practice, edit, duplicate, remove),
+        h('div.song-actions', null, practice, follow, edit, duplicate, remove),
       );
       if (highlightId === meta.id) card.classList.add('is-new');
       return card;
