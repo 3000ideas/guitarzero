@@ -298,6 +298,15 @@ export function directionGlyph(direction: StrumDirection): '↓' | '↑' {
   return direction === 'up' ? '↑' : '↓';
 }
 
+/**
+ * Which way a strum points ON SCREEN. A down-strum sweeps from the thick string to the thin one: with the thin
+ * string on top of the highway (the default) that is upwards, so the arrow is drawn flipped; with the 6th string
+ * on top (`invertStrings`) it is the usual ↓.
+ */
+export function strumPointsUp(direction: StrumDirection, invertStrings: boolean): boolean {
+  return (direction === 'up') !== !invertStrings;
+}
+
 /** Colour of a direction glyph: the verdict/marker colour when judged, else neutral for ↓ and pink for ↑. */
 export function directionColor(direction: StrumDirection, judgedColor: string | null): string {
   if (judgedColor !== null) return judgedColor;
@@ -727,7 +736,7 @@ export class HighwayRenderer {
     ctx.lineWidth = 4;
     ctx.lineJoin = 'round';
     ctx.strokeStyle = C.bg;
-    const glyph = directionGlyph(direction);
+    const glyph = strumPointsUp(direction, this.settings.invertStrings) ? '↑' : '↓';
     ctx.strokeText(glyph, x, baselineY);
     ctx.fillStyle = color;
     ctx.fillText(glyph, x, baselineY);
@@ -797,12 +806,13 @@ export class HighwayRenderer {
   private drawArrowBar(x: number, direction: StrumDirection, color: string, alpha: number): void {
     const L = this.layout;
     const ctx = this.ctx;
-    const up = direction === 'up';
+    const up = strumPointsUp(direction, this.settings.invertStrings);
+    const light = direction === 'up'; // up-strums are drawn thinner and dimmer whichever way they point
     const top = L.stringsTop;
     const bottom = L.stringsBottom;
-    ctx.globalAlpha = up ? alpha * 0.55 : alpha;
+    ctx.globalAlpha = light ? alpha * 0.55 : alpha;
     ctx.strokeStyle = color;
-    ctx.lineWidth = up ? 2 : 3;
+    ctx.lineWidth = light ? 2 : 3;
     ctx.beginPath();
     ctx.moveTo(x, top - 4);
     ctx.lineTo(x, bottom + 4);

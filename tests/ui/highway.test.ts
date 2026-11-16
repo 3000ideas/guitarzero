@@ -3,6 +3,7 @@ import {
   HIGHWAY_COLORS,
   directionColor,
   directionGlyph,
+  strumPointsUp,
   HighwayRenderer,
   MARGIN_PX,
   ballHeight,
@@ -492,6 +493,13 @@ describe('drawChordDiagram', () => {
 });
 
 describe('strum direction glyphs', () => {
+  it('strumPointsUp: with the thin string on top a down-strum points up; with the 6th on top it is the usual', () => {
+    expect(strumPointsUp('down', false)).toBe(true);
+    expect(strumPointsUp('up', false)).toBe(false);
+    expect(strumPointsUp('down', true)).toBe(false);
+    expect(strumPointsUp('up', true)).toBe(true);
+  });
+
   it('directionGlyph maps down/up to ↓/↑', () => {
     expect(directionGlyph('down')).toBe('↓');
     expect(directionGlyph('up')).toBe('↑');

@@ -45,7 +45,7 @@ import { BackingTrack, MAX_TRACK_GAIN } from '../../audio/backing';
 import { renderChordTrack } from '../../audio/chordSynth';
 import { PracticeSession } from '../../game/engine';
 import { HighwayRenderer, countInStartBeat, lowerBound, pxPerBeatFor, timingText } from '../highway';
-import { drawChordDiagram } from '../chordDiagram';
+import { drawChordDiagramHorizontal } from '../chordDiagram';
 import { append, clear, h } from '../dom';
 
 // ------------------------------------------------------------------ constants
@@ -1357,9 +1357,11 @@ export const practiceScreen: Screen = {
         c.fillText('N.C.', w / 2, hgt / 2);
         return;
       }
-      // Keep an upright chord-box shape (about 4:5) centred in the canvas instead of stretching it to fill.
-      const boxW = Math.min(w, hgt * 0.8);
-      drawChordDiagram(c, shapes[chord.name] ?? null, { x: (w - boxW) / 2, y: 0, w: boxW, h: hgt }, { title: chord.name, showFingers: true, muted });
+      // The box lies on its side like the highway (nut left, thin string on top). Keep a wide shape (about 7:4)
+      // centred in the canvas instead of stretching it to fill.
+      const boxH = Math.min(hgt, w / 1.75);
+      const boxW = Math.min(w, boxH * 1.75);
+      drawChordDiagramHorizontal(c, shapes[chord.name] ?? null, { x: (w - boxW) / 2, y: (hgt - boxH) / 2, w: boxW, h: boxH }, { title: chord.name, showFingers: true, muted, invertStrings: settings.invertStrings });
     }
 
     function progressRange(state: SessionState): { from: number; to: number } {

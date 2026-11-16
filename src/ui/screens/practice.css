@@ -317,7 +317,7 @@
 
 
 .practice-diagram.current canvas {
-  width: 150px;
+  width: 230px;
   height: 100%;
 }
 
@@ -326,7 +326,7 @@
 }
 
 .practice-diagram.next canvas {
-  width: 96px;
+  width: 150px;
   height: calc(70% - 16px);
 }
 
@@ -663,10 +663,10 @@
     flex-direction: row-reverse;
   }
 
-  /* Side by side: two upright chord boxes (current big, next smaller), each as tall as the strip allows. */
+  /* Stacked: two chord boxes lying on their side like the highway (current big on top, next smaller below). */
   .practice-diagrams {
     flex: 0 0 38%;
-    flex-direction: row;
+    flex-direction: column;
     align-items: stretch;
     height: auto;
     min-height: 0;
@@ -780,11 +780,11 @@
   }
 
   .practice-diagram.current canvas {
-    width: 120px;
+    width: 190px;
   }
 
   .practice-diagram.next canvas {
-    width: 80px;
+    width: 120px;
   }
 
   /*

@@ -337,3 +337,178 @@ export function drawChordDiagram(
   }
   ctx.restore();
 }
+
+/**
+ * The same chord box turned on its side, the way the highway is drawn: the nut on the left, the frets as vertical
+ * lines running to the right, the six strings as horizontal lines with the THIN string on top (or the 6th on top
+ * with `invertStrings`, like the highway's setting). X / O markers sit left of the nut.
+ */
+export function drawChordDiagramHorizontal(
+  ctx: CanvasRenderingContext2D,
+  shape: ChordShape | null,
+  box: { x: number; y: number; w: number; h: number },
+  opts?: { title?: string; showFingers?: boolean; muted?: boolean; invertStrings?: boolean },
+): void {
+  const o = opts ?? {};
+  const title = o.title ?? (shape ? shape.name : '');
+  const showFingers = o.showFingers !== false;
+  const invert = o.invertStrings === true;
+  ctx.save();
+  ctx.globalAlpha = 1;
+  ctx.lineJoin = 'round';
+  if (!shape) {
+    drawMissing(ctx, box, title);
+    if (o.muted) drawBigX(ctx, box.x + box.w * 0.2, box.y + box.h * 0.2, box.w * 0.6, box.h * 0.6);
+    ctx.restore();
+    return;
+  }
+
+  // Title, top left.
+  let titleH = 0;
+  if (title) {
+    const titlePx = clamp(Math.min(box.h * 0.2, box.w * 0.14), 11, 28);
+    ctx.font = `bold ${Math.round(titlePx)}px ${FONT_FAMILY}`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = C.title;
+    ctx.fillText(title, box.x + 2, box.y + titlePx * 0.1);
+    titleH = titlePx * 1.3;
+  }
+  const nFrets = diagramFretCount(shape);
+  const labelH = shape.baseFret > 1 ? 13 : 0; // "3fr" above the first fret column
+  const availH = box.h - titleH - labelH - 6;
+  const rowH = availH / 5.8; // 5 gaps between the 6 strings + room for the dots on the outer ones
+  const inset = rowH * 0.4;
+  const gridTop = box.y + titleH + labelH + 3 + inset;
+  const gridBottom = gridTop + rowH * 5;
+  const markerW = clamp(rowH * 0.8, 8, 18);
+  const gridLeft = box.x + 3 + markerW + 6;
+  const gridRight = box.x + box.w - 4;
+  const cellW = (gridRight - gridLeft) / nFrets;
+  if (cellW <= 1 || rowH <= 1) {
+    ctx.restore();
+    return;
+  }
+  const dotR = Math.min(cellW, rowH) * 0.36;
+  const nutW = clamp(cellW * 0.12, 3, 6);
+  const rowY = (s: number): number => gridTop + (invert ? s : 5 - s) * rowH;
+
+  if (o.muted) ctx.globalAlpha = 0.35;
+
+  // Frets (vertical). The first line is the nut for open-position shapes.
+  for (let k = 0; k <= nFrets; k++) {
+    const x = gridLeft + k * cellW;
+    const isNut = k === 0 && shape.baseFret === 1;
+    ctx.strokeStyle = isNut ? C.nut : C.line;
+    ctx.lineWidth = isNut ? nutW : 1.5;
+    ctx.lineCap = isNut ? 'square' : 'butt';
+    ctx.beginPath();
+    ctx.moveTo(x, gridTop);
+    ctx.lineTo(x, gridBottom);
+    ctx.stroke();
+  }
+  // Strings (horizontal): index 0 = 6th string, the thickest.
+  ctx.strokeStyle = C.line;
+  ctx.lineCap = 'butt';
+  for (let s = 0; s < 6; s++) {
+    const y = rowY(s);
+    ctx.lineWidth = 1.7 - s * 0.15;
+    ctx.beginPath();
+    ctx.moveTo(gridLeft, y);
+    ctx.lineTo(gridRight, y);
+    ctx.stroke();
+  }
+  if (shape.baseFret > 1) {
+    ctx.font = `${Math.round(clamp(cellW * 0.4, 9, 13))}px ${FONT_FAMILY}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillStyle = C.marker;
+    ctx.fillText(fretLabelText(shape.baseFret), gridLeft + cellW / 2, gridTop - inset - 1);
+  }
+
+  // X / O markers left of the nut.
+  const markerCx = gridLeft - nutW / 2 - 4 - markerW / 2;
+  ctx.strokeStyle = C.marker;
+  ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
+  for (let s = 0; s < 6; s++) {
+    const fret = shape.frets[s];
+    const y = rowY(s);
+    if (fret === -1) {
+      const half = markerW * 0.32;
+      ctx.beginPath();
+      ctx.moveTo(markerCx - half, y - half);
+      ctx.lineTo(markerCx + half, y + half);
+      ctx.moveTo(markerCx + half, y - half);
+      ctx.lineTo(markerCx - half, y + half);
+      ctx.stroke();
+    } else if (fret === 0) {
+      ctx.beginPath();
+      ctx.arc(markerCx, y, markerW * 0.3, 0, TAU);
+      ctx.stroke();
+    }
+  }
+
+  // Barre as a rounded vertical bar across its strings.
+  const fingerFont = `bold ${Math.round(dotR * 1.25)}px ${FONT_FAMILY}`;
+  const barre = shape.barre;
+  let barreFrom = -1;
+  let barreTo = -1;
+  if (barre) {
+    barreFrom = clamp(Math.min(barre.fromString, barre.toString), 0, 5);
+    barreTo = clamp(Math.max(barre.fromString, barre.toString), 0, 5);
+    const col = barre.fret - shape.baseFret;
+    if (col >= 0 && col < nFrets) {
+      const cx = gridLeft + (col + 0.5) * cellW;
+      const ya = Math.min(rowY(barreFrom), rowY(barreTo));
+      const yb = Math.max(rowY(barreFrom), rowY(barreTo));
+      ctx.fillStyle = C.dot;
+      roundedRectPath(ctx, cx - dotR * 0.85, ya - dotR, dotR * 1.7, yb - ya + 2 * dotR, dotR * 0.85);
+      ctx.fill();
+      if (showFingers) {
+        let finger = 0;
+        for (let s = barreFrom; s <= barreTo; s++) {
+          if (shape.frets[s] === barre.fret && shape.fingers[s] > 0) {
+            finger = shape.fingers[s];
+            break;
+          }
+        }
+        if (finger === 0) finger = 1;
+        ctx.font = fingerFont;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = C.dotText;
+        ctx.fillText(String(finger), cx, (ya + yb) / 2 + 0.5);
+      }
+    }
+  }
+
+  // Dots with finger numbers.
+  for (let s = 0; s < 6; s++) {
+    const fret = shape.frets[s];
+    if (fret === undefined || fret <= 0) continue;
+    if (barre && fret === barre.fret && s >= barreFrom && s <= barreTo) continue; // covered by the bar
+    const col = fret - shape.baseFret;
+    if (col < 0 || col >= nFrets) continue;
+    const cx = gridLeft + (col + 0.5) * cellW;
+    const cy = rowY(s);
+    ctx.beginPath();
+    ctx.arc(cx, cy, dotR, 0, TAU);
+    ctx.fillStyle = C.dot;
+    ctx.fill();
+    const finger = shape.fingers[s];
+    if (showFingers && finger > 0) {
+      ctx.font = fingerFont;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = C.dotText;
+      ctx.fillText(String(finger), cx, cy + 0.5);
+    }
+  }
+
+  if (o.muted) {
+    ctx.globalAlpha = 1;
+    drawBigX(ctx, gridLeft, gridTop, gridRight - gridLeft, gridBottom - gridTop);
+  }
+  ctx.restore();
+}
