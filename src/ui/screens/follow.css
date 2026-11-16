@@ -2,31 +2,104 @@
 .follow {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
   height: calc(100vh - var(--appbar-h, 0px));
   box-sizing: border-box;
+  max-width: none;
+  padding: 8px 12px;
 }
 
 .follow-title {
-  font-size: 20px;
-  margin: 0;
+  font-size: 16px;
+  margin: 0 8px 0 0;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .follow-controls {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .follow-row {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px 10px;
+  gap: 6px 8px;
 }
 
 .follow-play {
   min-width: 124px;
+}
+
+.follow-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  margin: 2px 4px;
+}
+
+/* Toggles (loop, countdown): off = dim, on = accent. */
+.follow-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.follow-chip input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.follow-chip.is-on {
+  opacity: 1;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.follow-speed {
+  min-height: 32px;
+  width: auto;
+}
+
+.follow-rangerow[hidden],
+.follow-menu[hidden] {
+  display: none;
+}
+
+.follow-menu {
+  position: relative;
+}
+
+.follow-menu > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.follow-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.follow-menu-body {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 10;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  min-width: 14em;
+}
+
+.follow-status:empty {
+  display: none;
 }
 
 .follow-time {
@@ -161,9 +234,6 @@
     height: 100vh;
   }
 
-  .follow > .screen-header {
-    display: none;
-  }
 
 }
 
@@ -173,15 +243,6 @@
   max-width: 14em;
 }
 
-.follow-countdown {
-  opacity: 0.6;
-}
-
-.follow-countdown.is-on {
-  opacity: 1;
-  border-color: var(--accent);
-  color: var(--accent);
-}
 
 /* The big number of the countdown, over the grid. */
 .follow-count {

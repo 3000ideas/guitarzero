@@ -149,10 +149,10 @@ export const followScreen: Screen = {
     const playBtn = h('button.btn.btn-primary.follow-play', { type: 'button', onclick: () => void togglePlay() }, '▶ Escuchar') as HTMLButtonElement;
     const skipBtn = (label: string, title: string, fn: () => void): HTMLButtonElement => h('button.btn.btn-sm', { type: 'button', title, 'aria-label': title, onclick: fn }, label) as HTMLButtonElement;
     const rewindBtn = skipBtn('⏮', 'Volver al principio (del tramo elegido, o de la canción)', () => seek(loopStart()));
-    const backBtn = skipBtn('⏪ 5 s', 'Retroceder 5 segundos', () => seek(currentSec() - 5));
-    const forwardBtn = skipBtn('5 s ⏩', 'Adelantar 5 segundos', () => seek(currentSec() + 5));
-    const prevBarBtn = skipBtn('◀ Compás', 'Compás anterior', () => seek(barStart(Math.max(0, barAt(currentSec()) - 1))));
-    const nextBarBtn = skipBtn('Compás ▶', 'Compás siguiente', () => seek(barStart(Math.min(bars.length - 1, barAt(currentSec()) + 1))));
+    const backBtn = skipBtn('−5 s', 'Retroceder 5 segundos', () => seek(currentSec() - 5));
+    const forwardBtn = skipBtn('+5 s', 'Adelantar 5 segundos', () => seek(currentSec() + 5));
+    const prevBarBtn = skipBtn('◀', 'Compás anterior', () => seek(barStart(Math.max(0, barAt(currentSec()) - 1))));
+    const nextBarBtn = skipBtn('▶', 'Compás siguiente', () => seek(barStart(Math.min(bars.length - 1, barAt(currentSec()) + 1))));
     const timeEl = h('span.follow-time', null, '0:00 / 0:00');
     const seekEl = h('input', { type: 'range', min: '0', max: String(Math.max(1, Math.round(totalSec * 20) / 20)), step: '0.05', value: '0', class: 'follow-seek', 'aria-label': 'Posición' }) as HTMLInputElement;
     seekEl.addEventListener('input', () => seek(Number(seekEl.value)));
@@ -162,7 +162,7 @@ export const followScreen: Screen = {
     } catch {
       /* default on */
     }
-    const countdownBtn = h('button.btn.btn-sm.follow-countdown', { type: 'button', 'aria-pressed': String(countdownOn), title: 'Cuenta atrás de 5 segundos (con clics) antes de que empiece la música', onclick: () => {
+    const countdownBtn = h('button.btn.btn-sm.follow-chip.follow-countdown', { type: 'button', 'aria-pressed': String(countdownOn), title: 'Cuenta atrás de 5 segundos (con clics) antes de que empiece la música', onclick: () => {
       countdownOn = !countdownOn;
       countdownBtn.setAttribute('aria-pressed', String(countdownOn));
       countdownBtn.classList.toggle('is-on', countdownOn);
@@ -171,12 +171,14 @@ export const followScreen: Screen = {
       } catch {
         /* not remembered */
       }
-    } }, `⏱ Cuenta atrás ${COUNTDOWN_SEC} s`) as HTMLButtonElement;
+    } }, `⏱ ${COUNTDOWN_SEC} s`) as HTMLButtonElement;
     countdownBtn.classList.toggle('is-on', countdownOn);
     const countOverlay = h('div.follow-count', { role: 'status', 'aria-live': 'polite' });
     countOverlay.hidden = true;
     const loopBox = h('input', { type: 'checkbox', checked: true, 'aria-label': 'Bucle' }) as HTMLInputElement;
-    const loopLabel = h('label.follow-check', { title: 'Al llegar al final del tramo elegido (o de la canción) vuelve a empezar' }, loopBox, h('span', null, 'Bucle'));
+    const loopLabel = h('label.follow-chip.btn.btn-sm', { title: 'Bucle: al llegar al final del tramo elegido (o de la canción) vuelve a empezar' }, loopBox, h('span', null, '🔁 Bucle'));
+    loopLabel.classList.toggle('is-on', loopBox.checked);
+    loopBox.addEventListener('change', () => loopLabel.classList.toggle('is-on', loopBox.checked));
     const srcSel = h('select.follow-src', { 'aria-label': 'Qué suena' }, h('option', { value: 'song' }, 'Canción original'), h('option', { value: 'chords' }, 'Acordes sintetizados')) as HTMLSelectElement;
     const speedSel = h('select.follow-speed', { 'aria-label': 'Velocidad', title: 'Velocidad: más lento para practicar' }) as HTMLSelectElement;
     for (const pct of [50, 60, 70, 80, 90, 100]) speedSel.appendChild(h('option', { value: String(pct) }, `${pct} %`));
@@ -187,20 +189,24 @@ export const followScreen: Screen = {
       rate = Number(speedSel.value) / 100;
       if (was) void startAt(at);
     });
-    const speedLabel = h('label.follow-check', null, h('span', null, 'Velocidad'), speedSel);
+    const speedLabel = speedSel;
     srcSel.value = src;
-    srcSel.hidden = !audioInfo;
     srcSel.addEventListener('change', () => void changeSource(srcSel.value as Src));
-    const selInfo = h('span.follow-selinfo.muted.small', null, 'Toca un compás para saltar ahí; arrastra sobre varios para elegir un tramo.');
+    const selInfo = h('span.follow-selinfo.muted.small', null, '');
+    const titleEl = h('strong.follow-title', null, song.title || 'Canción');
+    const sourceMenu = h('details.follow-menu', null, h('summary.btn.btn-sm', { title: 'Qué suena' }, '⋯'), h('div.follow-menu-body', null, h('label', null, h('span.muted.small', null, 'Qué suena'), srcSel)));
+    sourceMenu.hidden = !audioInfo;
     const moreBtn = skipBtn('＋ compás', 'Añadir un compás al final del tramo', () => grow(1));
     const lessBtn = skipBtn('− compás', 'Quitar un compás del final del tramo', () => grow(-1));
     const clearBtn = skipBtn('✕ Quitar tramo', 'Quitar la selección: suena la canción entera', () => setRange(null));
+    const rangeRow = h('div.follow-row.follow-rangerow', null, selInfo, moreBtn, lessBtn, clearBtn);
+    rangeRow.hidden = true;
     const controls = h(
       'div.follow-controls',
       null,
-      h('div.follow-row', null, playBtn, rewindBtn, backBtn, forwardBtn, prevBarBtn, nextBarBtn, loopLabel, countdownBtn, speedLabel, srcSel),
+      h('div.follow-row.follow-toolbar', null, titleEl, playBtn, rewindBtn, backBtn, forwardBtn, prevBarBtn, nextBarBtn, h('span.follow-sep'), loopLabel, countdownBtn, speedLabel, sourceMenu),
       h('div.follow-row', null, timeEl, seekEl),
-      h('div.follow-row', null, moreBtn, lessBtn, clearBtn, selInfo),
+      rangeRow,
       statusEl,
     );
 
@@ -225,8 +231,7 @@ export const followScreen: Screen = {
       grid.appendChild(el);
     });
 
-    const header = h('header.screen-header', null, h('a.btn.btn-sm', { href: '#/' }, '← Biblioteca'), h('div.grow', null, h('h2.follow-title', null, song.title || 'Canción'), h('div.muted.small', null, 'Seguir la canción')), h('a.btn.btn-sm', { href: `#/play/${id}`, title: 'Practicar con micrófono' }, 'Practicar'), h('a.btn.btn-sm', { href: `#/edit/${id}` }, 'Editar'));
-    const screen = h('main.screen.follow', null, header, controls, grid, countOverlay);
+    const screen = h('main.screen.follow', null, controls, grid, countOverlay);
     root.appendChild(screen);
 
     // ---------------------------------------------------------------- selection
@@ -236,10 +241,10 @@ export const followScreen: Screen = {
         ? range.a === range.b
           ? `Compás ${range.a + 1} elegido${loopBox.checked ? ': se repite' : ''}`
           : `Compases ${range.a + 1}–${range.b + 1} elegidos${loopBox.checked ? ': se repiten' : ''}`
-        : 'Toca un compás para saltar ahí; arrastra sobre varios para elegir un tramo.';
-      clearBtn.disabled = !range;
-      moreBtn.disabled = !range;
+        : '';
+      rangeRow.hidden = !range;
       lessBtn.disabled = !range || range.a === range.b;
+      requestAnimationFrame(() => fit());
     }
 
     function setRange(next: { a: number; b: number } | null): void {
