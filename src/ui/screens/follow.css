@@ -7,6 +7,8 @@
   box-sizing: border-box;
   max-width: none;
   padding: 8px 12px;
+  flex: 0 0 auto; /* never grow past the viewport (the page itself must not scroll) */
+  overflow: hidden;
 }
 
 .follow-title {
@@ -123,7 +125,8 @@
   min-height: 0;
   display: grid;
   grid-template-columns: repeat(var(--cols, 6), minmax(0, 1fr));
-  grid-template-rows: repeat(var(--rows, 1), minmax(0, 1fr));
+  grid-template-rows: repeat(var(--rows, 1), var(--row-h, 48px));
+  align-content: start;
   gap: 4px;
   padding: 3px;
   user-select: none;
@@ -232,7 +235,7 @@
 @media (orientation: landscape) and (max-height: 520px) {
   .follow {
     gap: 4px;
-    height: 100vh;
+    height: calc(100vh - var(--appbar-h, 0px));
   }
 
 

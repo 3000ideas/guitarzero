@@ -11,13 +11,14 @@ describe('Seguir', () => {
     expect(beatCells(song.bars[2])).toEqual(['F#m', '·', 'E', '·']);
   });
 
-  it('fitGrid puts every bar on screen when it can be read, and falls back to scrolling when it cannot', () => {
-    const wide = fitGrid(54, 4, 1200, 700);
-    expect(wide.fits).toBe(true);
-    expect(wide.cols * wide.rows).toBeGreaterThanOrEqual(54);
-    const small = fitGrid(54, 4, 1200, 700);
-    const big = fitGrid(54, 4, 1200, 1400);
-    expect(big.fontPx).toBeGreaterThanOrEqual(small.fontPx);
+  it('fitGrid puts every bar on screen with compact bars, and falls back to scrolling when it cannot', () => {
+    const f = fitGrid(65, 4, 1000, 520);
+    expect(f.fits).toBe(true);
+    expect(f.cols * f.rows).toBeGreaterThanOrEqual(65);
+    expect(f.rows * f.rowPx).toBeLessThanOrEqual(520);
+    expect(f.fontPx).toBeLessThanOrEqual(13);
+    // A bigger box never needs fewer columns than a small one for the same text.
+    expect(fitGrid(65, 4, 1000, 900).cols).toBeGreaterThanOrEqual(f.cols);
     expect(fitGrid(400, 4, 360, 300).fits).toBe(false);
   });
 
