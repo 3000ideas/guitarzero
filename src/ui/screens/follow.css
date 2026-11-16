@@ -172,3 +172,32 @@
   min-width: 0;
   max-width: 14em;
 }
+
+.follow-countdown {
+  opacity: 0.6;
+}
+
+.follow-countdown.is-on {
+  opacity: 1;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* The big number of the countdown, over the grid. */
+.follow-count {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: min(40vh, 40vw);
+  font-weight: 800;
+  color: var(--accent);
+  background: rgba(8, 10, 14, 0.55);
+  pointer-events: none;
+  z-index: 20;
+}
+
+.follow-count[hidden] {
+  display: none;
+}

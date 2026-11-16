@@ -13,11 +13,14 @@ import { getTrack } from '../../song/audioStore';
 import { beatToSec, secToBeat, songDurationSec } from '../../song/tempo';
 import { getAudioContext } from '../../audio/context';
 import { BackingTrack } from '../../audio/backing';
+import { Metronome } from '../../audio/metronome';
 import { renderChordTrack } from '../../audio/chordSynth';
 import { h } from '../dom';
 
 const noop = (): void => undefined;
 const START_DELAY_SEC = 0.06;
+const COUNTDOWN_SEC = 5;
+const COUNTDOWN_KEY = 'gz.followCountdown';
 
 function fmt(sec: number): string {
   const s = Math.max(0, sec);
@@ -113,6 +116,8 @@ export const followScreen: Screen = {
     // ---------------------------------------------------------------- state
     let playing = false;
     let posSec = 0; // song seconds, kept while paused
+    let countTimer = 0;
+    let counting = false;
     let rate = 1; // playback speed (1 = as recorded; the pitch follows it)
     let baseWall = 0; // AudioContext time at which `baseSec` is heard
     let baseSec = 0;
@@ -151,6 +156,25 @@ export const followScreen: Screen = {
     const timeEl = h('span.follow-time', null, '0:00 / 0:00');
     const seekEl = h('input', { type: 'range', min: '0', max: String(Math.max(1, Math.round(totalSec * 20) / 20)), step: '0.05', value: '0', class: 'follow-seek', 'aria-label': 'Posición' }) as HTMLInputElement;
     seekEl.addEventListener('input', () => seek(Number(seekEl.value)));
+    let countdownOn = true;
+    try {
+      countdownOn = localStorage.getItem(COUNTDOWN_KEY) !== '0';
+    } catch {
+      /* default on */
+    }
+    const countdownBtn = h('button.btn.btn-sm.follow-countdown', { type: 'button', 'aria-pressed': String(countdownOn), title: 'Cuenta atrás de 5 segundos (con clics) antes de que empiece la música', onclick: () => {
+      countdownOn = !countdownOn;
+      countdownBtn.setAttribute('aria-pressed', String(countdownOn));
+      countdownBtn.classList.toggle('is-on', countdownOn);
+      try {
+        localStorage.setItem(COUNTDOWN_KEY, countdownOn ? '1' : '0');
+      } catch {
+        /* not remembered */
+      }
+    } }, `⏱ Cuenta atrás ${COUNTDOWN_SEC} s`) as HTMLButtonElement;
+    countdownBtn.classList.toggle('is-on', countdownOn);
+    const countOverlay = h('div.follow-count', { role: 'status', 'aria-live': 'polite' });
+    countOverlay.hidden = true;
     const loopBox = h('input', { type: 'checkbox', checked: true, 'aria-label': 'Bucle' }) as HTMLInputElement;
     const loopLabel = h('label.follow-check', { title: 'Al llegar al final del tramo elegido (o de la canción) vuelve a empezar' }, loopBox, h('span', null, 'Bucle'));
     const srcSel = h('select.follow-src', { 'aria-label': 'Qué suena' }, h('option', { value: 'song' }, 'Canción original'), h('option', { value: 'chords' }, 'Acordes sintetizados')) as HTMLSelectElement;
@@ -174,7 +198,7 @@ export const followScreen: Screen = {
     const controls = h(
       'div.follow-controls',
       null,
-      h('div.follow-row', null, playBtn, rewindBtn, backBtn, forwardBtn, prevBarBtn, nextBarBtn, loopLabel, speedLabel, srcSel),
+      h('div.follow-row', null, playBtn, rewindBtn, backBtn, forwardBtn, prevBarBtn, nextBarBtn, loopLabel, countdownBtn, speedLabel, srcSel),
       h('div.follow-row', null, timeEl, seekEl),
       h('div.follow-row', null, moreBtn, lessBtn, clearBtn, selInfo),
       statusEl,
@@ -202,7 +226,7 @@ export const followScreen: Screen = {
     });
 
     const header = h('header.screen-header', null, h('a.btn.btn-sm', { href: '#/' }, '← Biblioteca'), h('div.grow', null, h('h2.follow-title', null, song.title || 'Canción'), h('div.muted.small', null, 'Seguir la canción')), h('a.btn.btn-sm', { href: `#/play/${id}`, title: 'Practicar con micrófono' }, 'Practicar'), h('a.btn.btn-sm', { href: `#/edit/${id}` }, 'Editar'));
-    const screen = h('main.screen.follow', null, header, controls, grid);
+    const screen = h('main.screen.follow', null, header, controls, grid, countOverlay);
     root.appendChild(screen);
 
     // ---------------------------------------------------------------- selection
@@ -316,7 +340,50 @@ export const followScreen: Screen = {
       refresh(true);
     }
 
+    const metronome = new Metronome(ctx);
+
+    function cancelCount(): void {
+      if (!counting) return;
+      counting = false;
+      window.clearTimeout(countTimer);
+      metronome.clear();
+      countOverlay.hidden = true;
+      playBtn.textContent = '▶ Escuchar';
+    }
+
+    /** 5, 4, 3, 2, 1 with a click each second, then the music. */
+    async function countThenStart(from: number): Promise<void> {
+      try {
+        await ctx.resume();
+      } catch {
+        /* a tap is a gesture; ignore */
+      }
+      counting = true;
+      playBtn.textContent = '✕ Cancelar';
+      const t0 = ctx.currentTime + 0.1;
+      for (let k = 0; k < COUNTDOWN_SEC; k++) metronome.scheduleClick(t0 + k, k === COUNTDOWN_SEC - 1);
+      let n = COUNTDOWN_SEC;
+      const step = (): void => {
+        if (!counting || disposed) return;
+        if (n === 0) {
+          counting = false;
+          countOverlay.hidden = true;
+          void startAt(from);
+          return;
+        }
+        countOverlay.textContent = String(n);
+        countOverlay.hidden = false;
+        n--;
+        countTimer = window.setTimeout(step, 1000);
+      };
+      step();
+    }
+
     async function togglePlay(): Promise<void> {
+      if (counting) {
+        cancelCount();
+        return;
+      }
       if (playing) {
         pause();
         return;
@@ -324,10 +391,12 @@ export const followScreen: Screen = {
       let from = posSec;
       if (range && (from < barStart(range.a) || from >= barEnd(range.b) - 0.05)) from = barStart(range.a);
       else if (!range && from >= totalSec - 0.05) from = 0;
-      await startAt(from);
+      if (countdownOn) await countThenStart(from);
+      else await startAt(from);
     }
 
     function seek(sec: number): void {
+      cancelCount();
       const target = Math.max(0, Math.min(totalSec, sec));
       if (playing) void startAt(target);
       else {
@@ -442,6 +511,8 @@ export const followScreen: Screen = {
 
     return () => {
       disposed = true;
+      window.clearTimeout(countTimer);
+      metronome.clear();
       fitObserver?.disconnect();
       window.removeEventListener('resize', fit);
       cancelAnimationFrame(raf);

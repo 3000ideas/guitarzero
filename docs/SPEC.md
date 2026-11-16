@@ -1633,3 +1633,4 @@ Para tocar siguiendo la canción, sin micrófono ni puntuación. Botón «Seguir
   «Bucle», se repite. «✕ Quitar tramo» vuelve a la canción entera.
 - La cuadrícula se ajusta para que TODOS los compases quepan en pantalla a la vez (se recalcula al cambiar el tamaño); si no se pueden leer, tamaño mínimo y scroll.
 - «Velocidad» 50–100 % para ir más lento (el tono baja con la velocidad).
+- «⏱ Cuenta atrás 5 s» (se recuerda): al pulsar Escuchar cuenta 5, 4, 3, 2, 1 con un clic por segundo y número grande, y luego empieza la música; pulsar otra vez cancela. El bucle vuelve a empezar sin cuenta atrás.
