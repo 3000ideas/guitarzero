@@ -34,6 +34,27 @@ export function beatCells(bar: SongBar): string[] {
   return cells;
 }
 
+/**
+ * How many columns make ALL the bars fit in a `width` × `height` box with the biggest writing: tries every column
+ * count and keeps the one whose chord text can be largest. `fontPx` is capped; when even the best is too small to
+ * read (`fits` false) the grid keeps a minimum size and scrolls.
+ */
+export function fitGrid(count: number, cells: number, width: number, height: number, gap = 6): { cols: number; rows: number; fontPx: number; fits: boolean } {
+  const MIN_FONT = 11;
+  const MAX_FONT = 30;
+  let best = { cols: 1, rows: Math.max(1, count), fontPx: 0 };
+  for (let cols = 1; cols <= Math.max(1, count); cols++) {
+    const rows = Math.ceil(count / cols);
+    const barW = (width - gap * (cols - 1)) / cols;
+    const barH = (height - gap * (rows - 1)) / rows;
+    if (barW <= 0 || barH <= 0) continue;
+    // A chord must fit its cell: the cell is barW / cells wide and (barH - the little number row) tall.
+    const font = Math.min((barW / cells) * 0.4, (barH - 14) * 0.42, MAX_FONT);
+    if (font > best.fontPx) best = { cols, rows, fontPx: font };
+  }
+  return { ...best, fits: best.fontPx >= MIN_FONT };
+}
+
 export const followScreen: Screen = {
   mount(root: HTMLElement, params: Record<string, string>): () => void {
     const id = params.id ?? '';
@@ -92,6 +113,7 @@ export const followScreen: Screen = {
     // ---------------------------------------------------------------- state
     let playing = false;
     let posSec = 0; // song seconds, kept while paused
+    let rate = 1; // playback speed (1 = as recorded; the pitch follows it)
     let baseWall = 0; // AudioContext time at which `baseSec` is heard
     let baseSec = 0;
     let range: { a: number; b: number } | null = null; // inclusive bar indices
@@ -104,7 +126,7 @@ export const followScreen: Screen = {
 
     const barStart = (i: number): number => beatToSec(song.tempoSegments, bars[i].startBeat);
     const barEnd = (i: number): number => beatToSec(song.tempoSegments, bars[i].startBeat + bars[i].beats);
-    const currentSec = (): number => (playing ? Math.min(totalSec, baseSec + Math.max(0, ctx.currentTime - baseWall)) : posSec);
+    const currentSec = (): number => (playing ? Math.min(totalSec, baseSec + Math.max(0, ctx.currentTime - baseWall) * rate) : posSec);
     const barAt = (sec: number): number => {
       const beat = secToBeat(song.tempoSegments, sec);
       for (let i = bars.length - 1; i >= 0; i--) if (beat >= bars[i].startBeat - 1e-6) return i;
@@ -132,6 +154,16 @@ export const followScreen: Screen = {
     const loopBox = h('input', { type: 'checkbox', checked: true, 'aria-label': 'Bucle' }) as HTMLInputElement;
     const loopLabel = h('label.follow-check', { title: 'Al llegar al final del tramo elegido (o de la canción) vuelve a empezar' }, loopBox, h('span', null, 'Bucle'));
     const srcSel = h('select.follow-src', { 'aria-label': 'Qué suena' }, h('option', { value: 'song' }, 'Canción original'), h('option', { value: 'chords' }, 'Acordes sintetizados')) as HTMLSelectElement;
+    const speedSel = h('select.follow-speed', { 'aria-label': 'Velocidad', title: 'Velocidad: más lento para practicar' }) as HTMLSelectElement;
+    for (const pct of [50, 60, 70, 80, 90, 100]) speedSel.appendChild(h('option', { value: String(pct) }, `${pct} %`));
+    speedSel.value = '100';
+    speedSel.addEventListener('change', () => {
+      const was = playing;
+      const at = currentSec();
+      rate = Number(speedSel.value) / 100;
+      if (was) void startAt(at);
+    });
+    const speedLabel = h('label.follow-check', null, h('span', null, 'Velocidad'), speedSel);
     srcSel.value = src;
     srcSel.hidden = !audioInfo;
     srcSel.addEventListener('change', () => void changeSource(srcSel.value as Src));
@@ -142,7 +174,7 @@ export const followScreen: Screen = {
     const controls = h(
       'div.follow-controls',
       null,
-      h('div.follow-row', null, playBtn, rewindBtn, backBtn, forwardBtn, prevBarBtn, nextBarBtn, loopLabel, srcSel),
+      h('div.follow-row', null, playBtn, rewindBtn, backBtn, forwardBtn, prevBarBtn, nextBarBtn, loopLabel, speedLabel, srcSel),
       h('div.follow-row', null, timeEl, seekEl),
       h('div.follow-row', null, moreBtn, lessBtn, clearBtn, selInfo),
       statusEl,
@@ -262,7 +294,7 @@ export const followScreen: Screen = {
       posSec = Math.max(0, Math.min(totalSec, sec));
       baseSec = posSec;
       baseWall = ctx.currentTime + START_DELAY_SEC;
-      track.start(baseWall, posSec + offsetFor(src), 1);
+      track.start(baseWall, posSec + offsetFor(src), rate);
       playing = true;
       playBtn.textContent = '⏸ Pausa';
       playBtn.classList.add('is-playing');
@@ -378,13 +410,40 @@ export const followScreen: Screen = {
     }
     document.addEventListener('keydown', onKey);
 
+    /** Sizes the bars so that the whole song is on screen at once (no scrolling) whenever it can be read. */
+    function fit(): void {
+      if (disposed || bars.length === 0) return;
+      const w = grid.clientWidth;
+      const hgt = grid.clientHeight;
+      if (w <= 0 || hgt <= 0) return;
+      const cells = Math.max(1, Math.round(bars[0].beats));
+      const f = fitGrid(bars.length, cells, w - 8, hgt - 8);
+      if (f.fits) {
+        grid.classList.remove('is-scroll');
+        grid.style.setProperty('--cols', String(f.cols));
+        grid.style.setProperty('--rows', String(f.rows));
+        grid.style.setProperty('--fs', `${f.fontPx.toFixed(1)}px`);
+      } else {
+        grid.classList.add('is-scroll');
+        const cols = Math.max(1, Math.floor((w - 8) / 150));
+        grid.style.setProperty('--cols', String(cols));
+        grid.style.setProperty('--fs', '16px');
+      }
+    }
+    const fitObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => fit()) : null;
+    fitObserver?.observe(grid);
+    window.addEventListener('resize', fit);
+
     paintRange();
     refresh(true);
+    fit();
     if (bars.length === 0) setStatus('Esta canción no tiene compases.');
     else if (audioInfo) void loadTrack('song'); // decode ahead of the first tap
 
     return () => {
       disposed = true;
+      fitObserver?.disconnect();
+      window.removeEventListener('resize', fit);
       cancelAnimationFrame(raf);
       stopSound();
       for (const t of Object.values(tracks)) t?.dispose();

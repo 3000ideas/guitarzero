@@ -1631,3 +1631,5 @@ Para tocar siguiendo la canción, sin micrófono ni puntuación. Botón «Seguir
 - Reproductor: ▶/⏸, ⏮ (al principio del tramo o de la canción), ⏪/⏩ 5 s, compás anterior/siguiente, barra de posición, Espacio y flechas.
 - Tramo: pulsar un compás salta ahí; arrastrar (o Mayús+clic, o ＋/− compás) elige varios compases; ese tramo es lo que suena y, con
   «Bucle», se repite. «✕ Quitar tramo» vuelve a la canción entera.
+- La cuadrícula se ajusta para que TODOS los compases quepan en pantalla a la vez (se recalcula al cambiar el tamaño); si no se pueden leer, tamaño mínimo y scroll.
+- «Velocidad» 50–100 % para ir más lento (el tono baja con la velocidad).
