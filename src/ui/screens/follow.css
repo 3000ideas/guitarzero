@@ -388,3 +388,8 @@
 .follow-rangerow .btn {
   border-radius: 999px;
 }
+
+/* The page itself must not scroll: the app container is only as tall as this screen. */
+#app[data-route="follow"] {
+  min-height: 0;
+}
