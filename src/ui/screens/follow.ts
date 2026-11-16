@@ -42,8 +42,8 @@ export function beatCells(bar: SongBar): string[] {
  * count and keeps the one whose chord text can be largest. `fontPx` is capped; when even the best is too small to
  * read (`fits` false) the grid keeps a minimum size and scrolls.
  */
-export function fitGrid(count: number, cells: number, width: number, height: number, gap = 6): { cols: number; rows: number; fontPx: number; fits: boolean } {
-  const MIN_FONT = 11;
+export function fitGrid(count: number, cells: number, width: number, height: number, gap = 4): { cols: number; rows: number; fontPx: number; fits: boolean } {
+  const MIN_FONT = 9;
   const MAX_FONT = 30;
   let best = { cols: 1, rows: Math.max(1, count), fontPx: 0 };
   for (let cols = 1; cols <= Math.max(1, count); cols++) {
@@ -52,7 +52,7 @@ export function fitGrid(count: number, cells: number, width: number, height: num
     const barH = (height - gap * (rows - 1)) / rows;
     if (barW <= 0 || barH <= 0) continue;
     // A chord must fit its cell: the cell is barW / cells wide and (barH - the little number row) tall.
-    const font = Math.min((barW / cells) * 0.4, (barH - 14) * 0.42, MAX_FONT);
+    const font = Math.min((barW / cells) * 0.42, (barH - 11) * 0.45, MAX_FONT);
     if (font > best.fontPx) best = { cols, rows, fontPx: font };
   }
   return { ...best, fits: best.fontPx >= MIN_FONT };
@@ -148,7 +148,7 @@ export const followScreen: Screen = {
 
     const playBtn = h('button.btn.btn-primary.follow-play', { type: 'button', onclick: () => void togglePlay() }, '▶ Escuchar') as HTMLButtonElement;
     const skipBtn = (label: string, title: string, fn: () => void): HTMLButtonElement => h('button.btn.btn-sm', { type: 'button', title, 'aria-label': title, onclick: fn }, label) as HTMLButtonElement;
-    const rewindBtn = skipBtn('⏮', 'Volver al principio (del tramo elegido, o de la canción)', () => seek(loopStart()));
+    const rewindBtn = skipBtn('⏮ Inicio', 'Volver al principio (del tramo elegido, o de la canción)', () => seek(loopStart()));
     const backBtn = skipBtn('−5 s', 'Retroceder 5 segundos', () => seek(currentSec() - 5));
     const forwardBtn = skipBtn('+5 s', 'Adelantar 5 segundos', () => seek(currentSec() + 5));
     const prevBarBtn = skipBtn('◀', 'Compás anterior', () => seek(barStart(Math.max(0, barAt(currentSec()) - 1))));
@@ -171,7 +171,7 @@ export const followScreen: Screen = {
       } catch {
         /* not remembered */
       }
-    } }, `⏱ ${COUNTDOWN_SEC} s`) as HTMLButtonElement;
+    } }, `⏱ Cuenta atrás ${COUNTDOWN_SEC} s`) as HTMLButtonElement;
     countdownBtn.classList.toggle('is-on', countdownOn);
     const countOverlay = h('div.follow-count', { role: 'status', 'aria-live': 'polite' });
     countOverlay.hidden = true;
@@ -204,7 +204,7 @@ export const followScreen: Screen = {
     const controls = h(
       'div.follow-controls',
       null,
-      h('div.follow-row.follow-toolbar', null, titleEl, playBtn, rewindBtn, backBtn, forwardBtn, prevBarBtn, nextBarBtn, h('span.follow-sep'), loopLabel, countdownBtn, speedLabel, sourceMenu),
+      h('div.follow-row.follow-toolbar', null, titleEl, playBtn, h('div.follow-group', null, rewindBtn, backBtn, forwardBtn), h('div.follow-group', null, prevBarBtn, h('span.follow-group-label', null, 'Compás'), nextBarBtn), h('span.follow-sep'), loopLabel, countdownBtn, h('label.follow-speedbox', { title: 'Velocidad: más lento para practicar' }, h('span', null, 'Velocidad'), speedLabel), sourceMenu),
       h('div.follow-row', null, timeEl, seekEl),
       rangeRow,
       statusEl,
@@ -491,7 +491,7 @@ export const followScreen: Screen = {
       const hgt = grid.clientHeight;
       if (w <= 0 || hgt <= 0) return;
       const cells = Math.max(1, Math.round(bars[0].beats));
-      const f = fitGrid(bars.length, cells, w - 8, hgt - 8);
+      const f = fitGrid(bars.length, cells, w - 6, hgt - 6);
       if (f.fits) {
         grid.classList.remove('is-scroll');
         grid.style.setProperty('--cols', String(f.cols));
