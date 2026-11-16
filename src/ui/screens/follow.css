@@ -393,3 +393,12 @@
 #app[data-route="follow"] {
   min-height: 0;
 }
+
+.follow-menu > summary::marker {
+  content: "";
+  font-size: 0;
+}
+
+.follow-menu > summary::before {
+  content: none;
+}
