@@ -1,15 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { chordSlots } from '../../src/ui/screens/follow';
+import { beatCells } from '../../src/ui/screens/follow';
 import { parseSong } from '../../src/song/parser';
 import { parseRoute, routeIsAvailable, titleForRoute } from '../../src/main';
 
 describe('Seguir', () => {
-  it('lists the chords of the song in playing order, with absolute beats, skipping rests', () => {
+  it('beatCells writes the chord where it starts, a dot while it goes on and a dash for a rest', () => {
     const { song } = parseSong('tempo: 100\ntime: 4/4\n\nD . . . | - . . . | F#m . E . |\n');
-    const slots = chordSlots(song);
-    expect(slots.map((s) => s.name)).toEqual(['D', 'F#m', 'E']);
-    expect(slots.map((s) => s.startBeat)).toEqual([0, 8, 10]);
-    expect(slots.map((s) => s.bar)).toEqual([0, 2, 2]);
+    expect(beatCells(song.bars[0])).toEqual(['D', '·', '·', '·']);
+    expect(beatCells(song.bars[1])).toEqual(['–', '·', '·', '·']);
+    expect(beatCells(song.bars[2])).toEqual(['F#m', '·', 'E', '·']);
   });
 
   it('has its own route #/follow/:id', () => {

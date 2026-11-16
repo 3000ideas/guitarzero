@@ -1625,9 +1625,9 @@ Cambiar la banda o el número de compases para la reproducción; se para sola al
 ### 26.4 Pantalla «Seguir» (`#/follow/:id`)
 
 Para tocar siguiendo la canción, sin micrófono ni puntuación. Botón «Seguir» en cada canción de la biblioteca.
-- Suena la grabación (o los acordes sintetizados si no hay audio; selector «Qué suena» cuando hay ambos). Un solo marcador por compás:
-  el compás que suena se ilumina cuando empieza y un relleno avanza por dentro (no se marcan los pulsos uno a uno).
-- Arriba: acorde de ahora (grande, con su diagrama girado), el siguiente y los próximos acordes. La cuadrícula se desplaza sola.
+- Suena la grabación (o los acordes sintetizados si no hay audio; selector «Qué suena» cuando hay ambos).
+- La cuadrícula es la misma del editor: una casilla por pulso con el acorde donde empieza («·» mientras sigue, «–» silencio). Se ilumina
+  la casilla que suena, de una en una, y la cuadrícula se desplaza sola. No hay acordes grandes ni diagramas.
 - Reproductor: ▶/⏸, ⏮ (al principio del tramo o de la canción), ⏪/⏩ 5 s, compás anterior/siguiente, barra de posición, Espacio y flechas.
 - Tramo: pulsar un compás salta ahí; arrastrar (o Mayús+clic, o ＋/− compás) elige varios compases; ese tramo es lo que suena y, con
   «Bucle», se repite. «✕ Quitar tramo» vuelve a la canción entera.

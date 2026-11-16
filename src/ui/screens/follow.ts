@@ -1,22 +1,20 @@
 /**
  * «Seguir» (#/follow/:id): a screen to PLAY ALONG with the song. The recording (or the synthesized chords) sounds
- * and the grid of bars goes by: the bar that sounds now is lit from the moment it starts, with a fill that grows
- * across it (no per-beat flashing), the current chord is shown big with the next ones coming. Player controls:
+ * and the grid of bars (the same as in the editor: one cell per beat, the chord written where it starts) goes by:
+ * the beat that sounds is lit as it plays and the grid scrolls by itself. Player controls:
  * play / pause, back to the start, ±5 s, a position slider and a loop. Click a bar to jump there; drag over
  * several bars (or Shift-click, or the ＋ / − buttons) to select them: that stretch is what plays and loops.
  */
 import './follow.css';
-import type { ChordShape, Screen, Song } from '../../types';
+import type { Screen, SongBar } from '../../types';
 import { parseSong } from '../../song/parser';
-import { getSong, loadSettings } from '../../song/storage';
+import { getSong } from '../../song/storage';
 import { getTrack } from '../../song/audioStore';
 import { beatToSec, secToBeat, songDurationSec } from '../../song/tempo';
-import { getChordShape } from '../../music/chords';
 import { getAudioContext } from '../../audio/context';
 import { BackingTrack } from '../../audio/backing';
 import { renderChordTrack } from '../../audio/chordSynth';
-import { drawChordDiagramHorizontal } from '../chordDiagram';
-import { clear, h } from '../dom';
+import { h } from '../dom';
 
 const noop = (): void => undefined;
 const START_DELAY_SEC = 0.06;
@@ -26,23 +24,14 @@ function fmt(sec: number): string {
   return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 }
 
-interface ChordSlot {
-  name: string;
-  quality: string;
-  bar: number;
-  startBeat: number;
-}
-
-/** Every chord of the song in playing order (rests and «sin acorde» skipped). */
-export function chordSlots(song: Song): ChordSlot[] {
-  const out: ChordSlot[] = [];
-  for (const bar of song.bars) {
-    for (const c of bar.chords) {
-      if (c.chord.quality === 'nc') continue;
-      out.push({ name: c.chord.name, quality: c.chord.quality, bar: bar.index, startBeat: c.startBeat });
-    }
+/** What the editor grid writes in each beat cell of a bar: the chord where it starts, «·» while it goes on, «–» for a rest. */
+export function beatCells(bar: SongBar): string[] {
+  const cells: string[] = Array.from({ length: Math.max(1, Math.round(bar.beats)) }, () => '·');
+  for (const c of bar.chords) {
+    const at = Math.max(0, Math.min(cells.length - 1, Math.floor(c.startBeat - bar.startBeat + 1e-6)));
+    cells[at] = c.chord.quality === 'nc' ? (c.chord.name === '-' ? '–' : c.chord.name) : c.chord.name;
   }
-  return out;
+  return cells;
 }
 
 export const followScreen: Screen = {
@@ -55,9 +44,7 @@ export const followScreen: Screen = {
     }
     const { song } = parseSong(stored.source, { id });
     const bars = song.bars;
-    const slots = chordSlots(song);
     const totalSec = songDurationSec(song);
-    const settings = loadSettings();
     const ctx = getAudioContext();
     const audioInfo = stored.audio ?? null;
     let disposed = false;
@@ -113,7 +100,7 @@ export const followScreen: Screen = {
     let moved = false;
     let raf = 0;
     let shownBar = -2;
-    let shownSlot = -2;
+    let shownCell = '';
 
     const barStart = (i: number): number => beatToSec(song.tempoSegments, bars[i].startBeat);
     const barEnd = (i: number): number => beatToSec(song.tempoSegments, bars[i].startBeat + bars[i].beats);
@@ -131,15 +118,6 @@ export const followScreen: Screen = {
     function setStatus(text: string): void {
       statusEl.textContent = text;
     }
-
-    const nowCanvas = h('canvas.follow-diagram.follow-diagram-now') as HTMLCanvasElement;
-    const nextCanvas = h('canvas.follow-diagram.follow-diagram-next') as HTMLCanvasElement;
-    const nowName = h('div.follow-now-name', null, '—');
-    const nextName = h('div.follow-next-name', null, '');
-    const comingEl = h('div.follow-coming');
-    const nowBox = h('div.follow-now', null, h('div.follow-label', null, 'Ahora'), nowName, nowCanvas);
-    const nextBox = h('div.follow-next', null, h('div.follow-label', null, 'Siguiente'), nextName, nextCanvas);
-    const stage = h('div.follow-stage', null, nowBox, nextBox, comingEl);
 
     const playBtn = h('button.btn.btn-primary.follow-play', { type: 'button', onclick: () => void togglePlay() }, '▶ Escuchar') as HTMLButtonElement;
     const skipBtn = (label: string, title: string, fn: () => void): HTMLButtonElement => h('button.btn.btn-sm', { type: 'button', title, 'aria-label': title, onclick: fn }, label) as HTMLButtonElement;
@@ -173,15 +151,18 @@ export const followScreen: Screen = {
     const grid = h('div.follow-grid', { role: 'list' }) as HTMLDivElement;
     const barEls: HTMLElement[] = [];
     let prevSection: string | null = null;
+    const cellEls: HTMLElement[][] = [];
     bars.forEach((bar, i) => {
-      const names = bar.chords.filter((c) => c.chord.quality !== 'nc').map((c) => c.chord.name);
+      const cells = beatCells(bar).map((value) => {
+        const kind = value === '·' ? 'is-hold' : value === '–' ? 'is-rest' : 'is-chord';
+        return h('div.follow-cell', { class: `${kind}${value.length > 4 ? ' is-long' : ''}` }, h('span.follow-chord', null, value));
+      });
+      cellEls.push(cells);
       const el = h(
         'div.follow-bar',
-        { role: 'listitem', dataset: { i: String(i) }, 'aria-label': `Compás ${i + 1}` },
-        h('span.follow-bar-num', null, String(i + 1)),
-        bar.section !== null && bar.section !== prevSection ? h('span.follow-bar-sec', null, bar.section) : null,
-        h('span.follow-bar-chords', { class: names.length > 1 ? 'is-multi' : '' }, names.length > 0 ? names.join('  ') : '–'),
-        h('span.follow-bar-fill'),
+        { role: 'listitem', dataset: { i: String(i) }, 'aria-label': `Compás ${i + 1}`, style: `--cells:${cells.length}` },
+        h('div.follow-bar-top', null, h('span.follow-bar-num', null, String(i + 1)), bar.section !== null && bar.section !== prevSection ? h('span.follow-bar-sec', null, bar.section) : null),
+        h('div.follow-cells', null, cells),
       );
       prevSection = bar.section;
       barEls.push(el);
@@ -189,7 +170,7 @@ export const followScreen: Screen = {
     });
 
     const header = h('header.screen-header', null, h('a.btn.btn-sm', { href: '#/' }, '← Biblioteca'), h('div.grow', null, h('h2.follow-title', null, song.title || 'Canción'), h('div.muted.small', null, 'Seguir la canción')), h('a.btn.btn-sm', { href: `#/play/${id}`, title: 'Practicar con micrófono' }, 'Practicar'), h('a.btn.btn-sm', { href: `#/edit/${id}` }, 'Editar'));
-    const screen = h('main.screen.follow', null, header, stage, controls, grid);
+    const screen = h('main.screen.follow', null, header, controls, grid);
     root.appendChild(screen);
 
     // ---------------------------------------------------------------- selection
@@ -349,62 +330,13 @@ export const followScreen: Screen = {
     }
 
     // ---------------------------------------------------------------- display
-    function drawDiagram(cv: HTMLCanvasElement, name: string | null): void {
-      const dpr = window.devicePixelRatio || 1;
-      const w = cv.clientWidth;
-      const hh = cv.clientHeight;
-      if (w <= 0 || hh <= 0) return;
-      cv.width = Math.round(w * dpr);
-      cv.height = Math.round(hh * dpr);
-      const c = cv.getContext('2d');
-      if (!c) return;
-      c.setTransform(dpr, 0, 0, dpr, 0, 0);
-      c.clearRect(0, 0, w, hh);
-      if (!name) return;
-      const shape: ChordShape | null = getChordShape(name);
-      const boxH = Math.min(hh, w / 1.75);
-      const boxW = Math.min(w, boxH * 1.75);
-      drawChordDiagramHorizontal(c, shape, { x: (w - boxW) / 2, y: (hh - boxH) / 2, w: boxW, h: boxH }, { title: name, showFingers: true, invertStrings: settings.invertStrings });
-    }
-
-    function slotAt(sec: number): number {
-      const beat = secToBeat(song.tempoSegments, sec);
-      let k = -1;
-      for (let i = 0; i < slots.length; i++) {
-        if (slots[i].startBeat <= beat + 1e-6) k = i;
-        else break;
-      }
-      return k;
-    }
-
-    function showChords(slot: number): void {
-      const cur = slot >= 0 ? slots[slot] : null;
-      const nextSlot = slots.slice(slot + 1).find((s) => s.name !== (cur ? cur.name : ''));
-      nowName.textContent = cur ? cur.name : '—';
-      nextName.textContent = nextSlot ? nextSlot.name : '';
-      drawDiagram(nowCanvas, cur ? cur.name : null);
-      drawDiagram(nextCanvas, nextSlot ? nextSlot.name : null);
-      clear(comingEl);
-      let shown = 0;
-      let last = cur ? cur.name : '';
-      for (let i = slot + 1; i < slots.length && shown < 6; i++) {
-        if (slots[i].name === last) continue;
-        last = slots[i].name;
-        comingEl.appendChild(h('span.follow-coming-chord', null, slots[i].name));
-        shown++;
-      }
-    }
-
     function refresh(force: boolean): void {
       const sec = currentSec();
       timeEl.textContent = `${fmt(sec)} / ${fmt(totalSec)}`;
       if (document.activeElement !== seekEl) seekEl.value = String(sec);
       const bi = barAt(sec);
       if (force || bi !== shownBar) {
-        if (shownBar >= 0 && barEls[shownBar]) {
-          barEls[shownBar].classList.remove('is-now');
-          barEls[shownBar].style.removeProperty('--p');
-        }
+        if (shownBar >= 0 && barEls[shownBar]) barEls[shownBar].classList.remove('is-now');
         shownBar = bi;
         const el = barEls[bi];
         if (el) {
@@ -414,15 +346,24 @@ export const followScreen: Screen = {
           if (rel < grid.clientHeight * 0.1 || rel > grid.clientHeight * 0.6) grid.scrollTo({ top: Math.max(0, top - grid.clientHeight * 0.3), behavior: force ? 'auto' : 'smooth' });
         }
       }
-      const el = barEls[bi];
-      if (el && bars[bi]) {
-        const len = barEnd(bi) - barStart(bi);
-        el.style.setProperty('--p', `${Math.max(0, Math.min(1, len > 0 ? (sec - barStart(bi)) / len : 0)) * 100}%`);
+      // The beat that sounds: one cell lit at a time, only while it plays (paused: none).
+      const bar = bars[bi];
+      let key = '';
+      if (bar && playing) {
+        const beat = secToBeat(song.tempoSegments, sec) - bar.startBeat;
+        const cell = Math.max(0, Math.min(cellEls[bi].length - 1, Math.floor(beat + 1e-6)));
+        key = `${bi}:${cell}`;
       }
-      const k = slotAt(sec);
-      if (force || k !== shownSlot) {
-        shownSlot = k;
-        showChords(k);
+      if (force || key !== shownCell) {
+        if (shownCell) {
+          const [b0, c0] = shownCell.split(':').map(Number);
+          cellEls[b0]?.[c0]?.classList.remove('is-playing');
+        }
+        shownCell = key;
+        if (key) {
+          const [b1, c1] = key.split(':').map(Number);
+          cellEls[b1]?.[c1]?.classList.add('is-playing');
+        }
       }
     }
 
@@ -436,8 +377,6 @@ export const followScreen: Screen = {
       else if (ev.key === 'ArrowRight') seek(currentSec() + 5);
     }
     document.addEventListener('keydown', onKey);
-    const onResize = (): void => refresh(true);
-    window.addEventListener('resize', onResize);
 
     paintRange();
     refresh(true);
@@ -450,7 +389,6 @@ export const followScreen: Screen = {
       stopSound();
       for (const t of Object.values(tracks)) t?.dispose();
       document.removeEventListener('keydown', onKey);
-      window.removeEventListener('resize', onResize);
       window.removeEventListener('pointerup', endDrag);
     };
   },
