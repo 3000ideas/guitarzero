@@ -16,9 +16,11 @@ describe('Seguir', () => {
     expect(f.fits).toBe(true);
     expect(f.cols * f.rows).toBeGreaterThanOrEqual(65);
     expect(f.rows * f.rowPx).toBeLessThanOrEqual(520);
-    expect(f.fontPx).toBeLessThanOrEqual(13);
-    // A bigger box never needs fewer columns than a small one for the same text.
-    expect(fitGrid(65, 4, 1000, 900).cols).toBeGreaterThanOrEqual(f.cols);
+    expect(f.fontPx).toBeLessThanOrEqual(26);
+    // A bigger box never makes the text smaller.
+    expect(fitGrid(65, 4, 1000, 900).fontPx).toBeGreaterThanOrEqual(f.fontPx);
+    // 1900 x 700 (a wide window): the bars are big, not tiny.
+    expect(fitGrid(65, 4, 1900, 700).fontPx).toBeGreaterThan(18);
     expect(fitGrid(400, 4, 360, 300).fits).toBe(false);
   });
 

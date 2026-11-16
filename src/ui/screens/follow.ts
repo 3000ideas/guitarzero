@@ -38,29 +38,26 @@ export function beatCells(bar: SongBar): string[] {
 }
 
 /**
- * Lays ALL the bars out in a `width` × `height` box with small, compact bars: every bar gets a row just tall enough
- * for its chords (`rowPx`), the text is capped (`fontPx`, no bigger than it needs to be) and, among the layouts that
- * fit, the one with the most columns (the smallest bars) wins. When even the best is too small to read (`fits`
- * false) the grid keeps a minimum size and scrolls.
+ * Lays ALL the bars out so that they FILL the `width` × `height` box: tries every column count and keeps the one
+ * whose chord text can be biggest (`fontPx`, capped so it never looks huge); the rows share the height equally
+ * (`rowPx`). When even the best is too small to read (`fits` false) the grid keeps a minimum size and scrolls.
  */
 export function fitGrid(count: number, cells: number, width: number, height: number, gap = 4): { cols: number; rows: number; fontPx: number; rowPx: number; fits: boolean } {
   const MIN_FONT = 9;
-  const MAX_FONT = 13;
-  const rowFor = (font: number): number => Math.round(font * 2.3 + 12);
+  const MAX_FONT = 26;
   let best: { cols: number; rows: number; fontPx: number; rowPx: number } | null = null;
   for (let cols = 1; cols <= Math.max(1, count); cols++) {
     const rows = Math.ceil(count / cols);
     const barW = (width - gap * (cols - 1)) / cols;
-    if (barW <= 0) continue;
-    const font = Math.min((barW / cells) * 0.42, MAX_FONT);
+    const rowH = (height - gap * (rows - 1)) / rows;
+    if (barW <= 0 || rowH <= 0) continue;
+    // A chord must fit its cell: barW / cells wide, and (the row minus the little bar number) tall.
+    const font = Math.min((barW / cells) * 0.42, (rowH - 11) * 0.45, MAX_FONT);
     if (font < MIN_FONT) continue;
-    const rowPx = rowFor(font);
-    if (rows * rowPx + (rows - 1) * gap > height) continue;
-    // Best = biggest text, then (same text) the smallest bars, i.e. the most columns.
-    if (!best || font > best.fontPx + 0.01 || (Math.abs(font - best.fontPx) <= 0.01 && cols > best.cols)) best = { cols, rows, fontPx: font, rowPx };
+    if (!best || font > best.fontPx + 0.01 || (Math.abs(font - best.fontPx) <= 0.01 && cols > best.cols)) best = { cols, rows, fontPx: font, rowPx: Math.floor(rowH) };
   }
   if (best) return { ...best, fits: true };
-  return { cols: 1, rows: Math.max(1, count), fontPx: 0, rowPx: rowFor(MIN_FONT), fits: false };
+  return { cols: 1, rows: Math.max(1, count), fontPx: 0, rowPx: 48, fits: false };
 }
 
 export const followScreen: Screen = {
