@@ -150,30 +150,70 @@ export function oneChordPerBar(source: string, changesPerBar: 1 | 2 = 1): { sour
 /** A beat is «quiet» when its level is this many dB below the median beat of the song. */
 export const QUIET_BEAT_DB = -12;
 
+/** A beat has «no strike» when its strongest attack is below this share of the median beat's strongest attack. */
+export const NO_STRIKE_RATIO = 0.3;
+/** Hop of the attack curve, seconds. */
+const ATTACK_HOP_SEC = 0.01;
+/** A strike a little ahead of the beat still belongs to that beat. */
+const ATTACK_LEAD_SEC = 0.03;
+
 /**
- * Per beat of `song` (repeats expanded): true where the recording is nearly silent, i.e. the guitar has
- * stopped. `offsetSec` is the audio time of the song's beat 0 (the track's `offsetSec`). Beats outside the
- * audio are not quiet (nothing to compare with).
+ * Per beat of `song` (repeats expanded): true where the guitar of the recording is not being played.
+ * Two signs, either is enough:
+ *  - the beat is nearly silent (its level is `thresholdDb` below the median beat), or
+ *  - nothing is struck during the beat: the chord of before just rings on. The attack curve is the rise
+ *    of the brightness of the sound (level of the sample-to-sample difference, in dB) every 10 ms; a
+ *    strum makes it jump, a ringing chord does not.
+ * `offsetSec` is the audio time of the song's beat 0 (the track's `offsetSec`). Beats outside the audio
+ * are not quiet (nothing to compare with).
  */
 export function quietBeats(samples: Float32Array, sampleRate: number, song: Song, offsetSec: number, thresholdDb = QUIET_BEAT_DB): boolean[] {
   const n = Math.max(0, Math.round(song.totalBeats));
+  const hop = Math.max(1, Math.round(ATTACK_HOP_SEC * sampleRate));
+  const frames = Math.floor(samples.length / hop);
+  const bright = new Float32Array(frames);
+  for (let f = 0; f < frames; f++) {
+    let sum = 0;
+    for (let j = 1; j < hop; j++) {
+      const d = samples[f * hop + j] - samples[f * hop + j - 1];
+      sum += d * d;
+    }
+    bright[f] = Math.log(1e-9 + sum);
+  }
+  const attack = new Float32Array(frames);
+  const before = (f: number): number => (f >= 0 ? bright[f] : Math.log(1e-9)); // silence before the audio starts
+  for (let f = 0; f < frames; f++) attack[f] = Math.max(0, bright[f] - Math.max(before(f - 1), before(f - 2)));
+
   const level: Array<number | null> = [];
+  const strike: Array<number | null> = [];
   for (let b = 0; b < n; b++) {
-    const from = Math.round((beatToSec(song.tempoSegments, b) + offsetSec) * sampleRate);
-    const to = Math.round((beatToSec(song.tempoSegments, b + 1) + offsetSec) * sampleRate);
+    const fromSec = beatToSec(song.tempoSegments, b) + offsetSec;
+    const toSec = beatToSec(song.tempoSegments, b + 1) + offsetSec;
+    const from = Math.round(fromSec * sampleRate);
+    const to = Math.round(toSec * sampleRate);
     if (from < 0 || to > samples.length || to <= from) {
       level.push(null);
+      strike.push(null);
       continue;
     }
     let sum = 0;
     for (let i = from; i < to; i++) sum += samples[i] * samples[i];
     level.push(Math.sqrt(sum / (to - from)));
+    let top = 0;
+    const f0 = Math.max(0, Math.round((fromSec - ATTACK_LEAD_SEC) / ATTACK_HOP_SEC));
+    const f1 = Math.min(frames, Math.round((toSec - ATTACK_LEAD_SEC) / ATTACK_HOP_SEC));
+    for (let f = f0; f < f1; f++) if (attack[f] > top) top = attack[f];
+    strike.push(top);
   }
-  const known = level.filter((v): v is number => v !== null).sort((x, y) => x - y);
-  const median = known.length > 0 ? known[known.length >> 1] : 0;
-  if (median <= 0) return level.map(() => false);
-  const limit = median * 10 ** (thresholdDb / 20);
-  return level.map((v) => v !== null && v < limit);
+  const medianOf = (values: Array<number | null>): number => {
+    const known = values.filter((v): v is number => v !== null).sort((x, y) => x - y);
+    return known.length > 0 ? known[known.length >> 1] : 0;
+  };
+  const medianLevel = medianOf(level);
+  if (medianLevel <= 0) return level.map(() => false);
+  const levelLimit = medianLevel * 10 ** (thresholdDb / 20);
+  const strikeLimit = medianOf(strike) * NO_STRIKE_RATIO;
+  return level.map((v, b) => v !== null && (v < levelLimit || (strike[b] ?? 0) < strikeLimit));
 }
 
 /**
