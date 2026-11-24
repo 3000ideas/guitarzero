@@ -10,6 +10,16 @@
   flex-wrap: wrap;
 }
 
+/* «Tengo cejilla»: what the «Fácil» button may ask for */
+.library .lib-capo {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 14px;
+  cursor: pointer;
+}
+
 /* "Desde audio…" inline status: "Analizando «archivo»… 40 %" + progress bar, or an error */
 
 .library .lib-import {

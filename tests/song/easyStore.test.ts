@@ -16,7 +16,7 @@ beforeEach(async () => {
 describe('easy copy of a song', () => {
   it('is a normal song next to the full one, with open chords, a capo and a down-strum per beat', async () => {
     saveSong({ id: 'mia', title: 'Mía', artist: 'Yo', source: SRC, updatedAt: 0 });
-    const made = await createEasySong('mia');
+    const made = await createEasySong('mia', null, { capo: true });
     expect(made).toMatchObject({ ok: true, id: 'mia-facil', message: '' });
     const easy = getSong('mia-facil');
     expect(easy?.title).toBe('Mía (fácil)');
@@ -39,7 +39,7 @@ describe('easy copy of a song', () => {
       const beat = Math.floor(i / (sr / 2));
       samples[i] = beat === 6 || beat === 7 ? 0 : 0.5 * Math.sin((2 * Math.PI * 220 * i) / sr);
     }
-    const made = await createEasySong('mia', { samples, sampleRate: sr });
+    const made = await createEasySong('mia', { samples, sampleRate: sr }, { capo: true });
     expect(made.ok).toBe(true);
     expect(made.result?.rests).toBe(2);
     expect(getSong('mia-facil')?.audio).toEqual(AUDIO);

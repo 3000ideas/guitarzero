@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BUNDLED_SONGS } from '../../src/song/bundled';
-import { buildEasySource, easySongId, easyStrumPattern, oneChordPerBar, parseEasyId, quietBeats, restQuietBeats, sameBeatsRatio } from '../../src/song/easy';
+import { buildEasySource, relativeMajorsForHardMinors, easySongId, easyStrumPattern, oneChordPerBar, parseEasyId, quietBeats, restQuietBeats, sameBeatsRatio } from '../../src/song/easy';
 import { parseSong } from '../../src/song/parser';
 
 const SODOMA = BUNDLED_SONGS[0].source;
@@ -45,7 +45,7 @@ describe('oneChordPerBar with two changes per bar', () => {
 
 describe('easy version', () => {
   const full = parseSong(SODOMA).song;
-  const easy = buildEasySource(SODOMA, { changesPerBar: 1, strum: 'bar', maxChords: 4 });
+  const easy = buildEasySource(SODOMA, { changesPerBar: 1, strum: 'bar', maxChords: 4, capo: true });
   const parsed = parseSong(easy.source);
 
   it('keeps the structure and timing of the song, with no errors', () => {
@@ -85,12 +85,12 @@ describe('easy version', () => {
   it('offers more strums per bar and fewer chords', () => {
     expect(buildEasySource(SODOMA, { strum: 'half' }).strum).toBe('D-D-');
     expect(buildEasySource(SODOMA).strum).toBe('D-D-D-D-');
-    expect(buildEasySource(SODOMA, { maxChords: 3 }).chords).toHaveLength(3);
+    expect(buildEasySource(SODOMA, { maxChords: 3, capo: true }).chords).toHaveLength(3);
     expect(easyStrumPattern('bar', 3)).toBe('D--');
   });
 
   it('by default the chord may change on beats 1 and 3, with a strum on each, and it stays closer to the song', () => {
-    const two = buildEasySource(SODOMA);
+    const two = buildEasySource(SODOMA, { capo: true });
     expect(two.strum).toBe('D-D-D-D-');
     expect(buildEasySource(SODOMA, { strum: 'bar' }).strum).toBe('D-D-');
     expect(two.sameBeatsRatio).toBeGreaterThan(0.9);
@@ -103,7 +103,7 @@ describe('easy version', () => {
   });
 
   it('a capo version counts as the same chords', () => {
-    const r = buildEasySource('tempo: 100\n[A]\nBb . . . | Eb . . . | F . . . | Gm . . . |\n');
+    const r = buildEasySource('tempo: 100\n[A]\nBb . . . | Eb . . . | F . . . | Gm . . . |\n', { capo: true });
     expect(r.capo).toBe(3);
     expect(r.chords).toEqual(['G', 'C', 'D', 'Em']);
     expect(r.sameBeatsRatio).toBe(1);
@@ -178,5 +178,26 @@ describe('rests where the recording goes quiet', () => {
     const r = buildEasySource(src, { quiet: q(2, 3) });
     expect(r.rests).toBe(2);
     expect(parseSong(r.source).song.events.map((e) => e.time)).toEqual([0, 1, 4, 5, 6, 7, 8, 9, 10, 11]);
+  });
+});
+
+describe('easy version without a capo (the default)', () => {
+  it('never asks for a capo: barre minors become their relative major (F#m → A, Bm → D)', () => {
+    const r = buildEasySource(SODOMA);
+    expect(r.capo).toBe(0);
+    expect([...r.chords].sort()).toEqual(['A', 'D', 'E']);
+    expect(parseSong(r.source).errors.filter((e) => e.severity === 'error')).toEqual([]);
+    expect(r.sameBeatsRatio).toBeGreaterThan(0.7);
+  });
+
+  it('a song written with a capo is rewritten as it sounds, with no capo', () => {
+    const r = buildEasySource('tempo: 100\ncapo: 2\n[A]\nC . . . | G . . . | D . . . | Em . . . |\n');
+    expect(r.capo).toBe(0);
+    expect(r.chords).toEqual(['D', 'A', 'E']); // C G D Em with the capo on 2 sound D A E F#m; F#m → A
+    expect(r.source).toContain('D . . . | A . . . | E . . . | A . . . |');
+  });
+
+  it('only swaps minors that need a barre and whose relative major is easy', () => {
+    expect(relativeMajorsForHardMinors('tempo: 100\n[A]\nF#m . Bm . | Am . Em . | Cm . G#m . |\n')).toContain('A . D . | Am . Em . | Cm . G#m . |');
   });
 });

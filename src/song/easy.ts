@@ -11,7 +11,7 @@
  * Bars, sections, the tempo of every line and the audio are untouched, so the easy version lines up
  * with the recording exactly like the full song. Pure, testable in Node.
  */
-import { reduceQuality, sameChordName, simplifyChart, transposeName } from '../music/simplify';
+import { chordDifficulty, reduceQuality, rewriteChordTokens, sameChordName, simplifyChart, spellPitchClass, transposeName } from '../music/simplify';
 import { parseChordSymbol } from '../music/notes';
 import type { Song } from '../types';
 import { NC_CELL, REST_CELL, parseGrid, serializeGrid, setHeader } from './grid';
@@ -48,11 +48,17 @@ export interface EasyOptions {
    * so the easy version stops strumming where the guitar of the recording stops. null = no rests added.
    */
   quiet: boolean[] | null;
+  /**
+   * The player has a capo (default false). With one, a capo is proposed when it turns the chords into open
+   * shapes. Without one the result never asks for a capo: a song written with a capo is first rewritten as
+   * it sounds, and the chords that would need a barre become the nearest easy chord.
+   */
+  capo: boolean;
   /** Title of the easy version (default: the song's title + « (fácil)»). */
   title: string | null;
 }
 
-export const DEFAULT_EASY_OPTIONS: EasyOptions = { maxChords: EASY_DEFAULT_MAX_CHORDS, strum: 'beat', changesPerBar: 2, quiet: null, title: null };
+export const DEFAULT_EASY_OPTIONS: EasyOptions = { maxChords: EASY_DEFAULT_MAX_CHORDS, strum: 'beat', changesPerBar: 2, quiet: null, capo: false, title: null };
 
 export interface EasyResult {
   /** The text of the easy version. */
@@ -315,19 +321,36 @@ export function sameBeatsRatio(full: Song, easy: Song): number {
   return total > 0 ? same / total : 1;
 }
 
+/**
+ * Without a capo, a minor chord that needs a barre (F#m, Bm, Cm…) becomes its relative major when that one
+ * is an easy open chord (F#m → A, Bm → D): every note of the major chord belongs to the minor seventh chord,
+ * so it never clashes with the recording, which the «nearest chord» by shared notes sometimes does
+ * (Bm → G brings a note from outside the key).
+ */
+export function relativeMajorsForHardMinors(source: string): string {
+  return rewriteChordTokens(source, (name) => {
+    const sym = parseChordSymbol(name);
+    if (!sym || sym.quality !== 'min' || chordDifficulty(sym).level !== 3) return name;
+    const relative = spellPitchClass((sym.root + 3) % 12, 'maj');
+    return chordDifficulty(relative).level === 1 ? relative : name;
+  });
+}
+
 /** The easy version of `source` (see the top of the file). Never throws: a song without chords comes back as it is, with the simple strum. */
 export function buildEasySource(source: string, options: Partial<EasyOptions> = {}): EasyResult {
   const opts: EasyOptions = { ...DEFAULT_EASY_OPTIONS, ...options };
   const full = parseSong(source).song;
   const beats = full.timeSignature.beatsPerBar;
 
+  // (0) no capo to hand: the song as it sounds, without one.
+  const open = !opts.capo && full.capo > 0 ? rewriteChordTokens(source, (name) => transposeName(name, full.capo), 0) : source;
   // (1) plain majors and minors first, so «D . D7 .» counts as one chord when the bars are merged.
-  const plain = simplifyChart(source, { removeExtensions: true, substituteHard: false, suggestCapo: false, allowSevenths: false, maxChords: null });
+  const plain = simplifyChart(open, { removeExtensions: true, substituteHard: false, suggestCapo: false, allowSevenths: false, maxChords: null });
   // (2) one chord per bar.
-  const merged = oneChordPerBar(plain.source, opts.changesPerBar);
+  const merged = oneChordPerBar(opts.capo ? plain.source : relativeMajorsForHardMinors(plain.source), opts.changesPerBar);
   // (3) capo, easy shapes and the few most used chords (counted on the merged bars: what is really played).
   const maxChords = Math.max(1, Math.floor(opts.maxChords));
-  const simple = simplifyChart(merged.source, { removeExtensions: true, substituteHard: true, suggestCapo: true, allowSevenths: false, maxChords });
+  const simple = simplifyChart(merged.source, { removeExtensions: true, substituteHard: true, suggestCapo: opts.capo, allowSevenths: false, maxChords });
 
   // (5) rests where the recording goes quiet.
   const rested = opts.quiet ? restQuietBeats(simple.source, opts.quiet) : { source: simple.source, rests: 0 };

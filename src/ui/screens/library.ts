@@ -30,10 +30,13 @@ import type { ChordTranscription, Screen, StoredSong } from '../../types';
 import { clear, fmtSeconds, h } from '../dom';
 import { parseSong } from '../../song/parser';
 import { songDurationSec } from '../../song/tempo';
-import { QUICK_PROGRESSION_TEMPLATE, deleteSong, duplicateSong, listSongs, newSong, saveSong } from '../../song/storage';
+import { QUICK_PROGRESSION_TEMPLATE, deleteSong, duplicateSong, getFlag, listSongs, newSong, saveSong, setFlag } from '../../song/storage';
 import { getTrack, putTrack } from '../../song/audioStore';
 import { parseEasyId } from '../../song/easy';
 import { createEasySong, type EasyAudio } from '../../song/easyStore';
+
+/** Flag: the player has a capo, so «Fácil» may propose one (off: the easy version never needs a capo). */
+export const EASY_CAPO_FLAG = 'easy:capo';
 import { getAudioContext } from '../../audio/context';
 import { BackingTrack } from '../../audio/backing';
 import { estimateTempo } from '../../dsp/tempoEstimate';
@@ -370,7 +373,7 @@ export const libraryScreen: Screen = {
       } finally {
         track?.dispose();
       }
-      const made = await createEasySong(songId, audio);
+      const made = await createEasySong(songId, audio, { capo: getFlag(EASY_CAPO_FLAG) });
       if (unmounted) return;
       if (made.id === '') {
         btn.disabled = false;
@@ -543,6 +546,16 @@ export const libraryScreen: Screen = {
           },
         },
         'Progresión rápida',
+      ),
+      h(
+        'label.lib-capo',
+        { title: 'Para el botón «Fácil»: con cejilla, la versión fácil se parece más a la canción. Sin cejilla, usa solo acordes abiertos sin ella' },
+        h('input', {
+          type: 'checkbox',
+          checked: getFlag(EASY_CAPO_FLAG),
+          onchange: (ev: Event) => setFlag(EASY_CAPO_FLAG, (ev.target as HTMLInputElement).checked),
+        }),
+        h('span', null, 'Tengo cejilla'),
       ),
     );
 
