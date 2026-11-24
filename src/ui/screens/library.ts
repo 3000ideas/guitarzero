@@ -31,7 +31,9 @@ import { clear, fmtSeconds, h } from '../dom';
 import { parseSong } from '../../song/parser';
 import { songDurationSec } from '../../song/tempo';
 import { QUICK_PROGRESSION_TEMPLATE, deleteSong, duplicateSong, listSongs, newSong, saveSong } from '../../song/storage';
-import { putTrack } from '../../song/audioStore';
+import { getTrack, putTrack } from '../../song/audioStore';
+import { parseEasyId } from '../../song/easy';
+import { createEasySong, type EasyAudio } from '../../song/easyStore';
 import { getAudioContext } from '../../audio/context';
 import { BackingTrack } from '../../audio/backing';
 import { estimateTempo } from '../../dsp/tempoEstimate';
@@ -345,6 +347,40 @@ export const libraryScreen: Screen = {
       }
     }
 
+    /**
+     * «Versión fácil»: makes (or remakes) the easy copy of the song — few open chords, a capo if it helps,
+     * a down-strum on every beat and rests where the recording stops — and opens it in Practicar.
+     */
+    async function openEasy(songId: string, btn: HTMLButtonElement): Promise<void> {
+      if (btn.disabled) return;
+      const label = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Preparando…';
+      let audio: EasyAudio | null = null;
+      let track: BackingTrack | null = null;
+      try {
+        const blob = await getTrack(songId);
+        if (blob) {
+          track = new BackingTrack(getAudioContext());
+          const info = await track.load(blob);
+          audio = { samples: track.monoSamples().slice(), sampleRate: info.sampleRate };
+        }
+      } catch {
+        audio = null; // without the recording the easy version is the same, only without rests
+      } finally {
+        track?.dispose();
+      }
+      const made = await createEasySong(songId, audio);
+      if (unmounted) return;
+      if (made.id === '') {
+        btn.disabled = false;
+        btn.textContent = label;
+        showImportError(made.message);
+        return;
+      }
+      navigate(`#/play/${made.id}`);
+    }
+
     function songCard(meta: SongMeta): HTMLElement {
       const title = displayTitle(meta.title);
       const chips = meta.chordNames.slice(0, 12).map((name) => h('span.chip', null, name));
@@ -375,6 +411,19 @@ export const libraryScreen: Screen = {
 
       const practice = h('a.btn.btn-primary', { href: `#/play/${meta.id}`, title: 'Practicar esta canción' }, 'Practicar');
       const follow = h('a.btn', { href: `#/follow/${meta.id}`, title: 'Seguir la canción: suena y la cuadrícula va pasando' }, 'Seguir');
+
+      const easy =
+        parseEasyId(meta.id) !== null || meta.chordCount === 0
+          ? null
+          : (h(
+              'button.btn.btn-easy',
+              {
+                type: 'button',
+                title: 'Versión fácil: pocos acordes abiertos, cejilla si ayuda y un golpe por pulso. Se abre lista para practicar',
+                onclick: () => void openEasy(meta.id, easy as HTMLButtonElement),
+              },
+              'Fácil',
+            ) as HTMLButtonElement);
 
       const edit = meta.builtin
         ? h(
@@ -427,7 +476,7 @@ export const libraryScreen: Screen = {
         head,
         info,
         chips.length > 0 ? h('div.song-chords', null, chips) : null,
-        h('div.song-actions', null, practice, follow, edit, duplicate, remove),
+        h('div.song-actions', null, practice, easy, follow, edit, duplicate, remove),
       );
       if (highlightId === meta.id) card.classList.add('is-new');
       return card;

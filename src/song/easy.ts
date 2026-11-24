@@ -76,9 +76,9 @@ export interface EasyResult {
   sameBeatsRatio: number;
 }
 
-/** Id of the easy copy of `songId`. */
+/** Id of the easy copy of `songId`. A bundled example (`ex:…`, never stored) gets a storable id (`ex-…`). */
 export function easySongId(songId: string): string {
-  return `${songId}-facil`;
+  return `${songId.replace(/^ex:/, 'ex-')}-facil`;
 }
 
 /** The song an easy copy was made from, or null for any other song. */
