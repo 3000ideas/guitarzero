@@ -3,10 +3,10 @@
  * The same operation on every song, over the bars of the full chart:
  *   1. sevenths, extensions and slash basses are dropped (Cmaj7 → C, G/B → G);
  *   2. ONE chord per bar: the chord that sounds longest in the bar fills it (a tie goes to the one
- *      that comes first), so chords only ever change on beat 1;
+ *      that comes first), so chords only ever change on beat 1 (optionally also in the middle of the bar);
  *   3. a capo is proposed when it turns the chords into open shapes, hard chords become the nearest
  *      easy one and only the `maxChords` most used are kept (music/simplify.ts);
- *   4. one simple strum for the whole song (a down on beat 1; optionally on 1 and 3, or on every beat).
+ *   4. one simple strum for the whole song (downs on beats 1 and 3; optionally only on 1, or on every beat).
  * Bars, sections, the tempo of every line and the audio are untouched, so the easy version lines up
  * with the recording exactly like the full song. Pure, testable in Node.
  */
@@ -26,13 +26,19 @@ export const EASY_DEFAULT_MAX_CHORDS = 4;
 export interface EasyOptions {
   /** Keep only this many chords (default 4). */
   maxChords: number;
-  /** Strums per bar (default 'bar': a single down on beat 1). */
+  /** Strums per bar (default 'half': downs on beats 1 and 3). With two changes per bar it is at least 'half'. */
   strum: EasyStrum;
+  /**
+   * Where the chord may change: 1 = only on beat 1; 2 = also in the middle of the bar (beat 3 in 4/4).
+   * Default 2: measured against a real recording, one chord per bar matched the audio on 61 % of the
+   * beats, two changes per bar on 78 % (the full detected chart: 81 %), and one per bar sounded wrong.
+   */
+  changesPerBar: 1 | 2;
   /** Title of the easy version (default: the song's title + « (fácil)»). */
   title: string | null;
 }
 
-export const DEFAULT_EASY_OPTIONS: EasyOptions = { maxChords: EASY_DEFAULT_MAX_CHORDS, strum: 'bar', title: null };
+export const DEFAULT_EASY_OPTIONS: EasyOptions = { maxChords: EASY_DEFAULT_MAX_CHORDS, strum: 'half', changesPerBar: 2, title: null };
 
 export interface EasyResult {
   /** The text of the easy version. */
@@ -77,37 +83,50 @@ const isSilence = (cell: string): boolean => cell === REST_CELL || cell === NC_C
 
 /**
  * Rewrites every bar so that it holds ONE chord: the one that sounds for most beats of the bar (a tie
- * goes to the first one). Bars that are all rest / N.C. are left alone; lines the grid does not
- * understand («raw») too. The chord is always written at the start of the bar, even when it is the
- * same as in the bar before, so every bar says what to play.
+ * goes to the first one). With `changesPerBar` 2, a bar of 4 (or 6) beats is treated as two halves, each
+ * with its own chord, so the chord may also change in the middle of the bar (beat 3 in 4/4) and nowhere
+ * else. Bars that are all rest / N.C. are left alone; lines the grid does not understand («raw») too.
+ * The chord is always written at the start of the bar, even when it is the same as in the bar before,
+ * so every bar says what to play.
  */
-export function oneChordPerBar(source: string): { source: string; mergedBars: number; totalBars: number } {
+export function oneChordPerBar(source: string, changesPerBar: 1 | 2 = 1): { source: string; mergedBars: number; totalBars: number } {
   const chart = parseGrid(source);
   let carry: string | null = null;
   let mergedBars = 0;
   let totalBars = 0;
+  /** The chord that fills most of `beats` (a tie goes to the first), or null when they are all silent. */
+  const winnerOf = (beats: Array<string | null>): string | null => {
+    const count = new Map<string, number>();
+    let best: string | null = null;
+    for (const name of beats) {
+      if (name === null) continue;
+      count.set(name, (count.get(name) ?? 0) + 1);
+    }
+    for (const [name, n] of count) if (best === null || n > (count.get(best) ?? 0)) best = name;
+    return best;
+  };
   for (const item of chart.items) {
     if (item.kind !== 'bars') continue;
     let touched = false;
     for (const bar of item.bars) {
-      const beatsOf = new Map<string, number>();
-      const order: string[] = [];
+      const n = bar.cells.length;
+      const sounding: Array<string | null> = [];
       let cur: string | null = carry;
       for (const cell of bar.cells) {
         if (cell !== '') cur = cell;
-        if (cur === null || isSilence(cur)) continue;
-        if (!beatsOf.has(cur)) order.push(cur);
-        beatsOf.set(cur, (beatsOf.get(cur) ?? 0) + 1);
+        sounding.push(cur === null || isSilence(cur) ? null : cur);
       }
       carry = cur;
-      if (order.length === 0) continue; // a silent bar stays silent
+      const whole = winnerOf(sounding);
+      if (whole === null) continue; // a silent bar stays silent
       totalBars++;
-      let winner = order[0];
-      for (const name of order) if ((beatsOf.get(name) ?? 0) > (beatsOf.get(winner) ?? 0)) winner = name;
-      if (order.length > 1) mergedBars++;
-      const already = bar.cells[0] === winner && bar.cells.slice(1).every((c) => c === '');
-      if (!already) {
-        bar.cells = bar.cells.map((_, i) => (i === 0 ? winner : ''));
+      const mid = changesPerBar === 2 && n >= 4 && n % 2 === 0 ? n / 2 : 0;
+      const first = mid > 0 ? winnerOf(sounding.slice(0, mid)) ?? whole : whole;
+      const second = mid > 0 ? winnerOf(sounding.slice(mid)) ?? whole : whole;
+      const cells = bar.cells.map((_, i) => (i === 0 ? first : i === mid && mid > 0 && second !== first ? second : ''));
+      if (new Set(sounding.filter((c) => c !== null)).size > new Set([first, second]).size) mergedBars++;
+      if (cells.some((c, i) => c !== bar.cells[i])) {
+        bar.cells = cells;
         touched = true;
       }
     }
@@ -164,7 +183,7 @@ export function buildEasySource(source: string, options: Partial<EasyOptions> = 
   // (1) plain majors and minors first, so «D . D7 .» counts as one chord when the bars are merged.
   const plain = simplifyChart(source, { removeExtensions: true, substituteHard: false, suggestCapo: false, allowSevenths: false, maxChords: null });
   // (2) one chord per bar.
-  const merged = oneChordPerBar(plain.source);
+  const merged = oneChordPerBar(plain.source, opts.changesPerBar);
   // (3) capo, easy shapes and the few most used chords (counted on the merged bars: what is really played).
   const maxChords = Math.max(1, Math.floor(opts.maxChords));
   const simple = simplifyChart(merged.source, { removeExtensions: true, substituteHard: true, suggestCapo: true, allowSevenths: false, maxChords });
@@ -173,7 +192,8 @@ export function buildEasySource(source: string, options: Partial<EasyOptions> = 
   const chart = parseGrid(simple.source);
   const firstContent = chart.items.findIndex((it) => it.kind === 'section' || it.kind === 'bars' || it.kind === 'raw');
   chart.items = chart.items.filter((it, i) => !(it.kind === 'header' && it.key === 'strum' && firstContent >= 0 && i > firstContent));
-  const strum = easyStrumPattern(opts.strum, beats);
+  // A chord that starts in the middle of the bar needs a strum there, or it would never sound.
+  const strum = easyStrumPattern(opts.changesPerBar === 2 && opts.strum === 'bar' ? 'half' : opts.strum, beats);
   setHeader(chart, 'strum', strum);
   setHeader(chart, 'title', opts.title ?? `${full.title.trim() !== '' ? full.title.trim() : 'Canción'} (fácil)`);
   const text = serializeGrid(chart);

@@ -31,9 +31,21 @@ describe('oneChordPerBar', () => {
   });
 });
 
+describe('oneChordPerBar with two changes per bar', () => {
+  it('lets the chord change on beat 3 and nowhere else', () => {
+    const r = oneChordPerBar('tempo: 100\n[A]\nC . G . | C G . . | Am . . F | D . . . | - D . . |\n', 2);
+    expect(r.source).toContain('C . G . | C . G . | Am . . . | D . . . | D . . . |');
+    expect(r.mergedBars).toBe(1);
+  });
+
+  it('does not split a 3/4 bar', () => {
+    expect(oneChordPerBar('tempo: 100\ntime: 3/4\n[A]\nC . G | Am . . |\n', 2).source).toContain('C . . | Am . . |');
+  });
+});
+
 describe('easy version', () => {
   const full = parseSong(SODOMA).song;
-  const easy = buildEasySource(SODOMA);
+  const easy = buildEasySource(SODOMA, { changesPerBar: 1, strum: 'bar' });
   const parsed = parseSong(easy.source);
 
   it('keeps the structure and timing of the song, with no errors', () => {
@@ -57,7 +69,7 @@ describe('easy version', () => {
     expect([...easy.chords].sort()).toEqual(['C', 'D', 'Em', 'G']);
   });
 
-  it('strums once per bar by default, on beat 1', () => {
+  it('with one change per bar it can strum once per bar, on beat 1', () => {
     expect(easy.strum).toBe('D---');
     const perBar = new Map<number, number>();
     for (const e of parsed.song.events) perBar.set(e.barIndex, (perBar.get(e.barIndex) ?? 0) + 1);
@@ -71,10 +83,22 @@ describe('easy version', () => {
   });
 
   it('offers more strums per bar and fewer chords', () => {
-    expect(buildEasySource(SODOMA, { strum: 'half' }).strum).toBe('D-D-');
+    expect(buildEasySource(SODOMA).strum).toBe('D-D-');
     expect(buildEasySource(SODOMA, { strum: 'beat' }).strum).toBe('D-D-D-D-');
     expect(buildEasySource(SODOMA, { maxChords: 3 }).chords).toHaveLength(3);
     expect(easyStrumPattern('bar', 3)).toBe('D--');
+  });
+
+  it('by default the chord may change on beats 1 and 3, with a strum on each, and it stays closer to the song', () => {
+    const two = buildEasySource(SODOMA);
+    expect(buildEasySource(SODOMA, { strum: 'bar' }).strum).toBe('D-D-');
+    expect(two.sameBeatsRatio).toBeGreaterThan(0.9);
+    expect(two.strum).toBe('D-D-');
+    expect(two.sameBeatsRatio).toBeGreaterThan(easy.sameBeatsRatio);
+    expect(two.chords.length).toBeLessThanOrEqual(4);
+    for (const bar of parseSong(two.source).song.bars) {
+      for (const c of bar.chords) expect([0, 2]).toContain(Math.round(c.startBeat - bar.startBeat));
+    }
   });
 
   it('a capo version counts as the same chords', () => {
