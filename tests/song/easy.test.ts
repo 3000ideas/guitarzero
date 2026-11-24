@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BUNDLED_SONGS } from '../../src/song/bundled';
-import { buildEasySource, easySongId, easyStrumPattern, oneChordPerBar, parseEasyId, sameBeatsRatio } from '../../src/song/easy';
+import { buildEasySource, easySongId, easyStrumPattern, oneChordPerBar, parseEasyId, quietBeats, restQuietBeats, sameBeatsRatio } from '../../src/song/easy';
 import { parseSong } from '../../src/song/parser';
 
 const SODOMA = BUNDLED_SONGS[0].source;
@@ -83,17 +83,17 @@ describe('easy version', () => {
   });
 
   it('offers more strums per bar and fewer chords', () => {
-    expect(buildEasySource(SODOMA).strum).toBe('D-D-');
-    expect(buildEasySource(SODOMA, { strum: 'beat' }).strum).toBe('D-D-D-D-');
+    expect(buildEasySource(SODOMA, { strum: 'half' }).strum).toBe('D-D-');
+    expect(buildEasySource(SODOMA).strum).toBe('D-D-D-D-');
     expect(buildEasySource(SODOMA, { maxChords: 3 }).chords).toHaveLength(3);
     expect(easyStrumPattern('bar', 3)).toBe('D--');
   });
 
   it('by default the chord may change on beats 1 and 3, with a strum on each, and it stays closer to the song', () => {
     const two = buildEasySource(SODOMA);
+    expect(two.strum).toBe('D-D-D-D-');
     expect(buildEasySource(SODOMA, { strum: 'bar' }).strum).toBe('D-D-');
     expect(two.sameBeatsRatio).toBeGreaterThan(0.9);
-    expect(two.strum).toBe('D-D-');
     expect(two.sameBeatsRatio).toBeGreaterThan(easy.sameBeatsRatio);
     expect(two.chords.length).toBeLessThanOrEqual(4);
     for (const bar of parseSong(two.source).song.bars) {
@@ -122,5 +122,43 @@ describe('easy version', () => {
     expect(easySongId('abc')).toBe('abc-facil');
     expect(parseEasyId('abc-facil')).toBe('abc');
     expect(parseEasyId('abc')).toBeNull();
+  });
+});
+
+describe('rests where the recording goes quiet', () => {
+  const src = 'tempo: 120\n[A]\nC . . . | G . . . | Am . . . |\n';
+  const q = (...on: number[]): boolean[] => Array.from({ length: 12 }, (_, i) => on.includes(i));
+
+  it('writes a rest on the quiet beats and the chord again when the music comes back', () => {
+    const r = restQuietBeats(src, q(2, 3, 4, 9));
+    expect(r.source).toContain('C . - . | . G . . | Am - Am . |');
+    expect(r.rests).toBe(4);
+    const { song, errors } = parseSong(r.source);
+    expect(errors.filter((e) => e.severity === 'error')).toEqual([]);
+    expect(song.totalBeats).toBe(12);
+  });
+
+  it('leaves the text alone when nothing is quiet, or when the beats of the text are not the beats of the song', () => {
+    expect(restQuietBeats(src, q()).source).toBe(src);
+    expect(restQuietBeats('tempo: 120\n[A]\nC . . . | G . . . | x2\n', Array.from({ length: 16 }, () => true)).rests).toBe(0);
+    expect(restQuietBeats(src, [true]).rests).toBe(0);
+  });
+
+  it('finds the quiet beats of a recording', () => {
+    const song = parseSong(src).song; // 120 bpm: a beat lasts 0.5 s
+    const sr = 8000;
+    const samples = new Float32Array(sr * 6);
+    for (let i = 0; i < samples.length; i++) {
+      const beat = Math.floor(i / (sr / 2));
+      samples[i] = (beat === 5 || beat === 6 ? 0.01 : 0.5) * Math.sin((2 * Math.PI * 220 * i) / sr);
+    }
+    expect(quietBeats(samples, sr, song, 0)).toEqual(q(5, 6));
+    expect(quietBeats(new Float32Array(sr * 6), sr, song, 0)).toEqual(q());
+  });
+
+  it('the easy version does not strum on the quiet beats', () => {
+    const r = buildEasySource(src, { quiet: q(2, 3) });
+    expect(r.rests).toBe(2);
+    expect(parseSong(r.source).song.events.map((e) => e.time)).toEqual([0, 1, 4, 5, 6, 7, 8, 9, 10, 11]);
   });
 });

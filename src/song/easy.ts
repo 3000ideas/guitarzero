@@ -6,7 +6,8 @@
  *      that comes first), so chords only ever change on beat 1 (optionally also in the middle of the bar);
  *   3. a capo is proposed when it turns the chords into open shapes, hard chords become the nearest
  *      easy one and only the `maxChords` most used are kept (music/simplify.ts);
- *   4. one simple strum for the whole song (downs on beats 1 and 3; optionally only on 1, or on every beat).
+ *   4. one simple strum for the whole song (a down on every beat; optionally only on 1 and 3);
+ *   5. optionally, rests on the beats where the recording goes quiet (`quietBeats` + `restQuietBeats`).
  * Bars, sections, the tempo of every line and the audio are untouched, so the easy version lines up
  * with the recording exactly like the full song. Pure, testable in Node.
  */
@@ -16,6 +17,7 @@ import type { Song } from '../types';
 import { NC_CELL, REST_CELL, parseGrid, serializeGrid, setHeader } from './grid';
 import { LEVELS } from './levels';
 import { parseSong } from './parser';
+import { beatToSec } from './tempo';
 
 /** How many strums per bar: one on beat 1, on beats 1 and 3, or one on every beat. */
 export type EasyStrum = 'bar' | 'half' | 'beat';
@@ -26,7 +28,10 @@ export const EASY_DEFAULT_MAX_CHORDS = 4;
 export interface EasyOptions {
   /** Keep only this many chords (default 4). */
   maxChords: number;
-  /** Strums per bar (default 'half': downs on beats 1 and 3). With two changes per bar it is at least 'half'. */
+  /**
+   * Strums per bar (default 'beat': a down on every beat, which is what sounds right over a recording:
+   * fewer strums felt out of time and empty). With two changes per bar it is at least 'half'.
+   */
   strum: EasyStrum;
   /**
    * Where the chord may change: 1 = only on beat 1; 2 = also in the middle of the bar (beat 3 in 4/4).
@@ -34,11 +39,16 @@ export interface EasyOptions {
    * beats, two changes per bar on 78 % (the full detected chart: 81 %), and one per bar sounded wrong.
    */
   changesPerBar: 1 | 2;
+  /**
+   * Per beat of the song: true where the recording goes quiet (see `quietBeats`). Those beats become rests,
+   * so the easy version stops strumming where the guitar of the recording stops. null = no rests added.
+   */
+  quiet: boolean[] | null;
   /** Title of the easy version (default: the song's title + « (fácil)»). */
   title: string | null;
 }
 
-export const DEFAULT_EASY_OPTIONS: EasyOptions = { maxChords: EASY_DEFAULT_MAX_CHORDS, strum: 'half', changesPerBar: 2, title: null };
+export const DEFAULT_EASY_OPTIONS: EasyOptions = { maxChords: EASY_DEFAULT_MAX_CHORDS, strum: 'beat', changesPerBar: 2, quiet: null, title: null };
 
 export interface EasyResult {
   /** The text of the easy version. */
@@ -49,6 +59,8 @@ export interface EasyResult {
   chords: string[];
   /** Strum pattern written in the `strum:` header. */
   strum: string;
+  /** Beats turned into rests because the recording is quiet there. */
+  rests: number;
   /** Bars that had more than one chord and now have one. */
   mergedBars: number;
   /** Bars with a chord, in the whole song (repeats not expanded). */
@@ -135,6 +147,86 @@ export function oneChordPerBar(source: string, changesPerBar: 1 | 2 = 1): { sour
   return { source: serializeGrid(chart), mergedBars, totalBars };
 }
 
+/** A beat is «quiet» when its level is this many dB below the median beat of the song. */
+export const QUIET_BEAT_DB = -12;
+
+/**
+ * Per beat of `song` (repeats expanded): true where the recording is nearly silent, i.e. the guitar has
+ * stopped. `offsetSec` is the audio time of the song's beat 0 (the track's `offsetSec`). Beats outside the
+ * audio are not quiet (nothing to compare with).
+ */
+export function quietBeats(samples: Float32Array, sampleRate: number, song: Song, offsetSec: number, thresholdDb = QUIET_BEAT_DB): boolean[] {
+  const n = Math.max(0, Math.round(song.totalBeats));
+  const level: Array<number | null> = [];
+  for (let b = 0; b < n; b++) {
+    const from = Math.round((beatToSec(song.tempoSegments, b) + offsetSec) * sampleRate);
+    const to = Math.round((beatToSec(song.tempoSegments, b + 1) + offsetSec) * sampleRate);
+    if (from < 0 || to > samples.length || to <= from) {
+      level.push(null);
+      continue;
+    }
+    let sum = 0;
+    for (let i = from; i < to; i++) sum += samples[i] * samples[i];
+    level.push(Math.sqrt(sum / (to - from)));
+  }
+  const known = level.filter((v): v is number => v !== null).sort((x, y) => x - y);
+  const median = known.length > 0 ? known[known.length >> 1] : 0;
+  if (median <= 0) return level.map(() => false);
+  const limit = median * 10 ** (thresholdDb / 20);
+  return level.map((v) => v !== null && v < limit);
+}
+
+/**
+ * Writes a rest on every beat marked in `quiet` (one entry per beat, in song order) and the chord again
+ * when the music comes back. Only for charts written out in full (no `x2` repeats, no recalled sections,
+ * no lines the grid cannot edit), where the beats of the text are the beats of the song; otherwise the
+ * text comes back unchanged.
+ */
+export function restQuietBeats(source: string, quiet: readonly boolean[]): { source: string; rests: number } {
+  const chart = parseGrid(source);
+  let cells = 0;
+  for (const item of chart.items) {
+    if (item.kind === 'raw' || ((item.kind === 'bars' || item.kind === 'section') && item.repeat > 1)) return { source, rests: 0 };
+    if (item.kind === 'bars') for (const bar of item.bars) cells += bar.cells.length;
+  }
+  if (cells !== quiet.length || cells !== Math.round(parseSong(source).song.totalBeats)) return { source, rests: 0 };
+  let beat = 0;
+  let rests = 0;
+  let carry: string | null = null; // what sounds in the original text
+  let written: string | null = null; // what the rewritten text holds at this point
+  for (const item of chart.items) {
+    if (item.kind !== 'bars') continue;
+    let touched = false;
+    for (const bar of item.bars) {
+      const target: Array<string | null> = [];
+      for (const cell of bar.cells) {
+        if (cell !== '') carry = cell;
+        const silent: boolean = carry === null || isSilence(carry);
+        if (quiet[beat] && !silent) rests++;
+        target.push(quiet[beat] && !silent ? REST_CELL : carry);
+        beat++;
+      }
+      const next: string[] = [];
+      for (let i = 0; i < bar.cells.length; i++) {
+        const want: string | null = target[i];
+        if (want === null) {
+          next.push(bar.cells[i]);
+          continue;
+        }
+        // The chord is kept at the start of a bar that already named it, so untouched bars stay as they were.
+        next.push(want !== written || (i === 0 && bar.cells[0] === want) ? want : '');
+        written = want;
+      }
+      if (next.some((c, i) => c !== bar.cells[i])) {
+        bar.cells = next;
+        touched = true;
+      }
+    }
+    if (touched) item.orig = null;
+  }
+  return { source: serializeGrid(chart), rests };
+}
+
 /** The chord that sounds on every beat of the song (null: rest / N.C. / nothing yet), repeats expanded. */
 function chordPerBeat(song: Song): Array<string | null> {
   const out: Array<string | null> = [];
@@ -188,8 +280,11 @@ export function buildEasySource(source: string, options: Partial<EasyOptions> = 
   const maxChords = Math.max(1, Math.floor(opts.maxChords));
   const simple = simplifyChart(merged.source, { removeExtensions: true, substituteHard: true, suggestCapo: true, allowSevenths: false, maxChords });
 
+  // (5) rests where the recording goes quiet.
+  const rested = opts.quiet ? restQuietBeats(simple.source, opts.quiet) : { source: simple.source, rests: 0 };
+
   // (4) one strum for the whole song: later `strum:` lines (per section) are dropped.
-  const chart = parseGrid(simple.source);
+  const chart = parseGrid(rested.source);
   const firstContent = chart.items.findIndex((it) => it.kind === 'section' || it.kind === 'bars' || it.kind === 'raw');
   chart.items = chart.items.filter((it, i) => !(it.kind === 'header' && it.key === 'strum' && firstContent >= 0 && i > firstContent));
   // A chord that starts in the middle of the bar needs a strum there, or it would never sound.
@@ -204,8 +299,9 @@ export function buildEasySource(source: string, options: Partial<EasyOptions> = 
     capo: easy.capo,
     chords: easy.chordNames.slice(),
     strum,
+    rests: rested.rests,
     mergedBars: merged.mergedBars,
     totalBars: merged.totalBars,
-    sameBeatsRatio: sameBeatsRatio(full, easy),
+    sameBeatsRatio: sameBeatsRatio(full, parseSong(simple.source).song),
   };
 }
