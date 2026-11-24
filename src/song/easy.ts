@@ -165,9 +165,9 @@ const ATTACK_LEAD_SEC = 0.03;
  * Per beat of `song` (repeats expanded): true where the guitar of the recording is not being played.
  * Two signs, either is enough:
  *  - the beat is nearly silent (its level is `thresholdDb` below the median beat), or
- *  - nothing is struck during the beat: the chord of before just rings on. The attack curve is the rise
- *    of the brightness of the sound (level of the sample-to-sample difference, in dB) every 10 ms; a
- *    strum makes it jump, a ringing chord does not.
+ *  - nothing is struck during the beat and the one before or after is quiet too: the chord of before just
+ *    rings on for two beats or more. The attack curve is the rise of the brightness of the sound (level of
+ *    the sample-to-sample difference, in dB) every 10 ms; a strum makes it jump, a ringing chord does not.
  * `offsetSec` is the audio time of the song's beat 0 (the track's `offsetSec`). Beats outside the audio
  * are not quiet (nothing to compare with).
  */
@@ -217,7 +217,12 @@ export function quietBeats(samples: Float32Array, sampleRate: number, song: Song
   if (medianLevel <= 0) return level.map(() => false);
   const levelLimit = medianLevel * 10 ** (thresholdDb / 20);
   const strikeLimit = medianOf(strike) * NO_STRIKE_RATIO;
-  return level.map((v, b) => v !== null && (v < levelLimit || (strike[b] ?? 0) < strikeLimit));
+  const silent = level.map((v) => v !== null && v < levelLimit);
+  const unstruck = level.map((v, b) => v !== null && (strike[b] ?? 0) < strikeLimit);
+  // One beat without a strike in the middle of the strumming is just a chord left to ring: stopping there
+  // sounds like a hiccup. It only counts next to another quiet beat (a real pause lasts two beats or more).
+  const calm = (b: number): boolean => b >= 0 && b < n && (silent[b] || unstruck[b]);
+  return level.map((_, b) => silent[b] || (unstruck[b] && (calm(b - 1) || calm(b + 1))));
 }
 
 /**

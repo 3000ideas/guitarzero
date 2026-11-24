@@ -157,21 +157,21 @@ describe('rests where the recording goes quiet', () => {
     expect(quietBeats(new Float32Array(sr * 6), sr, song, 0)).toEqual(q());
   });
 
-  it('a beat where nothing is struck (the chord just rings on) is quiet too, even if it is still loud', () => {
+  it('two beats in a row where nothing is struck (the chord just rings on) are quiet, even if still loud; a single one is not', () => {
     const song = parseSong(src).song;
     const sr = 8000;
     const samples = new Float32Array(sr * 6);
     let seed = 7;
     const noise = (): number => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) * 2 - 1;
-    // A slowly decaying tone struck (with a bright burst) on every beat except beats 3 and 7: there it rings on.
+    // A slowly decaying tone struck (with a bright burst) on every beat except beats 3, 4 and 8: there it rings on.
     let struckAt = 0;
     for (let i = 0; i < samples.length; i++) {
       const beat = Math.floor(i / (sr / 2));
-      if (i % (sr / 2) === 0 && beat !== 3 && beat !== 7) struckAt = i;
+      if (i % (sr / 2) === 0 && beat !== 3 && beat !== 4 && beat !== 8) struckAt = i;
       const t = (i - struckAt) / sr;
       samples[i] = 0.5 * Math.exp(-0.8 * t) * Math.sin((2 * Math.PI * 220 * i) / sr) + (t < 0.02 ? 0.3 * noise() : 0);
     }
-    expect(quietBeats(samples, sr, song, 0)).toEqual(q(3, 7));
+    expect(quietBeats(samples, sr, song, 0)).toEqual(q(3, 4));
   });
 
   it('the easy version does not strum on the quiet beats', () => {
