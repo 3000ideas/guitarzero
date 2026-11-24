@@ -33,7 +33,7 @@ import { songDurationSec } from '../../song/tempo';
 import { QUICK_PROGRESSION_TEMPLATE, deleteSong, duplicateSong, getFlag, listSongs, newSong, saveSong, setFlag } from '../../song/storage';
 import { getTrack, putTrack } from '../../song/audioStore';
 import { parseEasyId } from '../../song/easy';
-import { createEasySong, type EasyAudio } from '../../song/easyStore';
+import { createEasySong, type EasyCreated } from '../../song/easyStore';
 
 /** Flag: the player has a capo, so «Fácil» may propose one (off: the easy version never needs a capo). */
 export const EASY_CAPO_FLAG = 'easy:capo';
@@ -359,21 +359,23 @@ export const libraryScreen: Screen = {
       const label = btn.textContent;
       btn.disabled = true;
       btn.textContent = 'Preparando…';
-      let audio: EasyAudio | null = null;
+      const options = { capo: getFlag(EASY_CAPO_FLAG) };
+      let made: EasyCreated | null = null;
       let track: BackingTrack | null = null;
       try {
         const blob = await getTrack(songId);
         if (blob) {
           track = new BackingTrack(getAudioContext());
           const info = await track.load(blob);
-          audio = { samples: track.monoSamples().slice(), sampleRate: info.sampleRate };
+          // The decoded recording is used here and released at once (no copy kept): Practicar decodes its own.
+          made = await createEasySong(songId, { samples: track.monoSamples(), sampleRate: info.sampleRate }, options);
         }
       } catch {
-        audio = null; // without the recording the easy version is the same, only without rests
+        made = null; // without the recording the easy version is the same, only without rests
       } finally {
         track?.dispose();
       }
-      const made = await createEasySong(songId, audio, { capo: getFlag(EASY_CAPO_FLAG) });
+      if (made === null) made = await createEasySong(songId, null, options);
       if (unmounted) return;
       if (made.id === '') {
         btn.disabled = false;
@@ -395,6 +397,7 @@ export const libraryScreen: Screen = {
         h('div.grow', null, h('div.song-title', null, title), meta.artist ? h('div.song-artist', null, meta.artist) : null),
         meta.hasAudio ? h('span.badge.badge-ok', { title: 'Tiene pista de audio' }, AUDIO_BADGE) : null,
         meta.builtin ? h('span.badge.badge-accent', null, 'Ejemplo') : null,
+        parseEasyId(meta.id) !== null ? h('span.badge.badge-accent', { title: 'Copia hecha con el botón «Fácil» de la canción completa. Para rehacerla, pulsa «Fácil» en la canción completa' }, 'Versión fácil') : null,
       );
 
       const info = h(
