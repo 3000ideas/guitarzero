@@ -45,7 +45,7 @@ describe('oneChordPerBar with two changes per bar', () => {
 
 describe('easy version', () => {
   const full = parseSong(SODOMA).song;
-  const easy = buildEasySource(SODOMA, { changesPerBar: 1, strum: 'bar' });
+  const easy = buildEasySource(SODOMA, { changesPerBar: 1, strum: 'bar', maxChords: 4 });
   const parsed = parseSong(easy.source);
 
   it('keeps the structure and timing of the song, with no errors', () => {
@@ -95,7 +95,8 @@ describe('easy version', () => {
     expect(buildEasySource(SODOMA, { strum: 'bar' }).strum).toBe('D-D-');
     expect(two.sameBeatsRatio).toBeGreaterThan(0.9);
     expect(two.sameBeatsRatio).toBeGreaterThan(easy.sameBeatsRatio);
-    expect(two.chords.length).toBeLessThanOrEqual(4);
+    expect([...two.chords].sort()).toEqual(['Am', 'C', 'D', 'Em', 'G']); // Am is the Si menor of the song, with the capo on 2
+    expect(two.capo).toBe(2);
     for (const bar of parseSong(two.source).song.bars) {
       for (const c of bar.chords) expect([0, 2]).toContain(Math.round(c.startBeat - bar.startBeat));
     }

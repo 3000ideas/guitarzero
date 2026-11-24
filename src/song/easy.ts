@@ -23,10 +23,14 @@ import { beatToSec } from './tempo';
 export type EasyStrum = 'bar' | 'half' | 'beat';
 
 export const EASY_STRUMS: readonly EasyStrum[] = ['bar', 'half', 'beat'];
-export const EASY_DEFAULT_MAX_CHORDS = 4;
+/**
+ * Five, not four: on a real recording the fifth chord (an easy one) fixed the two spots that sounded wrong
+ * with four, and it is still a handful of open shapes.
+ */
+export const EASY_DEFAULT_MAX_CHORDS = 5;
 
 export interface EasyOptions {
-  /** Keep only this many chords (default 4). */
+  /** Keep only this many chords (default 5). */
   maxChords: number;
   /**
    * Strums per bar (default 'beat': a down on every beat, which is what sounds right over a recording:
