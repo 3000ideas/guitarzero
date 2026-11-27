@@ -30,6 +30,8 @@ import type { ChordTranscription, Screen, StoredSong } from '../../types';
 import { clear, fmtSeconds, h } from '../dom';
 import { parseSong } from '../../song/parser';
 import { songDurationSec } from '../../song/tempo';
+import { parseTab } from '../../song/tab';
+import { tabSongSource } from '../../song/bundledTabs';
 import { QUICK_PROGRESSION_TEMPLATE, deleteSong, duplicateSong, getFlag, listSongs, newSong, saveSong, setFlag } from '../../song/storage';
 import { getTrack, putTrack } from '../../song/audioStore';
 import { parseEasyId } from '../../song/easy';
@@ -68,6 +70,8 @@ export interface SongMeta {
   warnings: number;
   /** The song has a backing track (StoredSong.audio) -> "♪ pista" badge. */
   hasAudio: boolean;
+  /** The song is a guitar tablature (a punteo), not a chord song. */
+  isTab: boolean;
 }
 
 /** Badge text of a song with a backing track. */
@@ -119,6 +123,7 @@ export function songMeta(stored: StoredSong): SongMeta {
     errors: errorCount,
     warnings: warningCount,
     hasAudio: stored.audio !== null && stored.audio !== undefined,
+    isTab: typeof stored.tab === 'string' && stored.tab !== '',
   };
 }
 
@@ -476,14 +481,18 @@ export const libraryScreen: Screen = {
         'Borrar',
       );
 
-      const card = h(
-        'article.card.song-card',
-        { dataset: { id: meta.id } },
-        head,
-        info,
-        chips.length > 0 ? h('div.song-chords', null, chips) : null,
-        h('div.song-actions', null, practice, easy, follow, edit, duplicate, remove),
-      );
+      const tabBtn = h('a.btn.btn-primary', { href: `#/tab/${meta.id}`, title: 'Abrir la tablatura: una marca avanza sola a la velocidad que elijas' }, 'Tablatura');
+      const tabInfo = h('div.song-meta', null, h('span.badge.badge-accent', null, 'Punteo'), h('span.muted', null, 'tablatura para tocar notas sueltas'));
+      const card = meta.isTab
+        ? h('article.card.song-card', { dataset: { id: meta.id } }, head, tabInfo, h('div.song-actions', null, tabBtn, remove))
+        : h(
+            'article.card.song-card',
+            { dataset: { id: meta.id } },
+            head,
+            info,
+            chips.length > 0 ? h('div.song-chords', null, chips) : null,
+            h('div.song-actions', null, practice, easy, follow, edit, duplicate, remove),
+          );
       if (highlightId === meta.id) card.classList.add('is-new');
       return card;
     }
@@ -538,6 +547,7 @@ export const libraryScreen: Screen = {
       ),
       fromAudioBtn,
       audioInput,
+      h('button.btn', { type: 'button', title: 'Pegar una tablatura de guitarra (un punteo) para aprenderla', onclick: () => openTabDialog() }, 'Añadir tablatura'),
       h(
         'button.btn',
         {
@@ -562,9 +572,58 @@ export const libraryScreen: Screen = {
       ),
     );
 
+    // «Añadir tablatura»: paste the text of a tab (six lines of dashes and fret numbers per phrase).
+    const tabTitle = h('input', { type: 'text', placeholder: 'Título (p. ej. Last Horizon)', 'aria-label': 'Título', autocomplete: 'off' }) as HTMLInputElement;
+    const tabArtist = h('input', { type: 'text', placeholder: 'Artista', 'aria-label': 'Artista', autocomplete: 'off' }) as HTMLInputElement;
+    const tabText = h('textarea', { rows: 12, placeholder: '|----14--12----|  (6 líneas por frase)', 'aria-label': 'Tablatura', spellcheck: false, class: 'tab-paste' }) as HTMLTextAreaElement;
+    const tabMsg = h('div.small', { role: 'status' });
+    const tabDialog = h(
+      'dialog.tab-dialog',
+      null,
+      h('strong', null, 'Añadir una tablatura'),
+      h('p.muted.small', null, 'Pega el texto de la tablatura: cada frase son 6 líneas (la de arriba es la cuerda más fina).'),
+      tabTitle,
+      tabArtist,
+      tabText,
+      tabMsg,
+      h(
+        'div.row',
+        { style: 'display:flex;gap:8px;justify-content:flex-end' },
+        h('button.btn', { type: 'button', onclick: () => tabDialog.close() }, 'Cancelar'),
+        h(
+          'button.btn.btn-primary',
+          {
+            type: 'button',
+            onclick: () => {
+              const text = tabText.value;
+              const parsed = parseTab(text);
+              if (parsed.blocks.length === 0) {
+                tabMsg.textContent = 'No encuentro frases de 6 líneas con «|» al principio y al final. Revisa el texto pegado.';
+                return;
+              }
+              const name = tabTitle.value.trim() || 'Tablatura sin título';
+              const who = tabArtist.value.trim();
+              const created = newSong(tabSongSource(name, who));
+              const saved = saveSong({ ...created, title: name, artist: who, tab: text });
+              tabDialog.close();
+              highlightId = saved.id;
+              renderLists();
+            },
+          },
+          'Guardar',
+        ),
+      ),
+    ) as HTMLDialogElement;
+    function openTabDialog(): void {
+      tabMsg.textContent = '';
+      if (typeof tabDialog.showModal === 'function') tabDialog.showModal();
+      else tabDialog.setAttribute('open', '');
+    }
+
     const screen = h(
       'main.screen.library',
       null,
+      tabDialog,
       toolbar,
       importBox,
       h('section.lib-section', null, h('div.lib-section-title', null, h('h2', null, 'Mis canciones'), userCount), userList),

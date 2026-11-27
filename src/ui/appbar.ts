@@ -10,7 +10,7 @@ import { h } from './dom';
 import { isExampleId } from '../song/examples';
 
 export interface AppBarRoute {
-  name: 'library' | 'editor' | 'practice' | 'follow' | 'settings' | 'tuner';
+  name: 'library' | 'editor' | 'practice' | 'follow' | 'tab' | 'settings' | 'tuner';
   params: Record<string, string>;
 }
 

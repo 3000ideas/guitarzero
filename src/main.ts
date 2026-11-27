@@ -17,12 +17,14 @@ import { libraryScreen } from './ui/screens/library';
 import { editorScreen } from './ui/screens/editor';
 import { practiceScreen } from './ui/screens/practice';
 import { followScreen } from './ui/screens/follow';
+import { tabScreen } from './ui/screens/tab';
+import { installBundledTabs } from './song/bundledTabs';
 import { settingsScreen } from './ui/screens/settings';
 import { tunerScreen } from './ui/screens/tuner';
 import { downloadBundledAudio, installBundledEntries } from './song/bundled';
 import { createAppBar } from './ui/appbar';
 
-export type RouteName = 'library' | 'editor' | 'practice' | 'follow' | 'settings' | 'tuner';
+export type RouteName = 'library' | 'editor' | 'practice' | 'follow' | 'tab' | 'settings' | 'tuner';
 
 export interface Route {
   name: RouteName;
@@ -39,6 +41,7 @@ const SCREENS: Record<RouteName, Screen> = {
   editor: editorScreen,
   practice: practiceScreen,
   follow: followScreen,
+  tab: tabScreen,
   settings: settingsScreen,
   tuner: tunerScreen,
 };
@@ -72,17 +75,17 @@ export function parseRoute(hash: string): Route | null {
   if (parts.length === 1 && parts[0] === '') return { name: 'library', params: {} };
   if (parts.length === 1 && parts[0] === 'settings') return { name: 'settings', params: {} };
   if (parts.length === 1 && parts[0] === 'tuner') return { name: 'tuner', params: {} };
-  if (parts.length === 2 && (parts[0] === 'edit' || parts[0] === 'play' || parts[0] === 'follow')) {
+  if (parts.length === 2 && (parts[0] === 'edit' || parts[0] === 'play' || parts[0] === 'follow' || parts[0] === 'tab')) {
     const id = parts[1];
     if (!isValidId(id)) return null;
-    return { name: parts[0] === 'edit' ? 'editor' : parts[0] === 'follow' ? 'follow' : 'practice', params: { id } };
+    return { name: parts[0] === 'edit' ? 'editor' : parts[0] === 'follow' ? 'follow' : parts[0] === 'tab' ? 'tab' : 'practice', params: { id } };
   }
   return null;
 }
 
 /** True when the route can be mounted: routes with an `id` need an existing song. */
 export function routeIsAvailable(route: Route): boolean {
-  if (route.name === 'editor' || route.name === 'practice' || route.name === 'follow') {
+  if (route.name === 'editor' || route.name === 'practice' || route.name === 'follow' || route.name === 'tab') {
     const id = route.params.id;
     return typeof id === 'string' && getSong(id) !== null;
   }
@@ -100,6 +103,8 @@ export function titleForRoute(route: Route): string {
       return `${APP_NAME} — Practicar`;
     case 'follow':
       return `${APP_NAME} — Seguir`;
+    case 'tab':
+      return `${APP_NAME} — Tablatura`;
     case 'settings':
       return `${APP_NAME} — Ajustes`;
     case 'tuner':
@@ -161,6 +166,7 @@ function boot(): void {
   migrateClockBase();
   // Songs that ship with their audio: library entries now (shown on the first render), audio in the background.
   void downloadBundledAudio(installBundledEntries());
+  installBundledTabs();
   const root = document.getElementById('app');
   if (!root) throw new Error('No se encontró el elemento #app');
   // One bar for the whole app (logo, menus, Practicar / Editar of the song), outside the root the router empties.

@@ -204,6 +204,7 @@ function cleanSong(s: StoredSong): StoredSong {
   const clean: StoredSong = { id: s.id, title: s.title, artist: s.artist, source: s.source, updatedAt: s.updatedAt };
   const audio = cleanAudio(s.audio);
   if (audio !== undefined) clean.audio = audio;
+  if (typeof s.tab === 'string' && s.tab !== '') clean.tab = s.tab;
   return clean;
 }
 
@@ -265,6 +266,9 @@ export function saveSong(song: StoredSong): StoredSong {
   const at = songs.findIndex((s) => s.id === stored.id);
   const audio = song.audio === undefined ? (at >= 0 ? songs[at].audio : undefined) : cleanAudio(song.audio);
   if (audio !== undefined) stored.audio = audio;
+  // The tablature is kept when the caller (the editor's autosave) does not know about it.
+  const tab = typeof song.tab === 'string' ? song.tab : at >= 0 ? songs[at].tab : undefined;
+  if (typeof tab === 'string' && tab !== '') stored.tab = tab;
   if (at >= 0) songs[at] = stored;
   else songs.push(stored);
   writeUserSongs(songs);

@@ -161,6 +161,8 @@ export interface StoredSong {
   builtin?: boolean;
   /** Backing track metadata, or null/undefined when the song has no audio. */
   audio?: AudioTrackInfo | null;
+  /** Plain-text guitar tablature (see song/tab.ts): a song with this is shown in the «Tablatura» screen. */
+  tab?: string;
 }
 
 /** One beat of an automatic chord transcription (dsp/chordTranscribe.ts). */

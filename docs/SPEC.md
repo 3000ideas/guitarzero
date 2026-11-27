@@ -1635,3 +1635,13 @@ Para tocar siguiendo la canción, sin micrófono ni puntuación. Botón «Seguir
 - «Velocidad» 50–100 % para ir más lento (el tono baja con la velocidad).
 - «⏱ Cuenta atrás 5 s» (se recuerda): al pulsar Escuchar cuenta 5, 4, 3, 2, 1 con un clic por segundo y número grande, y luego empieza la música; pulsar otra vez cancela. El bucle vuelve a empezar sin cuenta atrás.
 - Diseño: una sola barra (título, ▶ Escuchar, ⏮, −5 s/+5 s, compás ◀ ▶, interruptores 🔁 Bucle y ⏱ 5 s, velocidad, menú ⋯ con «Qué suena»), la posición debajo y los botones ＋/−/✕ del tramo solo cuando hay tramo elegido. Pantalla sin cabecera propia y a todo el ancho.
+
+### 26.5 Tablatura (punteo) — `#/tab/:id`
+
+- `StoredSong.tab`: texto de una tablatura (6 líneas por frase, la de arriba es la cuerda más fina). Lector: `src/song/tab.ts` (columna = tiempo; números pegados `171916` se parten en trastes de 2 cifras; «/» deslizar, «~» vibrato; se ignoran líneas que no son de tablatura).
+- Pantalla «Tablatura»: cuerdas y trastes grandes, una marca que avanza sola (el número que toca AHORA en verde, el SIGUIENTE con borde naranja), velocidad 25–125 
+### 26.5 Tablatura (punteo) — `#/tab/:id`
+
+- `StoredSong.tab`: texto de una tablatura (6 líneas por frase, la de arriba es la cuerda más fina). Lector: `src/song/tab.ts` (la columna es el tiempo; los números pegados como `171916` se parten en trastes de 2 cifras; «/» deslizar, «~» vibrato; se ignoran las líneas que no son de tablatura).
+- Pantalla «Tablatura»: cuerdas y trastes grandes y una marca que avanza sola (el número que toca AHORA en verde, el SIGUIENTE con borde naranja); velocidad 25–125 %, cuenta atrás, bucle por frases (tocar una frase; Mayús+clic para varias). Sin sonido. «¿Cómo se lee?» explica la tablatura.
+- Biblioteca: «Añadir tablatura» (pegar el texto). La app trae «Last Horizon (punteo)» de Brian May (`src/song/bundledTabs.ts`).

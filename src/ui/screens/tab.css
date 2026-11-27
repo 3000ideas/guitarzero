@@ -1,0 +1,149 @@
+/* «Tablatura» (#/tab/:id): the toolbar reuses the «Seguir» styles (follow.css). */
+#app[data-route="tab"] {
+  min-height: 0;
+}
+
+.tab-hint[hidden],
+.tab-help summary::marker {
+  display: none;
+}
+
+.tab-help {
+  position: relative;
+}
+
+.tab-help > summary {
+  list-style: none;
+  cursor: pointer;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+}
+
+.tab-help-body {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 10;
+  width: min(420px, 90vw);
+  padding: 10px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.tab-help-body p {
+  margin: 0 0 8px;
+}
+
+.tab-blocks {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 2px 4px 40vh;
+  --tfs: 16px;
+  font-size: var(--tfs);
+}
+
+.tab-block {
+  position: relative;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-2);
+  padding: 18px 10px 8px 8px;
+  cursor: pointer;
+}
+
+.tab-block.is-now {
+  border-color: var(--ok, #22c55e);
+}
+
+.tab-block.in-range {
+  border-color: var(--warn, #f59e0b);
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.tab-block-num {
+  position: absolute;
+  top: 2px;
+  left: 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.tab-row {
+  display: flex;
+  align-items: center;
+  height: 2.1em;
+}
+
+.tab-name {
+  flex: 0 0 1.6em;
+  font-size: 0.7em;
+  color: var(--muted);
+  text-align: center;
+}
+
+.tab-line {
+  position: relative;
+  flex: 1 1 auto;
+  height: 100%;
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  min-width: calc(var(--cols, 80) * 1.5ch);
+}
+
+/* the string itself */
+.tab-line::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  border-top: 1px solid var(--muted);
+  opacity: 0.55;
+}
+
+.tab-note {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  min-width: 1.5em;
+  padding: 0 0.1em;
+  text-align: center;
+  font-weight: 800;
+  line-height: 1.5em;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.tab-note.has-slide::after {
+  content: '╱';
+  margin-left: 0.15em;
+  color: var(--accent);
+}
+
+.tab-note.has-vib::after {
+  content: '~';
+  margin-left: 0.1em;
+  color: var(--accent);
+}
+
+.tab-note.is-next {
+  border-color: var(--warn, #f59e0b);
+}
+
+.tab-note.is-playing {
+  background: var(--ok, #22c55e);
+  border-color: var(--ok, #22c55e);
+  color: #04210f;
+  transform: translateY(-50%) scale(1.18);
+}

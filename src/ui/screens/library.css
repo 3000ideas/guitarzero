@@ -149,3 +149,25 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+.tab-dialog {
+  width: min(640px, 94vw);
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.tab-dialog input,
+.tab-dialog textarea {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 6px 0;
+}
+
+.tab-dialog .tab-paste {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 13px;
+  white-space: pre;
+}
