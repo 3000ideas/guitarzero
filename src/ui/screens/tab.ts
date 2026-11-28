@@ -1,7 +1,8 @@
 /**
  * «Tablatura» (#/tab/:id): a guitar tablature (a punteo) to learn slowly. The six strings are drawn big, a mark
  * walks along the notes at the speed you choose (the note that goes NOW is lit, the NEXT one is outlined), and you
- * can loop a phrase (tap a phrase; Shift-click extends). No sound: it is a guide for your own fingers.
+ * can loop a phrase (tap a phrase; Shift-click extends). The notes sound (a plucked-string sound, the pitch of
+ * each string and fret in standard tuning) so you hear what you are going to play; «Sonido» turns it off.
  */
 import './follow.css';
 import './tab.css';
@@ -10,11 +11,15 @@ import { getSong } from '../../song/storage';
 import { eventAt, parseTab, TAB_STRING_NAMES } from '../../song/tab';
 import { getAudioContext } from '../../audio/context';
 import { Metronome } from '../../audio/metronome';
+import { pluckBuffer, tabNoteMidi } from '../../audio/noteSynth';
 import { h } from '../dom';
 
 const noop = (): void => undefined;
 const COUNTDOWN_SEC = 5;
 const COUNTDOWN_KEY = 'gz.tabCountdown';
+const SOUND_KEY = 'gz.tabSound';
+const START_DELAY_SEC = 0.06;
+const LOOKAHEAD_SEC = 0.15;
 const SPEEDS = [25, 35, 50, 65, 80, 100, 125];
 
 export const tabScreen: Screen = {
@@ -46,10 +51,26 @@ export const tabScreen: Screen = {
     let shownEvent = -2;
     const ctx = getAudioContext();
     const metronome = new Metronome(ctx);
+    const master = ctx.createGain();
+    master.gain.value = 0.9;
+    master.connect(ctx.destination);
+    let soundOn = true;
+    try {
+      soundOn = localStorage.getItem(SOUND_KEY) !== '0';
+    } catch {
+      /* default on */
+    }
+    let baseCtx = 0; // AudioContext time at which `baseSec` sounds
+    let schedIdx = 0; // next event to hand to the audio clock
+    const active = new Set<AudioBufferSourceNode>();
+    const outputLatency = (): number => {
+      const l = (ctx as { outputLatency?: number }).outputLatency;
+      return typeof l === 'number' && Number.isFinite(l) && l > 0 ? l : 0.03;
+    };
 
     const loopStart = (): number => (range ? tab.blockStartSec[range.a] : 0);
     const loopEnd = (): number => (range ? tab.blockEndSec[range.b] : totalSec);
-    const currentSec = (): number => (playing ? Math.min(totalSec, baseSec + ((performance.now() - baseMs) / 1000) * speed) : posSec);
+    const currentSec = (): number => (playing ? Math.min(totalSec, baseSec + (Math.max(0, performance.now() - baseMs) / 1000) * speed) : posSec);
 
     // ---------------------------------------------------------------- controls
     const playBtn = h('button.btn.btn-primary.follow-play', { type: 'button', onclick: () => void togglePlay() }, '▶ Empezar') as HTMLButtonElement;
@@ -86,6 +107,21 @@ export const tabScreen: Screen = {
       },
     }, `⏱ Cuenta atrás ${COUNTDOWN_SEC} s`) as HTMLButtonElement;
     countdownBtn.classList.toggle('is-on', countdownOn);
+    const soundBtn = h('button.btn.btn-sm.follow-chip', {
+      type: 'button',
+      title: 'Que suenen las notas (con un sonido de guitarra sencillo) para oír cómo va',
+      onclick: () => {
+        soundOn = !soundOn;
+        soundBtn.classList.toggle('is-on', soundOn);
+        if (!soundOn) stopNotes();
+        try {
+          localStorage.setItem(SOUND_KEY, soundOn ? '1' : '0');
+        } catch {
+          /* not remembered */
+        }
+      },
+    }, '🔊 Sonido') as HTMLButtonElement;
+    soundBtn.classList.toggle('is-on', soundOn);
     const countOverlay = h('div.follow-count', { role: 'status', 'aria-live': 'polite' });
     countOverlay.hidden = true;
 
@@ -95,10 +131,7 @@ export const tabScreen: Screen = {
     speedSel.addEventListener('change', () => {
       const at = currentSec();
       speed = Number(speedSel.value) / 100;
-      if (playing) {
-        baseSec = at;
-        baseMs = performance.now();
-      }
+      if (playing) resync(at);
     });
 
     const rangeInfo = h('span.follow-selinfo.muted.small', null, '');
@@ -112,13 +145,13 @@ export const tabScreen: Screen = {
       h('p', null, 'Las 6 líneas son las 6 cuerdas: arriba la más fina (la 1ª, «e») y abajo la más gruesa (la 6ª, «E»).'),
       h('p', null, 'El número es el traste donde pones el dedo: 0 es la cuerda al aire; 12 es el traste 12. Los números se tocan de izquierda a derecha.'),
       h('p', null, '«/» entre dos números: desliza el dedo por la cuerda de uno al otro. «~»: vibrato (mueve el dedo un poquito).'),
-      h('p', null, 'El número en verde es el que toca AHORA; el que tiene el borde naranja es el SIGUIENTE. Empieza lento (25–35 %) y sube.'),
+      h('p', null, 'Las notas suenan para que oigas cómo va (botón «Sonido»). El número en verde es el que toca AHORA; el que tiene el borde naranja es el SIGUIENTE. Empieza lento (25–35 %) y sube.'),
     );
     const help = h('details.tab-help', null, h('summary.btn.btn-sm', null, '¿Cómo se lee?'), helpBody);
     const controls = h(
       'div.follow-controls',
       null,
-      h('div.follow-row.follow-toolbar', null, h('strong.follow-title', null, stored.title || 'Tablatura'), playBtn, h('div.follow-group', null, rewindBtn), h('div.follow-group', null, prevBtn, h('span.follow-group-label', null, 'Frase'), nextBtn), h('span.follow-sep'), loopLabel, countdownBtn, h('label.follow-speedbox', { title: 'Velocidad: más lento para aprender' }, h('span', null, 'Velocidad'), speedSel), help),
+      h('div.follow-row.follow-toolbar', null, h('strong.follow-title', null, stored.title || 'Tablatura'), playBtn, h('div.follow-group', null, rewindBtn), h('div.follow-group', null, prevBtn, h('span.follow-group-label', null, 'Frase'), nextBtn), h('span.follow-sep'), loopLabel, soundBtn, countdownBtn, h('label.follow-speedbox', { title: 'Velocidad: más lento para aprender' }, h('span', null, 'Velocidad'), speedSel), help),
       h('div.follow-row', null, timeEl, seekEl),
       rangeRow,
       hint,
@@ -197,10 +230,62 @@ export const tabScreen: Screen = {
     void anchor;
 
     // ---------------------------------------------------------------- playback
+    function stopNotes(): void {
+      for (const src of active) {
+        try {
+          src.stop();
+        } catch {
+          /* already stopped */
+        }
+      }
+      active.clear();
+    }
+
+    /** Puts the audio clock and the screen clock on the same instant, `sec` of the tablature. */
+    function resync(sec: number): void {
+      baseSec = sec;
+      baseCtx = ctx.currentTime + START_DELAY_SEC;
+      // The screen is shown when the sound reaches the ear, a little after it was handed to the audio clock.
+      baseMs = performance.now() + (START_DELAY_SEC + outputLatency()) * 1000;
+      const first = events.findIndex((e) => e.atSec >= sec - 1e-6);
+      schedIdx = first < 0 ? events.length : first;
+    }
+
+    function playEvent(e: (typeof events)[number], when: number): void {
+      e.notes.forEach((n, i) => {
+        const src = ctx.createBufferSource();
+        src.buffer = pluckBuffer(ctx, tabNoteMidi(n.row, n.fret));
+        const g = ctx.createGain();
+        g.gain.value = 0.8;
+        src.connect(g).connect(master);
+        src.start(when + i * 0.008); // the strings of a chord are not struck at the very same instant
+        active.add(src);
+        src.onended = () => {
+          active.delete(src);
+          src.disconnect();
+          g.disconnect();
+        };
+      });
+    }
+
+    /** Hands the notes of the next fraction of a second to the audio clock (exact timing, whatever the frame rate). */
+    function schedule(): void {
+      const horizon = ctx.currentTime + LOOKAHEAD_SEC;
+      while (schedIdx < events.length) {
+        const e = events[schedIdx];
+        const when = baseCtx + (e.atSec - baseSec) / speed;
+        if (when > horizon) break;
+        if (soundOn && when > ctx.currentTime - 0.08) playEvent(e, Math.max(when, ctx.currentTime));
+        schedIdx++;
+      }
+    }
+
     function startRun(sec: number): void {
       posSec = Math.max(0, Math.min(totalSec, sec));
-      baseSec = posSec;
-      baseMs = performance.now();
+      void ctx.resume();
+      stopNotes();
+      resync(posSec);
+      schedule();
       playing = true;
       playBtn.textContent = '⏸ Pausa';
       playBtn.classList.add('is-playing');
@@ -247,6 +332,7 @@ export const tabScreen: Screen = {
     function pause(): void {
       if (playing) posSec = currentSec();
       playing = false;
+      stopNotes();
       cancelAnimationFrame(raf);
       playBtn.textContent = '▶ Seguir';
       playBtn.classList.remove('is-playing');
@@ -273,8 +359,9 @@ export const tabScreen: Screen = {
       const target = Math.max(0, Math.min(totalSec, sec));
       posSec = target;
       if (playing) {
-        baseSec = target;
-        baseMs = performance.now();
+        stopNotes();
+        resync(target);
+        schedule();
       }
       refresh(true);
     }
@@ -291,6 +378,7 @@ export const tabScreen: Screen = {
         pause();
         return;
       }
+      schedule();
       refresh(false);
       raf = requestAnimationFrame(tick);
     }
@@ -339,6 +427,8 @@ export const tabScreen: Screen = {
       disposed = true;
       window.clearTimeout(countTimer);
       cancelAnimationFrame(raf);
+      stopNotes();
+      master.disconnect();
       metronome.clear();
       fitObserver?.disconnect();
       window.removeEventListener('resize', fit);

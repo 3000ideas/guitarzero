@@ -1643,5 +1643,5 @@ Para tocar siguiendo la canción, sin micrófono ni puntuación. Botón «Seguir
 ### 26.5 Tablatura (punteo) — `#/tab/:id`
 
 - `StoredSong.tab`: texto de una tablatura (6 líneas por frase, la de arriba es la cuerda más fina). Lector: `src/song/tab.ts` (la columna es el tiempo; los números pegados como `171916` se parten en trastes de 2 cifras; «/» deslizar, «~» vibrato; se ignoran las líneas que no son de tablatura).
-- Pantalla «Tablatura»: cuerdas y trastes grandes y una marca que avanza sola (el número que toca AHORA en verde, el SIGUIENTE con borde naranja); velocidad 25–125 %, cuenta atrás, bucle por frases (tocar una frase; Mayús+clic para varias). Sin sonido. «¿Cómo se lee?» explica la tablatura.
+- Pantalla «Tablatura»: cuerdas y trastes grandes y una marca que avanza sola (el número que toca AHORA en verde, el SIGUIENTE con borde naranja); velocidad 25–125 %, cuenta atrás, bucle por frases (tocar una frase; Mayús+clic para varias). Las notas suenan (cuerda pulsada, afinación estándar; botón «Sonido»). «¿Cómo se lee?» explica la tablatura.
 - Biblioteca: «Añadir tablatura» (pegar el texto). La app trae «Last Horizon (punteo)» de Brian May (`src/song/bundledTabs.ts`).

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { eventAt, parseTab, splitFrets } from '../../src/song/tab';
 import { BUNDLED_TABS } from '../../src/song/bundledTabs';
+import { midiToHz, pluckSamples, tabNoteMidi } from '../../src/audio/noteSynth';
 
 describe('tablature', () => {
   it('splits glued numbers into two-digit frets', () => {
@@ -39,5 +40,24 @@ describe('tablature', () => {
     expect(glued).toBeTruthy();
     expect(glued!.notes.filter((n) => n.row === 0).slice(0, 3).map((n) => n.fret)).toEqual([17, 19, 16]);
     expect(tab.totalSec).toBeGreaterThan(30);
+  });
+
+  it('maps a string and a fret to the right note (standard tuning, top line = thin e)', () => {
+    expect(tabNoteMidi(0, 0)).toBe(64); // open e
+    expect(tabNoteMidi(5, 0)).toBe(40); // open low E
+    expect(tabNoteMidi(1, 12)).toBe(71); // B string, 12th fret
+    expect(midiToHz(69)).toBeCloseTo(440, 6);
+  });
+
+  it('plucks a string: audible, bounded, fading and always the same', () => {
+    const a = pluckSamples(440, 44100, 1);
+    const b = pluckSamples(440, 44100, 1);
+    expect(a).toHaveLength(44100);
+    expect(Array.from(a.slice(0, 50))).toEqual(Array.from(b.slice(0, 50)));
+    const peak = (x: Float32Array): number => x.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+    expect(peak(a)).toBeGreaterThan(0.3);
+    expect(peak(a)).toBeLessThanOrEqual(0.5001);
+    expect(peak(a.slice(30000, 40000))).toBeLessThan(peak(a.slice(0, 5000)));
+    expect(a[a.length - 1]).toBeCloseTo(0, 3);
   });
 });
