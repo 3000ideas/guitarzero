@@ -270,6 +270,10 @@ export const tabScreen: Screen = {
 
     /** Hands the notes of the next fraction of a second to the audio clock (exact timing, whatever the frame rate). */
     function schedule(): void {
+      if (ctx.state !== 'running') return; // the browser has not let the audio start yet: nothing to hand over
+      const next = events[schedIdx];
+      // The audio clock stood still while it was suspended: if it has jumped ahead, start counting again from here.
+      if (next && baseCtx + (next.atSec - baseSec) / speed < ctx.currentTime - 0.3) resync(currentSec());
       const horizon = ctx.currentTime + LOOKAHEAD_SEC;
       while (schedIdx < events.length) {
         const e = events[schedIdx];
@@ -351,7 +355,14 @@ export const tabScreen: Screen = {
       let from = posSec;
       if (from < loopStart() || from >= loopEnd() - 0.05) from = loopStart();
       if (countdownOn) await countThenStart(from);
-      else startRun(from);
+      else {
+        try {
+          await ctx.resume();
+        } catch {
+          /* a tap is a gesture; ignore */
+        }
+        startRun(from);
+      }
     }
 
     function seek(sec: number): void {
